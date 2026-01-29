@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  rental-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rental-manager
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - HYGGLO_EMAIL=${HYGGLO_EMAIL}
+      - HYGGLO_PASSWORD=${HYGGLO_PASSWORD}
+      - ABACUSAI_API_KEY=${ABACUSAI_API_KEY}
+      - INITIAL_SCAN_INTERVAL_MS=${INITIAL_SCAN_INTERVAL_MS:-60000}
+      - REDUCED_SCAN_INTERVAL_MS=${REDUCED_SCAN_INTERVAL_MS:-300000}
+      - INACTIVITY_THRESHOLD_MS=${INACTIVITY_THRESHOLD_MS:-1800000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+    networks:
+      - rental-manager-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: rental-manager-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-rental_manager}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=${POSTGRES_DB:-rental_manager}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - rental-manager-network
+
+volumes:
+  postgres-data:
+
+networks:
+  rental-manager-network:
+    driver: bridge

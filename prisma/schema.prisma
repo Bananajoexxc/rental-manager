@@ -1,0 +1,55 @@
+// Prisma schema for Rental Manager
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model rental {
+  id              String          @id @default(uuid())
+  listing_id      String          @unique
+  title           String
+  status          String          // 'ongoing' or 'upcoming'
+  start_date      DateTime?
+  end_date        DateTime?
+  renter_info     String?
+  listing_url     String
+  description     String?         @db.Text
+  photos_urls     String[]        // Array of photo URLs
+  created_at      DateTime        @default(now())
+  updated_at      DateTime        @updatedAt
+  extracted_items extracteditem[]
+  catalog_items   itemcatalog[]
+
+  @@index([status])
+  @@index([listing_id])
+}
+
+model extracteditem {
+  id               String   @id @default(uuid())
+  rental_id        String
+  item_name        String
+  source           String   // 'photo' or 'description'
+  confidence_score Float?
+  created_at       DateTime @default(now())
+  rental           rental   @relation(fields: [rental_id], references: [id], onDelete: Cascade)
+
+  @@index([rental_id])
+  @@index([source])
+}
+
+model itemcatalog {
+  id             String   @id @default(uuid())
+  listing_id     String
+  item_name      String
+  description    String?  @db.Text
+  first_seen_at  DateTime @default(now())
+  rental         rental   @relation(fields: [listing_id], references: [listing_id], onDelete: Cascade)
+
+  @@unique([listing_id, item_name])
+  @@index([listing_id])
+}
