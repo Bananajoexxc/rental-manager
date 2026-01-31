@@ -1,6 +1,17 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { chromium, Browser, Page } from 'playwright';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import axios, { AxiosInstance, AxiosError } from 'axios';
 import { LoggingService } from '../logging/logging.service';
+
+// --- Types ---
+
+export type HyggloAccount = 'dbcinema' | 'leo';
+
+export interface HyggloAccountConfig {
+  name: HyggloAccount;
+  email: string;
+  password: string;
+  label: string; // Human-readable: "DB Cinema" or "Leo Adams"
+}
 
 export interface RentalListing {
   listingId: string;
@@ -12,254 +23,872 @@ export interface RentalListing {
   listingUrl: string;
   description?: string;
   photosUrls: string[];
+  account?: HyggloAccount;
+  rentalPrice?: number;
+  pricePerDay?: number;
+  currency?: string;
+  _detail?: any; // Full order detail from /v4/my/orders/:id
 }
 
+export interface RentalDetails {
+  description: string;
+  photosUrls: string[];
+  pricing?: string;
+  pricingNumeric?: number;
+  dates?: string;
+  itemList?: string[];
+}
+
+export interface OwnListing {
+  title: string;
+  url: string;
+  status: string;
+  account: HyggloAccount;
+}
+
+export interface RentalRequest {
+  id: string;
+  renterName: string;
+  itemTitle: string;
+  dates: string;
+  status: string;
+  account: HyggloAccount;
+}
+
+// --- Token State ---
+
+interface TokenState {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number; // Unix timestamp in ms
+}
+
+// --- Service ---
+
+const API_BASE = 'https://api.hygglo.com/api';
+const CLIENT_ID = 'ngHyggloApp';
+const CLIENT_SECRET = 'lQVS05DGy9SQdAEInEPqTMK3aktEfSc7iupC7BYM4JY=';
+const COUNTRY = 'GB';
+
 @Injectable()
-export class HyggloService implements OnModuleDestroy {
+export class HyggloService implements OnModuleInit {
   private readonly logger = new Logger(HyggloService.name);
-  private browser: Browser | null = null;
-  private page: Page | null = null;
-  private isAuthenticated = false;
+  private accounts: HyggloAccountConfig[] = [];
+  private tokens = new Map<HyggloAccount, TokenState>();
+  private client: AxiosInstance;
+  private hasLoggedOrderSample = false;
+  private lastMessageCheckTime = new Map<string, number>();
 
-  constructor(private loggingService: LoggingService) {}
+  constructor(private loggingService: LoggingService) {
+    this.client = axios.create({
+      baseURL: API_BASE,
+      timeout: 30000,
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Language': 'en',
+        'User-Client': 'Hygglo-web',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Origin': 'https://www.hygglo.com',
+        'Referer': 'https://www.hygglo.com/',
+        'Country': COUNTRY,
+      },
+    });
 
-  async onModuleDestroy() {
-    await this.cleanup();
+    // 429 rate-limit interceptor with exponential backoff
+    this.client.interceptors.response.use(undefined, async (error: AxiosError) => {
+      const config = error.config;
+      if (!config || !error.response) return Promise.reject(error);
+
+      if (error.response.status === 429) {
+        const retryCount = (config as any).__retryCount || 0;
+        if (retryCount >= 3) return Promise.reject(error);
+
+        (config as any).__retryCount = retryCount + 1;
+        const delayMs = Math.min(1000 * Math.pow(2, retryCount), 8000);
+        this.logger.warn(`Rate limited (429). Retrying in ${delayMs}ms (attempt ${retryCount + 1}/3)`);
+        await this.delay(delayMs);
+        return this.client.request(config);
+      }
+
+      // 401 unauthorized -- re-authenticate and retry once
+      if (error.response.status === 401) {
+        const account = (config as any).__account as HyggloAccount | undefined;
+        const alreadyRetried = (config as any).__authRetried;
+        if (account && !alreadyRetried) {
+          this.logger.warn(`Got 401 for ${account}, re-authenticating...`);
+          this.tokens.delete(account);
+          const accountConfig = this.accounts.find(a => a.name === account);
+          if (accountConfig) {
+            const success = await this.authenticate(accountConfig);
+            if (success) {
+              const token = this.tokens.get(account);
+              if (token && config.headers) {
+                config.headers['Authorization'] = `Bearer ${token.accessToken}`;
+              }
+              (config as any).__authRetried = true;
+              return this.client.request(config);
+            }
+          }
+        }
+      }
+
+      return Promise.reject(error);
+    });
   }
 
-  private async cleanup() {
-    try {
-      if (this.page) {
-        await this.page.close();
-        this.page = null;
-      }
-      if (this.browser) {
-        await this.browser.close();
-        this.browser = null;
-      }
-      this.isAuthenticated = false;
-      this.logger.log('🧹 Playwright browser cleaned up');
-    } catch (error) {
-      this.logger.error('Error during cleanup', error);
-    }
+  async onModuleInit() {
+    this.loadAccounts();
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    this.logger.log(`READ_ONLY_MODE is ${readOnly ? 'ACTIVE' : 'INACTIVE'}`);
+    this.logger.log(`Loaded ${this.accounts.length} Hygglo account(s): ${this.accounts.map(a => a.label).join(', ') || 'none'}`);
   }
 
-  private async ensureBrowser() {
-    if (!this.browser) {
-      this.logger.log('🌐 Launching Playwright browser...');
-      this.browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  // --- Account Management ---
+
+  private loadAccounts() {
+    this.accounts = [];
+
+    const dbEmail = process.env.HYGGLO_DBCINEMA_EMAIL;
+    const dbPassword = process.env.HYGGLO_DBCINEMA_PASSWORD;
+    if (dbEmail && dbPassword && dbEmail !== 'your_dbcinema_email@example.com') {
+      this.accounts.push({
+        name: 'dbcinema',
+        email: dbEmail,
+        password: dbPassword,
+        label: 'DB Cinema',
       });
-      this.logger.log('✅ Browser launched successfully');
     }
-  }
 
-  private async ensurePage() {
-    await this.ensureBrowser();
-    if (!this.page) {
-      this.page = await this.browser!.newPage();
-      this.logger.log('📄 New page created');
-    }
-  }
-
-  async authenticate(): Promise<boolean> {
-    try {
-      const email = process.env.HYGGLO_EMAIL;
-      const password = process.env.HYGGLO_PASSWORD;
-
-      if (!email || !password) {
-        throw new Error('HYGGLO_EMAIL and HYGGLO_PASSWORD must be set in environment variables');
-      }
-
-      await this.ensurePage();
-
-      this.logger.log('🔐 Attempting to authenticate with Hygglo...');
-      this.loggingService.info('Starting Hygglo authentication', { email });
-
-      // Navigate to Hygglo login page
-      await this.page!.goto('https://www.hygglo.se/login', { waitUntil: 'networkidle' });
-
-      // Fill in login credentials
-      await this.page!.fill('input[type="email"]', email);
-      await this.page!.fill('input[type="password"]', password);
-
-      // Click login button
-      await this.page!.click('button[type="submit"]');
-
-      // Wait for navigation after login
-      await this.page!.waitForNavigation({ waitUntil: 'networkidle', timeout: 10000 });
-
-      // Check if login was successful by checking for authenticated content
-      const isLoggedIn = await this.page!.evaluate(() => {
-        // Check if we're redirected to dashboard or if there's a logout button
-        return !window.location.href.includes('/login');
+    const leoEmail = process.env.HYGGLO_LEO_EMAIL;
+    const leoPassword = process.env.HYGGLO_LEO_PASSWORD;
+    if (leoEmail && leoPassword && leoEmail !== 'your_leo_email@example.com') {
+      this.accounts.push({
+        name: 'leo',
+        email: leoEmail,
+        password: leoPassword,
+        label: 'Leo Adams',
       });
+    }
 
-      if (isLoggedIn) {
-        this.isAuthenticated = true;
-        this.logger.log('✅ Successfully authenticated with Hygglo');
-        this.loggingService.info('Hygglo authentication successful');
-        return true;
+    // Legacy fallback
+    if (this.accounts.length === 0) {
+      const legacyEmail = process.env.HYGGLO_EMAIL;
+      const legacyPassword = process.env.HYGGLO_PASSWORD;
+      if (legacyEmail && legacyPassword && legacyEmail !== 'your_email@example.com') {
+        this.accounts.push({
+          name: 'dbcinema',
+          email: legacyEmail,
+          password: legacyPassword,
+          label: 'DB Cinema (legacy)',
+        });
+        this.logger.warn('Using legacy single-account credentials. Set HYGGLO_DBCINEMA_* and HYGGLO_LEO_* for multi-account.');
+      }
+    }
+  }
+
+  getAccounts(): HyggloAccountConfig[] {
+    return [...this.accounts];
+  }
+
+  getCurrentAccount(): HyggloAccount | null {
+    // Return first account with a valid token
+    for (const account of this.accounts) {
+      const token = this.tokens.get(account.name);
+      if (token && token.expiresAt > Date.now()) {
+        return account.name;
+      }
+    }
+    return null;
+  }
+
+  // --- Authentication ---
+
+  async authenticate(config?: HyggloAccountConfig): Promise<boolean> {
+    try {
+      let accountConfig: HyggloAccountConfig;
+
+      if (config) {
+        accountConfig = config;
+      } else if (this.accounts.length > 0) {
+        accountConfig = this.accounts[0];
       } else {
-        throw new Error('Login failed - still on login page');
+        throw new Error('No Hygglo account credentials configured. Set HYGGLO_DBCINEMA_EMAIL/PASSWORD or HYGGLO_EMAIL/PASSWORD.');
       }
+
+      // If already have a valid token, skip
+      const existingToken = this.tokens.get(accountConfig.name);
+      if (existingToken && existingToken.expiresAt > Date.now() + 60000) {
+        return true;
+      }
+
+      this.logger.log(`Authenticating as ${accountConfig.label} (${accountConfig.name})...`);
+      this.loggingService.info('Starting Hygglo API authentication', { account: accountConfig.name, email: accountConfig.email });
+
+      const params = new URLSearchParams();
+      params.append('grant_type', 'password');
+      params.append('username', accountConfig.email);
+      params.append('password', accountConfig.password);
+      params.append('client_id', CLIENT_ID);
+      params.append('client_secret', CLIENT_SECRET);
+
+      const response = await this.client.post(`/token?country=${COUNTRY}`, params.toString(), {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      });
+
+      const { access_token, refresh_token, expires_in } = response.data;
+
+      if (!access_token) {
+        throw new Error('No access_token in response');
+      }
+
+      this.tokens.set(accountConfig.name, {
+        accessToken: access_token,
+        refreshToken: refresh_token || '',
+        expiresAt: Date.now() + (expires_in || 3600) * 1000,
+      });
+
+      this.logger.log(`Authenticated as ${accountConfig.label}`);
+      this.loggingService.info('Hygglo API authentication successful', { account: accountConfig.name });
+      return true;
     } catch (error) {
-      this.logger.error('❌ Authentication failed', error);
-      this.loggingService.error('Hygglo authentication failed', { error: error.message });
-      this.isAuthenticated = false;
+      const msg = error instanceof AxiosError
+        ? `${error.response?.status} ${JSON.stringify(error.response?.data || error.message)}`
+        : error.message;
+      this.logger.error(`Authentication failed: ${msg}`);
+      this.loggingService.error('Hygglo API authentication failed', { error: msg });
       return false;
     }
   }
 
-  private async ensureAuthenticated(): Promise<boolean> {
-    if (!this.isAuthenticated) {
-      return await this.authenticate();
+  async logout(): Promise<void> {
+    // No HTTP call needed -- just clear token
+    const hadTokens = this.tokens.size > 0;
+    this.tokens.clear();
+    if (hadTokens) {
+      this.loggingService.info('Logged out of all accounts (tokens cleared)');
     }
-    return true;
   }
 
+  private async ensureAuthenticated(accountName: HyggloAccount): Promise<boolean> {
+    const token = this.tokens.get(accountName);
+    if (token && token.expiresAt > Date.now() + 60000) {
+      return true;
+    }
+    const config = this.accounts.find(a => a.name === accountName);
+    if (!config) {
+      this.logger.error(`Account not found: ${accountName}`);
+      return false;
+    }
+    return await this.authenticate(config);
+  }
+
+  // --- Scanning Methods ---
+
+  /**
+   * Scans all configured accounts in parallel via Promise.all().
+   */
+  async scanAllAccounts(status: 'ongoing' | 'upcoming' | 'both' = 'both'): Promise<RentalListing[]> {
+    if (this.accounts.length === 0) {
+      this.logger.warn('No accounts configured for scanning');
+      return [];
+    }
+
+    const accountScanners = this.accounts.map(async (account) => {
+      try {
+        this.logger.log(`--- Scanning account: ${account.label} ---`);
+        const authenticated = await this.authenticate(account);
+
+        if (!authenticated) {
+          this.logger.error(`Failed to authenticate ${account.label}, skipping`);
+          return [];
+        }
+
+        const rentals: RentalListing[] = [];
+
+        if (status === 'both' || status === 'ongoing') {
+          const ongoing = await this.scanRentalsForAccount(account.name, 'ongoing');
+          rentals.push(...ongoing);
+        }
+
+        if (status === 'both' || status === 'upcoming') {
+          const upcoming = await this.scanRentalsForAccount(account.name, 'upcoming');
+          rentals.push(...upcoming);
+        }
+
+        return rentals;
+      } catch (error) {
+        this.logger.error(`Error scanning account ${account.label}: ${error.message}`);
+        return [];
+      }
+    });
+
+    const results = await Promise.all(accountScanners);
+    const allRentals = results.flat();
+
+    this.logger.log(`Total rentals across all accounts: ${allRentals.length}`);
+    return allRentals;
+  }
+
+  /**
+   * Scans rentals for the first authenticated account (backwards-compatible).
+   */
   async scanRentals(status: 'ongoing' | 'upcoming'): Promise<RentalListing[]> {
+    const account = this.getCurrentAccount();
+    if (!account) {
+      // Try to authenticate first account
+      if (this.accounts.length > 0) {
+        const success = await this.authenticate(this.accounts[0]);
+        if (!success) {
+          this.logger.warn('Cannot scan rentals - not authenticated');
+          return [];
+        }
+        return this.scanRentalsForAccount(this.accounts[0].name, status);
+      }
+      return [];
+    }
+    return this.scanRentalsForAccount(account, status);
+  }
+
+  private async scanRentalsForAccount(accountName: HyggloAccount, status: 'ongoing' | 'upcoming'): Promise<RentalListing[]> {
     try {
-      const authenticated = await this.ensureAuthenticated();
+      const authenticated = await this.ensureAuthenticated(accountName);
       if (!authenticated) {
-        this.logger.warn('⚠️ Cannot scan rentals - not authenticated');
+        this.logger.warn(`Cannot scan ${status} rentals for ${accountName} - not authenticated`);
         return [];
       }
 
-      this.logger.log(`🔍 Scanning ${status} rentals...`);
-      this.loggingService.info(`Scanning ${status} rentals`);
+      const token = this.tokens.get(accountName)!;
+      this.logger.log(`Scanning ${status} rentals for ${accountName}...`);
+      this.loggingService.info(`Scanning ${status} rentals via API`, { account: accountName });
 
-      const url = status === 'ongoing' 
-        ? 'https://www.hygglo.se/dashboard/rentals/ongoing'
-        : 'https://www.hygglo.se/dashboard/rentals/upcoming';
+      // Map our status to API filter parameter
+      // API accepts: 'pending' | 'future' | 'current' | 'completed' | 'obsolete' for role=owner
+      const filter = status === 'ongoing' ? 'current' : 'future';
 
-      await this.page!.goto(url, { waitUntil: 'networkidle' });
+      const response = await this.client.get('/v4/my/orders', {
+        params: {
+          role: 'owner',
+          filter,
+          sort: 'order-start-date',
+          offset: 0,
+          limit: 50,
+        },
+        headers: {
+          'Authorization': `Bearer ${token.accessToken}`,
+        },
+        __account: accountName,
+      } as any);
 
-      // Wait for rental listings to load
-      await this.page!.waitForSelector('[data-testid="rental-card"], .rental-item, .booking-card', { timeout: 5000 }).catch(() => {
-        this.logger.warn('No rental cards found on page');
-      });
+      const data = response.data;
 
-      // Extract rental data from the page
-      const rentals = await this.page!.evaluate((statusParam) => {
-        const rentalCards = document.querySelectorAll('[data-testid="rental-card"], .rental-item, .booking-card');
-        const results: any[] = [];
+      // Handle both array and paginated response shapes
+      const orders: any[] = Array.isArray(data) ? data : (data.items || data.results || data.data || []);
 
-        rentalCards.forEach((card) => {
-          try {
-            // Extract listing ID from URL or data attribute
-            const linkElement = card.querySelector('a[href*="/listing/"], a[href*="/rental/"]') as HTMLAnchorElement;
-            const listingUrl = linkElement?.href || '';
-            const listingIdMatch = listingUrl.match(/\/(listing|rental)\/([^\/\?]+)/);
-            const listingId = listingIdMatch ? listingIdMatch[2] : `temp_${Date.now()}_${Math.random()}`;
+      this.logger.log(`Found ${orders.length} ${status} orders for ${accountName}`);
+      this.loggingService.info(`Found ${orders.length} ${status} orders`, { account: accountName });
 
-            // Extract title
-            const titleElement = card.querySelector('h3, h2, .title, [data-testid="rental-title"]');
-            const title = titleElement?.textContent?.trim() || 'Unknown Listing';
+      // Fetch order detail for each order to get dates, prices, items
+      const enrichedOrders = await this.enrichOrdersWithDetails(orders, accountName);
 
-            // Extract dates
-            const dateElement = card.querySelector('.dates, [data-testid="rental-dates"], time');
-            const dateText = dateElement?.textContent?.trim() || '';
-
-            // Extract renter info
-            const renterElement = card.querySelector('.renter-name, [data-testid="renter-info"]');
-            const renterInfo = renterElement?.textContent?.trim() || '';
-
-            // Extract photos
-            const imgElements = card.querySelectorAll('img');
-            const photosUrls: string[] = [];
-            imgElements.forEach((img) => {
-              const src = img.getAttribute('src');
-              if (src && !src.includes('avatar') && !src.includes('logo')) {
-                photosUrls.push(src);
-              }
-            });
-
-            results.push({
-              listingId,
-              title,
-              status: statusParam,
-              listingUrl,
-              renterInfo,
-              photosUrls,
-              dateText,
-            });
-          } catch (err) {
-            console.error('Error extracting rental card data:', err);
-          }
-        });
-
-        return results;
-      }, status);
-
-      this.logger.log(`✅ Found ${rentals.length} ${status} rentals`);
-      this.loggingService.info(`Found ${rentals.length} ${status} rentals`);
-
-      // Transform to RentalListing format
-      const rentalListings: RentalListing[] = rentals.map((rental) => ({
-        listingId: rental.listingId,
-        title: rental.title,
-        status,
-        listingUrl: rental.listingUrl,
-        renterInfo: rental.renterInfo,
-        photosUrls: rental.photosUrls,
-        description: '', // Will be fetched separately if needed
-      }));
-
-      return rentalListings;
+      return this.mapOrdersToRentalListings(enrichedOrders, status, accountName);
     } catch (error) {
-      this.logger.error(`❌ Error scanning ${status} rentals`, error);
-      this.loggingService.error(`Error scanning ${status} rentals`, { error: error.message });
-
-      // If authentication error, reset and retry once
-      if (error.message.includes('navigation') || error.message.includes('timeout')) {
-        this.logger.warn('⚠️ Possible authentication issue, resetting session...');
-        this.isAuthenticated = false;
-        await this.cleanup();
-      }
-
+      const msg = error instanceof AxiosError
+        ? `${error.response?.status} ${JSON.stringify(error.response?.data || error.message)}`
+        : error.message;
+      this.logger.error(`Error scanning ${status} rentals for ${accountName}: ${msg}`);
+      this.loggingService.error(`Error scanning ${status} rentals`, { error: msg, account: accountName });
       return [];
     }
   }
 
-  async fetchListingDetails(listingUrl: string): Promise<{ description: string; photosUrls: string[] }> {
+  /**
+   * Fetches order detail for each order to enrich with dates, prices, items, and chat.
+   * The list endpoint (/v4/my/orders) only returns id, labels, profileImage.
+   * The detail endpoint (/v4/my/orders/:id?timezone=) returns full data.
+   */
+  private async enrichOrdersWithDetails(orders: any[], accountName: HyggloAccount): Promise<any[]> {
+    const token = this.tokens.get(accountName);
+    if (!token) return orders;
+
+    const enriched: any[] = [];
+
+    for (const order of orders) {
+      const orderId = order.id;
+      if (!orderId) {
+        enriched.push(order);
+        continue;
+      }
+
+      try {
+        const detailRes = await this.client.get(`/v4/my/orders/${orderId}`, {
+          params: { timezone: 'Europe/London' },
+          headers: { 'Authorization': `Bearer ${token.accessToken}` },
+          __account: accountName,
+        } as any);
+
+        const detail = detailRes.data;
+        // Merge detail into order (detail has all the same fields plus more)
+        enriched.push({ ...order, _detail: detail });
+      } catch (error) {
+        this.logger.debug(`Failed to fetch detail for order ${orderId}: ${error instanceof AxiosError ? error.response?.status : error.message}`);
+        enriched.push(order);
+      }
+    }
+
+    return enriched;
+  }
+
+  private mapOrdersToRentalListings(orders: any[], status: 'ongoing' | 'upcoming', account: HyggloAccount): RentalListing[] {
+    return orders.map((order) => {
+      const labels = order.labels || {};
+      const detail = order._detail || {};
+
+      // Title from labels.name (HTML-decoded)
+      const rawTitle = labels.name || detail.labels?.name || order.title || 'Unknown';
+      const title = rawTitle.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
+      // Renter: prefer full name from detail.users.otherPart.name
+      const renter = detail.users?.otherPart?.name
+        || labels.otherPart
+        || '';
+
+      // Photos from detail items
+      const photosUrls: string[] = [];
+      if (detail.items && Array.isArray(detail.items)) {
+        for (const item of detail.items) {
+          if (item.image?.fullSizeUrl) photosUrls.push(item.image.fullSizeUrl);
+        }
+      }
+      if (order.otherPartsProfileImage) {
+        photosUrls.unshift(order.otherPartsProfileImage);
+      }
+
+      // Listing URL from first item slug
+      let listingUrl = '';
+      if (detail.items && detail.items.length > 0 && detail.items[0].slug) {
+        listingUrl = `https://www.hygglo.com/${detail.items[0].slug}`;
+      }
+
+      const listingId = String(order.id || `order_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
+      // Description from listing details (if any)
+      const description = '';
+
+      // --- Dates from detail.rentalPeriod (UTC ISO strings) ---
+      let startDate: Date | undefined;
+      let endDate: Date | undefined;
+
+      if (detail.rentalPeriod?.startDateUTC) {
+        startDate = new Date(detail.rentalPeriod.startDateUTC);
+      }
+      if (detail.rentalPeriod?.endDateUTC) {
+        endDate = new Date(detail.rentalPeriod.endDateUTC);
+      }
+
+      // Fallback: parse dates from labels.duration.compact (e.g., "31 Dec-1 Jan", "30-31 Jan", "29 Jan")
+      if (!startDate || !endDate) {
+        const parsed = this.parseDurationLabel(labels.duration?.compact || labels.duration?.full || '');
+        if (parsed.startDate && !startDate) startDate = parsed.startDate;
+        if (parsed.endDate && !endDate) endDate = parsed.endDate;
+      }
+
+      // --- Price from detail.price ---
+      let rentalPrice: number | undefined;
+      let pricePerDay: number | undefined;
+      let currency: string | undefined;
+
+      if (detail.price) {
+        // price.total = what renter pays, price.ownerEarnings = what owner gets
+        rentalPrice = detail.price.total ?? undefined;
+        currency = detail.price.currency ?? undefined;
+      }
+
+      // Calculate price per day
+      if (rentalPrice && startDate && endDate) {
+        const days = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
+        pricePerDay = Math.round((rentalPrice / days) * 100) / 100;
+      }
+
+      return {
+        listingId,
+        title,
+        status,
+        startDate,
+        endDate,
+        renterInfo: renter,
+        listingUrl,
+        description,
+        photosUrls,
+        account,
+        rentalPrice,
+        pricePerDay,
+        currency,
+        // Pass detail through for downstream use (items, activities, ownerEarnings)
+        _detail: detail,
+      };
+    });
+  }
+
+  /**
+   * Parse dates from Hygglo duration labels like "31 Dec-1 Jan", "30-31 Jan", "29 Jan".
+   */
+  private parseDurationLabel(label: string): { startDate?: Date; endDate?: Date } {
+    if (!label) return {};
+
+    // Remove "Rental period: " prefix if present
+    const cleaned = label.replace(/^Rental period:\s*/i, '').trim();
+    if (!cleaned) return {};
+
+    const monthNames: Record<string, number> = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+    };
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+
+    // Pattern: "31 Dec-1 Jan" (different months)
+    const crossMonthMatch = cleaned.match(/^(\d{1,2})\s+(\w{3})\s*-\s*(\d{1,2})\s+(\w{3})$/i);
+    if (crossMonthMatch) {
+      const startDay = parseInt(crossMonthMatch[1]);
+      const startMonth = monthNames[crossMonthMatch[2].toLowerCase()];
+      const endDay = parseInt(crossMonthMatch[3]);
+      const endMonth = monthNames[crossMonthMatch[4].toLowerCase()];
+      if (startMonth !== undefined && endMonth !== undefined) {
+        let startYear = currentYear;
+        let endYear = currentYear;
+        // If end month is before start month, it spans a year boundary
+        if (endMonth < startMonth) endYear = startYear + 1;
+        // If start is in the past by more than 6 months, shift forward
+        const startDate = new Date(startYear, startMonth, startDay);
+        const endDate = new Date(endYear, endMonth, endDay);
+        return { startDate, endDate };
+      }
+    }
+
+    // Pattern: "30-31 Jan" (same month range)
+    const sameMonthMatch = cleaned.match(/^(\d{1,2})\s*-\s*(\d{1,2})\s+(\w{3})$/i);
+    if (sameMonthMatch) {
+      const startDay = parseInt(sameMonthMatch[1]);
+      const endDay = parseInt(sameMonthMatch[2]);
+      const month = monthNames[sameMonthMatch[3].toLowerCase()];
+      if (month !== undefined) {
+        const startDate = new Date(currentYear, month, startDay);
+        const endDate = new Date(currentYear, month, endDay);
+        return { startDate, endDate };
+      }
+    }
+
+    // Pattern: "29 Jan" (single day)
+    const singleDayMatch = cleaned.match(/^(\d{1,2})\s+(\w{3})$/i);
+    if (singleDayMatch) {
+      const day = parseInt(singleDayMatch[1]);
+      const month = monthNames[singleDayMatch[2].toLowerCase()];
+      if (month !== undefined) {
+        const startDate = new Date(currentYear, month, day);
+        const endDate = new Date(currentYear, month, day + 1);
+        return { startDate, endDate };
+      }
+    }
+
+    return {};
+  }
+
+  // --- Detailed Fetching ---
+
+  async fetchListingDetails(listingUrl: string): Promise<RentalDetails> {
     try {
-      const authenticated = await this.ensureAuthenticated();
-      if (!authenticated) {
+      // Extract slug from URL
+      // URLs look like: https://www.hygglo.com/some-listing-slug or https://www.hygglo.se/listing/some-slug
+      const slug = this.extractSlugFromUrl(listingUrl);
+      if (!slug) {
+        this.logger.warn(`Could not extract slug from URL: ${listingUrl}`);
         return { description: '', photosUrls: [] };
       }
 
-      this.logger.log(`📖 Fetching listing details from ${listingUrl}`);
+      this.logger.log(`Fetching listing details for slug: ${slug}`);
 
-      await this.page!.goto(listingUrl, { waitUntil: 'networkidle' });
+      // Public endpoint -- no auth needed
+      const response = await this.client.get(`/v2/product-listings/${slug}`);
+      const data = response.data;
 
-      // Extract description and all photos
-      const details = await this.page!.evaluate(() => {
-        const descriptionElement = document.querySelector('.description, [data-testid="listing-description"], .listing-content');
-        const description = descriptionElement?.textContent?.trim() || '';
+      this.logger.debug(`[API] /v2/product-listings/${slug} sample: ${JSON.stringify(data).substring(0, 1000)}`);
 
-        const imgElements = document.querySelectorAll('img');
-        const photosUrls: string[] = [];
-        imgElements.forEach((img) => {
-          const src = img.getAttribute('src');
-          if (src && !src.includes('avatar') && !src.includes('logo') && !src.includes('icon')) {
-            photosUrls.push(src);
-          }
-        });
+      const description = data.description || data.text || '';
+      const images: any[] = data.images || data.photos || [];
+      const photosUrls = images.map((img: any) => typeof img === 'string' ? img : (img?.url || img?.src || ''))
+        .filter(Boolean);
 
-        return { description, photosUrls };
-      });
+      const pricing = data.price?.formatted || data.price?.toString() || data.pricing || '';
+      const dates = data.availability || '';
 
-      this.logger.log('✅ Listing details fetched');
-      return details;
+      // Parse numeric price value
+      let pricingNumeric: number | undefined;
+      if (data.price?.amount != null) {
+        pricingNumeric = data.price.amount;
+      } else if (data.price?.value != null) {
+        pricingNumeric = data.price.value;
+      } else if (typeof data.price === 'number') {
+        pricingNumeric = data.price;
+      } else if (pricing) {
+        const parsed = parseFloat(pricing.replace(/[^0-9.]/g, ''));
+        if (!isNaN(parsed)) pricingNumeric = parsed;
+      }
+
+      const itemList: string[] = data.items || data.includedItems || [];
+
+      this.logger.log(`Listing details fetched: ${description.substring(0, 80)}...`);
+
+      return { description, photosUrls, pricing, pricingNumeric, dates, itemList };
     } catch (error) {
-      this.logger.error('❌ Error fetching listing details', error);
+      const msg = error instanceof AxiosError
+        ? `${error.response?.status} ${error.response?.statusText}`
+        : error.message;
+      this.logger.error(`Error fetching listing details: ${msg}`);
       return { description: '', photosUrls: [] };
     }
   }
 
+  async fetchRentalDetails(rentalUrl: string): Promise<RentalDetails> {
+    return this.fetchListingDetails(rentalUrl);
+  }
+
+  private extractSlugFromUrl(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      // Remove leading slash, handle paths like /listing/slug or just /slug
+      const pathname = parsed.pathname.replace(/^\//, '').replace(/\/$/, '');
+      // If the path has segments like "listing/my-item", take the last segment
+      const segments = pathname.split('/');
+      return segments[segments.length - 1] || null;
+    } catch {
+      // If not a valid URL, treat the whole thing as a slug
+      return url || null;
+    }
+  }
+
+  // --- Own Listings & Requests ---
+
+  async scanMyListings(): Promise<OwnListing[]> {
+    const allListings: OwnListing[] = [];
+
+    for (const account of this.accounts) {
+      try {
+        const authenticated = await this.ensureAuthenticated(account.name);
+        if (!authenticated) continue;
+
+        const token = this.tokens.get(account.name)!;
+        this.logger.log(`Scanning own listings for ${account.name}...`);
+
+        const response = await this.client.get('/v2/my/product-listings', {
+          params: { limit: 50 },
+          headers: { 'Authorization': `Bearer ${token.accessToken}` },
+          __account: account.name,
+        } as any);
+
+        const data = response.data;
+        const listings: any[] = Array.isArray(data) ? data : (data.items || data.results || data.data || []);
+
+        this.logger.log(`Found ${listings.length} own listings for ${account.name}`);
+
+        for (const listing of listings) {
+          const slug = listing.slug || listing.id || '';
+          allListings.push({
+            title: listing.title || listing.name || 'Unknown',
+            url: slug ? `https://www.hygglo.com/${slug}` : '',
+            status: listing.status || 'active',
+            account: account.name,
+          });
+        }
+      } catch (error) {
+        const msg = error instanceof AxiosError
+          ? `${error.response?.status}`
+          : error.message;
+        this.logger.error(`Error scanning own listings for ${account.name}: ${msg}`);
+      }
+    }
+
+    return allListings;
+  }
+
+  async scanRequests(): Promise<RentalRequest[]> {
+    const allRequests: RentalRequest[] = [];
+
+    for (const account of this.accounts) {
+      try {
+        const authenticated = await this.ensureAuthenticated(account.name);
+        if (!authenticated) continue;
+
+        const token = this.tokens.get(account.name)!;
+        this.logger.log(`Scanning requests for ${account.name}...`);
+
+        const response = await this.client.get('/v4/my/orders', {
+          params: { role: 'owner', filter: 'requested', limit: 50 },
+          headers: { 'Authorization': `Bearer ${token.accessToken}` },
+          __account: account.name,
+        } as any);
+
+        const data = response.data;
+        const orders: any[] = Array.isArray(data) ? data : (data.items || data.results || data.data || []);
+
+        this.logger.log(`Found ${orders.length} requests for ${account.name}`);
+
+        for (const order of orders) {
+          const renterName = [order.renter?.firstName, order.renter?.lastName].filter(Boolean).join(' ')
+            || order.renter?.name || 'Unknown';
+
+          allRequests.push({
+            id: String(order.id || order.orderId || `req_${Date.now()}`),
+            renterName,
+            itemTitle: order.listing?.title || order.productListing?.title || 'Unknown',
+            dates: order.startDate && order.endDate
+              ? `${order.startDate} - ${order.endDate}`
+              : (order.dates || ''),
+            status: order.status || 'pending',
+            account: account.name,
+          });
+        }
+      } catch (error) {
+        const msg = error instanceof AxiosError
+          ? `${error.response?.status}`
+          : error.message;
+        this.logger.error(`Error scanning requests for ${account.name}: ${msg}`);
+      }
+    }
+
+    return allRequests;
+  }
+
+  // --- Status ---
+
   getAuthenticationStatus(): boolean {
-    return this.isAuthenticated;
+    for (const account of this.accounts) {
+      const token = this.tokens.get(account.name);
+      if (token && token.expiresAt > Date.now()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // --- Messaging ---
+
+  async readMessages(orderId: string): Promise<{ sender: string; content: string; timestamp: string }[]> {
+    // Fetch order detail which contains activities (chat messages)
+    for (const account of this.accounts) {
+      const authenticated = await this.ensureAuthenticated(account.name);
+      if (!authenticated) continue;
+
+      const token = this.tokens.get(account.name)!;
+
+      try {
+        const response = await this.client.get(`/v4/my/orders/${orderId}`, {
+          params: { timezone: 'Europe/London' },
+          headers: { 'Authorization': `Bearer ${token.accessToken}` },
+          __account: account.name,
+        } as any);
+
+        const detail = response.data;
+        const activities: any[] = detail.activities || [];
+
+        // Extract chat messages from activities
+        const chatMessages = activities
+          .filter((a: any) => a.chatMessage?.text?.content)
+          .map((a: any) => {
+            const renterName = detail.users?.otherPart?.name || detail.labels?.otherPart || 'Renter';
+            const ownerName = 'Owner';
+            return {
+              sender: a.chatMessage.byMe ? ownerName : renterName,
+              content: a.chatMessage.text.content,
+              timestamp: a.createdAtLabel || new Date().toISOString(),
+            };
+          });
+
+        if (chatMessages.length > 0) {
+          this.logger.log(`readMessages(${orderId}) found ${chatMessages.length} chat messages from order detail for ${account.name}`);
+          return chatMessages;
+        }
+      } catch (error) {
+        const status = error instanceof AxiosError ? error.response?.status : 'unknown';
+        this.logger.debug(`readMessages order detail for ${orderId} returned ${status} for ${account.name}`);
+      }
+    }
+
+    this.logger.debug(`readMessages(${orderId}) — no messages found`);
+    return [];
+  }
+
+  async sendMessage(rentalId: string, message: string): Promise<boolean> {
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    if (readOnly) {
+      this.logger.warn(`BLOCKED [READ_ONLY_MODE] sendMessage on rental ${rentalId}: "${message.substring(0, 80)}..."`);
+      return false;
+    }
+
+    this.logger.log(`sendMessage(${rentalId}) -- stub: messaging endpoints not yet mapped. Would send: "${message.substring(0, 80)}..."`);
+    this.loggingService.info('sendMessage stub called', { rentalId, messageLength: message.length });
+    return false;
+  }
+
+  async checkNewMessages(): Promise<{ rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean }[]> {
+    const allNewMessages: { rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean }[] = [];
+
+    // Get all ongoing and upcoming orders to check for messages
+    try {
+      const allRentals = await this.scanAllAccounts('both');
+
+      for (const rental of allRentals) {
+        try {
+          const messages = await this.readMessages(rental.listingId);
+          if (messages.length === 0) continue;
+
+          let lastCheckTime = this.lastMessageCheckTime.get(rental.listingId);
+
+          // On first check after startup, only treat messages from the last 5 minutes as "new"
+          // to avoid re-processing the entire chat history on every restart
+          if (lastCheckTime === undefined) {
+            const STARTUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+            lastCheckTime = Date.now() - STARTUP_WINDOW_MS;
+            this.logger.debug(`First message check for ${rental.listingId}, using startup window (last 5 min)`);
+          }
+
+          for (const msg of messages) {
+            const msgTime = new Date(msg.timestamp).getTime();
+            const isNew = msgTime > lastCheckTime;
+
+            if (isNew) {
+              allNewMessages.push({
+                rentalId: rental.listingId,
+                sender: msg.sender,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                isNew: true,
+              });
+            }
+          }
+
+          // Update last check time
+          this.lastMessageCheckTime.set(rental.listingId, Date.now());
+        } catch (error) {
+          this.logger.debug(`checkNewMessages: error reading messages for ${rental.listingId}: ${error.message}`);
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`checkNewMessages: error scanning rentals: ${error.message}`);
+    }
+
+    if (allNewMessages.length > 0) {
+      this.logger.log(`checkNewMessages found ${allNewMessages.length} new message(s)`);
+    }
+
+    return allNewMessages;
+  }
+
+  // --- Utility ---
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

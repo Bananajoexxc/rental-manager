@@ -58,6 +58,7 @@ async function bootstrap() {
 
   logger.log(`🚀 Rental Manager Service is running on port ${port}`);
   logger.log(`📚 API Documentation available at http://localhost:${port}/api-docs`);
+  logger.log(`📊 Dashboard available at http://localhost:${port}/dashboard`);
   logger.log('🔍 Background scanning service has started...');
 }
 

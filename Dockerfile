@@ -3,19 +3,6 @@
 # Stage 1: Build
 FROM node:18-alpine AS builder
 
-# Install system dependencies for Playwright
-RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
-
-# Set Playwright environment variables
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
-
 WORKDIR /app
 
 # Copy package files
@@ -37,19 +24,6 @@ RUN yarn build
 # Stage 2: Production
 FROM node:18-alpine
 
-# Install system dependencies for Playwright
-RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
-
-# Set Playwright environment variables
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
-
 WORKDIR /app
 
 # Copy package files
@@ -70,6 +44,10 @@ RUN mkdir -p /app/logs
 
 # Expose port
 EXPOSE 3000
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', r => { process.exit(r.statusCode === 200 ? 0 : 1) })"
 
 # Start the application
 CMD ["node", "dist/main.js"]

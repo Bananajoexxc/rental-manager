@@ -51,6 +51,7 @@ export class AppService {
         end_date: true,
         renter_info: true,
         listing_url: true,
+        account: true,
         created_at: true,
         updated_at: true,
       },

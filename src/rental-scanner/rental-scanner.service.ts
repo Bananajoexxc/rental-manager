@@ -1,8 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Inject, Optional, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyggloService } from '../hygglo/hygglo.service';
 import { ImageAnalysisService } from '../image-analysis/image-analysis.service';
 import { LoggingService } from '../logging/logging.service';
+import { AutonomousService } from '../autonomous/autonomous.service';
+import { TelegramService } from '../telegram/telegram.service';
+import { MemoryService } from '../memory/memory.service';
+import { CalendarService } from '../calendar/calendar.service';
 
 @Injectable()
 export class RentalScannerService implements OnModuleInit {
@@ -11,6 +15,8 @@ export class RentalScannerService implements OnModuleInit {
   private lastActivityTime: number = Date.now();
   private currentScanInterval: number;
   private scannerTimeout: NodeJS.Timeout | null = null;
+  private scanCount = 0;
+  private lastScanNotificationTime = 0;
 
   private readonly INITIAL_SCAN_INTERVAL: number;
   private readonly REDUCED_SCAN_INTERVAL: number;
@@ -21,6 +27,10 @@ export class RentalScannerService implements OnModuleInit {
     private hyggloService: HyggloService,
     private imageAnalysisService: ImageAnalysisService,
     private loggingService: LoggingService,
+    @Optional() @Inject(forwardRef(() => AutonomousService)) private autonomousService: AutonomousService,
+    @Optional() @Inject(forwardRef(() => TelegramService)) private telegramService: TelegramService,
+    private memoryService: MemoryService,
+    private calendarService: CalendarService,
   ) {
     // Load configuration from environment variables
     this.INITIAL_SCAN_INTERVAL = parseInt(process.env.INITIAL_SCAN_INTERVAL_MS || '60000', 10);
@@ -37,12 +47,26 @@ export class RentalScannerService implements OnModuleInit {
   }
 
   private startScanner() {
-    this.logger.log('🚀 Starting rental scanner service...');
+    this.logger.log('Starting rental scanner service...');
+    this.logger.log(`TelegramService injected: ${!!this.telegramService}`);
     this.loggingService.info('Rental scanner service started', {
       initialInterval: this.INITIAL_SCAN_INTERVAL,
       reducedInterval: this.REDUCED_SCAN_INTERVAL,
       inactivityThreshold: this.INACTIVITY_THRESHOLD,
     });
+
+    // Send startup notification
+    const accounts = this.hyggloService.getAccounts();
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    if (this.telegramService) {
+      this.telegramService.sendProactiveMessage(
+        `🚀 *Rental Manager Started*\n\n` +
+        `├ 👤 Accounts: ${accounts.map(a => a.label).join(', ') || 'None configured'}\n` +
+        `├ 🔒 Read-only: ${readOnly ? 'ON' : 'OFF'}\n` +
+        `├ ⏰ Interval: ${this.INITIAL_SCAN_INTERVAL / 1000}s\n` +
+        `└ 📡 First scan in 5s...`,
+      ).catch(() => { /* ignore startup notification errors */ });
+    }
 
     this.scheduleNextScan();
   }
@@ -73,11 +97,8 @@ export class RentalScannerService implements OnModuleInit {
       this.logger.log('🔍 ========== Starting Rental Scan ==========');
       this.loggingService.info('Scan started');
 
-      // Scan both ongoing and upcoming rentals
-      const ongoingRentals = await this.hyggloService.scanRentals('ongoing');
-      const upcomingRentals = await this.hyggloService.scanRentals('upcoming');
-
-      const allRentals = [...ongoingRentals, ...upcomingRentals];
+      // Scan all configured accounts (ongoing + upcoming for each)
+      const allRentals = await this.hyggloService.scanAllAccounts('both');
       let newRentalsCount = 0;
 
       this.logger.log(`📊 Total rentals found: ${allRentals.length}`);
@@ -115,12 +136,97 @@ export class RentalScannerService implements OnModuleInit {
         }
       }
 
+      // Check for new messages and route through autonomous pipeline
+      if (this.autonomousService) {
+        try {
+          const messages = await this.hyggloService.checkNewMessages();
+          const newMessages = messages.filter((m) => m.isNew);
+          if (newMessages.length > 0) {
+            this.logger.log(`New messages found: ${newMessages.length}`);
+            await this.autonomousService.onNewMessages(newMessages);
+          }
+        } catch (msgError) {
+          this.logger.warn(`Message check failed: ${msgError.message}`);
+        }
+      }
+
       const scanDuration = Date.now() - scanStartTime;
-      this.logger.log(`✅ Scan completed in ${scanDuration}ms`);
+      this.scanCount++;
+      this.logger.log(`Scan #${this.scanCount} completed in ${scanDuration}ms`);
       this.loggingService.info('Scan completed', { duration: scanDuration, newRentals: newRentalsCount });
+
+      // Send Telegram scan summary on first scan, when new rentals found,
+      // or every 30 minutes as a heartbeat
+      const timeSinceLastNotification = Date.now() - this.lastScanNotificationTime;
+      const shouldNotify = this.scanCount === 1 || newRentalsCount > 0 || timeSinceLastNotification > 30 * 60 * 1000;
+
+      if (shouldNotify && this.telegramService) {
+        this.lastScanNotificationTime = Date.now();
+
+        // Group rentals by account
+        const byAccount: Record<string, { ongoing: number; upcoming: number }> = {};
+        for (const r of allRentals) {
+          const acct = r.account || 'unknown';
+          if (!byAccount[acct]) byAccount[acct] = { ongoing: 0, upcoming: 0 };
+          if (r.status === 'ongoing') byAccount[acct].ongoing++;
+          else if (r.status === 'upcoming') byAccount[acct].upcoming++;
+        }
+
+        const totalInDb = await this.prisma.rental.count();
+        const accountLines = Object.entries(byAccount).map(([acct, counts]) => {
+          const label = acct === 'dbcinema' ? 'DB Cinema' : acct === 'leo' ? 'Leo Adams' : acct;
+          return `  ${label}: ${counts.ongoing} ongoing, ${counts.upcoming} upcoming`;
+        });
+
+        const authenticated = this.hyggloService.getAuthenticationStatus();
+        const configuredAccounts = this.hyggloService.getAccounts();
+
+        let msg = `📡 *Scan #${this.scanCount}*\n\n`;
+        msg += `├ ⏱ ${scanDuration}ms`;
+        msg += ` | ${authenticated ? '✅ Auth' : '❌ Auth'}`;
+        msg += ` | ${configuredAccounts.map(a => a.label).join(', ') || 'None'}\n`;
+
+        if (allRentals.length > 0) {
+          msg += `├ 📦 ${allRentals.length} rental(s)\n`;
+          for (const line of accountLines) {
+            msg += `│  ${line}\n`;
+          }
+          if (newRentalsCount > 0) {
+            msg += `├ ✨ ${newRentalsCount} new rental(s) saved\n`;
+
+            // Include price info for rentals that have it
+            const pricedRentals = allRentals.filter(r => r.rentalPrice);
+            if (pricedRentals.length > 0) {
+              const priceLines = pricedRentals.slice(0, 5).map(r => {
+                const curr = r.currency === 'GBP' || !r.currency ? '£' : r.currency === 'SEK' ? 'kr' : r.currency;
+                return `│  💰 ${r.title}: ${curr}${r.rentalPrice}${r.pricePerDay ? ` (${curr}${r.pricePerDay}/day)` : ''}`;
+              });
+              msg += `${priceLines.join('\n')}\n`;
+            }
+          }
+        } else {
+          msg += `├ No rentals found\n`;
+          if (!authenticated) {
+            msg += `├ ⚠️ _Auth failed — check credentials_\n`;
+          }
+        }
+
+        msg += `└ DB total: ${totalInDb}`;
+
+        this.telegramService.sendProactiveMessage(msg).catch((err) => {
+          this.logger.warn(`Failed to send scan summary: ${err.message}`);
+        });
+      }
     } catch (error) {
-      this.logger.error('❌ Error during scan', error);
+      this.logger.error('Error during scan: ' + error.message);
       this.loggingService.error('Scan failed', { error: error.message, stack: error.stack });
+
+      // Notify on scan failure too
+      if (this.telegramService) {
+        this.telegramService.sendProactiveMessage(
+          `❌ *Scan #${this.scanCount + 1} Failed*\n\n└ Error: ${error.message}`,
+        ).catch(() => { /* ignore */ });
+      }
     } finally {
       this.isScanning = false;
       this.scheduleNextScan();
@@ -135,17 +241,67 @@ export class RentalScannerService implements OnModuleInit {
       });
 
       if (existingRental) {
-        // Update existing rental
-        await this.prisma.rental.update({
+        // Update existing rental (including dates and price if newly available)
+        const updatedRental = await this.prisma.rental.update({
           where: { listing_id: rental.listingId },
           data: {
             title: rental.title,
             status: rental.status,
             renter_info: rental.renterInfo,
             photos_urls: rental.photosUrls,
+            account: rental.account || existingRental.account,
+            start_date: rental.startDate ?? existingRental.start_date,
+            end_date: rental.endDate ?? existingRental.end_date,
+            rental_price: rental.rentalPrice ?? existingRental.rental_price,
+            price_per_day: rental.pricePerDay ?? existingRental.price_per_day,
+            currency: rental.currency ?? existingRental.currency,
             updated_at: new Date(),
           },
         });
+
+        // Backfill: create bookings if this rental has dates/price but no bookings yet
+        const hasBookings = await this.prisma.booking.count({
+          where: { rental_id: existingRental.id, status: 'confirmed' },
+        });
+
+        if (hasBookings === 0 && updatedRental.start_date && updatedRental.end_date) {
+          try {
+            // Get item names from _detail or use title
+            const itemNames = this.extractItemNamesFromDetail(rental._detail, rental.title);
+            const ownerEarnings = rental._detail?.price?.ownerEarnings;
+            // Use owner earnings as the revenue (what the owner actually receives)
+            const rentalForBooking = {
+              ...updatedRental,
+              rental_price: ownerEarnings ?? updatedRental.rental_price,
+            };
+
+            const createdBookings = await this.calendarService.createBookingsFromRental(
+              rentalForBooking,
+              itemNames,
+            );
+
+            if (createdBookings.length > 0) {
+              this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}`);
+              if (this.telegramService) {
+                const bookingLines = createdBookings.map(b => {
+                  const status = b.wasOverbooked ? '⚠️ OVERBOOKED' : '✅';
+                  const rev = b.revenue ? ` £${b.revenue}` : '';
+                  return `│  ${status} ${b.item_name} x${b.quantity}${rev}`;
+                });
+                this.telegramService.sendProactiveMessage(
+                  `📅 *Bookings Backfilled*\n\n` +
+                  `├ 📦 ${updatedRental.title}\n` +
+                  `├ 👤 ${updatedRental.renter_info || 'Unknown'}\n` +
+                  `├ 📅 ${updatedRental.start_date.toISOString().split('T')[0]} → ${updatedRental.end_date.toISOString().split('T')[0]}\n` +
+                  `├ 💰 £${rentalForBooking.rental_price || 0}\n` +
+                  `${bookingLines.join('\n')}`,
+                ).catch(() => {});
+              }
+            }
+          } catch (err) {
+            this.logger.warn(`Backfill booking failed for ${rental.title}: ${err.message}`);
+          }
+        }
 
         this.logger.log(`🔄 Updated rental: ${rental.title}`);
         return false; // Not a new rental
@@ -163,7 +319,7 @@ export class RentalScannerService implements OnModuleInit {
         if (details.photosUrls.length > 0) photosUrls = details.photosUrls;
       }
 
-      // Save new rental to database
+      // Save new rental to database (including price data)
       const savedRental = await this.prisma.rental.create({
         data: {
           listing_id: rental.listingId,
@@ -175,6 +331,10 @@ export class RentalScannerService implements OnModuleInit {
           listing_url: rental.listingUrl,
           description,
           photos_urls: photosUrls,
+          account: rental.account || null,
+          rental_price: rental.rentalPrice ?? null,
+          price_per_day: rental.pricePerDay ?? null,
+          currency: rental.currency ?? null,
         },
       });
 
@@ -183,6 +343,18 @@ export class RentalScannerService implements OnModuleInit {
         listingId: savedRental.listing_id,
         title: savedRental.title,
       });
+
+      // Auto-store price memory if price data available
+      if (savedRental.rental_price) {
+        const curr = savedRental.currency || 'GBP';
+        const symbol = curr === 'GBP' ? '£' : curr === 'SEK' ? 'kr' : curr;
+        const dateRange = savedRental.start_date && savedRental.end_date
+          ? `${savedRental.start_date.toISOString().split('T')[0]} to ${savedRental.end_date.toISOString().split('T')[0]}`
+          : 'dates unknown';
+        const priceMemory = `${savedRental.renter_info || 'Unknown renter'} booked ${savedRental.title} for ${symbol}${savedRental.rental_price}${savedRental.price_per_day ? ` (${symbol}${savedRental.price_per_day}/day)` : ''} (${dateRange})`;
+        await this.memoryService.storeMemory('fact', `Rental price: ${savedRental.title}`, priceMemory, 6);
+        this.logger.log(`Stored price memory: ${priceMemory}`);
+      }
 
       // Process photos for item extraction
       if (photosUrls.length > 0) {
@@ -209,9 +381,10 @@ export class RentalScannerService implements OnModuleInit {
       }
 
       // Process description for catalog items (one-time)
+      let catalogItems: string[] = [];
       if (description) {
         this.logger.log('📝 Parsing description for items...');
-        const catalogItems = this.imageAnalysisService.parseDescriptionForItems(description);
+        catalogItems = this.imageAnalysisService.parseDescriptionForItems(description);
 
         // Save catalog items
         for (const itemName of catalogItems) {
@@ -238,6 +411,71 @@ export class RentalScannerService implements OnModuleInit {
         });
       }
 
+      // Auto-create calendar bookings from extracted items
+      try {
+        // Combine items from detail, photo analysis, and description parsing
+        const allItemNames: string[] = this.extractItemNamesFromDetail(rental._detail, rental.title);
+        if (photosUrls.length > 0) {
+          const photoItems = await this.prisma.extracteditem.findMany({
+            where: { rental_id: savedRental.id },
+            select: { item_name: true },
+          });
+          allItemNames.push(...photoItems.map(i => i.item_name));
+        }
+        allItemNames.push(...catalogItems);
+
+        // Use owner earnings as revenue (what the owner actually receives)
+        const ownerEarnings = rental._detail?.price?.ownerEarnings;
+        const rentalForBooking = {
+          ...savedRental,
+          rental_price: ownerEarnings ?? savedRental.rental_price,
+        };
+
+        const createdBookings = await this.calendarService.createBookingsFromRental(
+          rentalForBooking,
+          allItemNames,
+        );
+
+        if (createdBookings.length > 0) {
+          const overbookedItems = createdBookings.filter(b => b.wasOverbooked);
+          this.logger.log(`📅 Auto-created ${createdBookings.length} booking(s) for rental ${savedRental.title}`);
+
+          // Send booking summary to Telegram
+          if (this.telegramService) {
+            const bookingLines = createdBookings.map(b => {
+              const status = b.wasOverbooked ? '⚠️ OVERBOOKED' : '✅';
+              const rev = b.revenue ? ` £${b.revenue}` : '';
+              return `│  ${status} ${b.item_name} x${b.quantity}${rev}`;
+            });
+
+            let bookingMsg = `📅 *Auto-Booked*\n\n` +
+              `├ 📦 ${savedRental.title}\n` +
+              `├ 👤 ${savedRental.renter_info || 'Unknown'}\n` +
+              `├ 📅 ${savedRental.start_date ? savedRental.start_date.toISOString().split('T')[0] : '?'} → ${savedRental.end_date ? savedRental.end_date.toISOString().split('T')[0] : '?'}\n` +
+              `├ 💰 £${savedRental.rental_price || 0}\n` +
+              `${bookingLines.join('\n')}`;
+
+            if (overbookedItems.length > 0) {
+              bookingMsg += `\n\n🚨 *AVAILABILITY CONFLICT*\n` +
+                overbookedItems.map(b => `  ⚠️ ${b.item_name}: ${b.maxQuantity - b.availableSlots}/${b.maxQuantity} already booked`).join('\n');
+            }
+
+            this.telegramService.sendProactiveMessage(bookingMsg).catch(err => {
+              this.logger.warn(`Failed to send booking notification: ${err.message}`);
+            });
+          }
+        }
+      } catch (bookingErr) {
+        this.logger.warn(`Auto-booking failed for rental ${savedRental.title}: ${bookingErr.message}`);
+      }
+
+      // Trigger autonomous pipeline for new rental
+      if (this.autonomousService) {
+        this.autonomousService.onNewRental(savedRental).catch((err) => {
+          this.logger.error(`Autonomous pipeline error for ${savedRental.title}: ${err.message}`);
+        });
+      }
+
       return true; // This is a new rental
     } catch (error) {
       this.logger.error(`❌ Error processing rental: ${rental.title}`, error);
@@ -249,12 +487,27 @@ export class RentalScannerService implements OnModuleInit {
     }
   }
 
+  /**
+   * Extract item names from the order detail's items array.
+   * Each item in the detail has a name field (the product title on Hygglo).
+   */
+  private extractItemNamesFromDetail(detail: any, fallbackTitle: string): string[] {
+    if (!detail?.items || !Array.isArray(detail.items) || detail.items.length === 0) {
+      return [fallbackTitle];
+    }
+    return detail.items
+      .filter((item: any) => item.name && item.type === 'PRODUCT')
+      .map((item: any) => item.name.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+  }
+
   getStatus() {
     return {
       isScanning: this.isScanning,
       currentScanInterval: this.currentScanInterval,
       lastActivityTime: new Date(this.lastActivityTime).toISOString(),
       authenticated: this.hyggloService.getAuthenticationStatus(),
+      currentAccount: this.hyggloService.getCurrentAccount(),
+      configuredAccounts: this.hyggloService.getAccounts().map(a => a.name),
     };
   }
 }

@@ -20,13 +20,20 @@ model rental {
   listing_url     String
   description     String?         @db.Text
   photos_urls     String[]        // Array of photo URLs
+  rental_price    Float?          // total rental price from the order
+  price_per_day   Float?          // calculated price per day
+  currency        String?         @default("GBP")
+  account         String?         // 'dbcinema' or 'leo' — which Hygglo account this rental belongs to
   created_at      DateTime        @default(now())
   updated_at      DateTime        @updatedAt
   extracted_items extracteditem[]
   catalog_items   itemcatalog[]
+  ai_decisions    ai_decision[]
+  bookings        booking[]
 
   @@index([status])
   @@index([listing_id])
+  @@index([account])
 }
 
 model extracteditem {
@@ -52,4 +59,179 @@ model itemcatalog {
 
   @@unique([listing_id, item_name])
   @@index([listing_id])
+}
+
+model conversation {
+  id         String   @id @default(uuid())
+  chat_id    String
+  role       String   // 'user', 'assistant', 'system'
+  content    String   @db.Text
+  metadata   Json?
+  created_at DateTime @default(now())
+
+  @@index([chat_id])
+  @@index([created_at])
+}
+
+model ai_decision {
+  id            String   @id @default(uuid())
+  rental_id     String?
+  decision_type String   // 'approve', 'reject', 'message', 'escalate', 'analyze'
+  input_summary String   @db.Text
+  output_summary String  @db.Text
+  confidence    Float?
+  action_taken  String?  @db.Text
+  notified      Boolean  @default(false)
+  created_at    DateTime @default(now())
+  rental        rental?  @relation(fields: [rental_id], references: [id], onDelete: SetNull)
+
+  @@index([rental_id])
+  @@index([decision_type])
+  @@index([created_at])
+}
+
+model rule {
+  id         String   @id @default(uuid())
+  category   String   // 'inventory', 'policy', 'communication', 'pricing', 'faq'
+  name       String
+  content    String   @db.Text
+  is_active  Boolean  @default(true)
+  priority   Int      @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([category])
+  @@index([is_active])
+}
+
+model memory {
+  id           String    @id @default(uuid())
+  memory_type  String    // 'pattern', 'fact', 'preference', 'renter_profile'
+  subject      String
+  content      String    @db.Text
+  importance   Int       @default(5) // 1-10
+  access_count Int       @default(0)
+  expires_at   DateTime?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  @@index([memory_type])
+  @@index([importance])
+  @@index([subject])
+}
+
+model bot_config {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String @db.Text
+
+  @@index([key])
+}
+
+// === Phase 1A: Availability Calendar ===
+
+model booking {
+  id              String    @id @default(uuid())
+  item_name       String
+  quantity        Int       @default(1)
+  start_date      DateTime
+  end_date        DateTime
+  renter_name     String
+  renter_contact  String?
+  account         String    // 'dbcinema' or 'leo'
+  rental_id       String?
+  rental          rental?   @relation(fields: [rental_id], references: [id], onDelete: SetNull)
+  pickup_time     String?   // e.g. '10:00'
+  return_time     String?   // e.g. '19:00'
+  pickup_reminded Boolean   @default(false)
+  return_reminded Boolean   @default(false)
+  status          String    @default("confirmed") // 'confirmed', 'completed', 'cancelled'
+  revenue         Float?
+  platform_fee    Float?
+  delivery_fee    Float?
+  net_profit      Float?
+  notes           String?   @db.Text
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@index([item_name])
+  @@index([start_date, end_date])
+  @@index([renter_name])
+  @@index([status])
+  @@index([account])
+}
+
+// === Phase 1B: Renter Blacklist ===
+
+model blacklisted_renter {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  reason     String   @db.Text
+  added_by   String   @default("owner")
+  created_at DateTime @default(now())
+}
+
+// === Phase 2A: Demand Tracker ===
+
+model demand_record {
+  id               String    @id @default(uuid())
+  items            String[]
+  bundle_label     String?
+  dates_start      DateTime?
+  dates_end        DateTime?
+  renter_name      String?
+  account          String?
+  outcome          String    @default("pending") // 'accepted', 'rejected', 'pending', 'cancelled'
+  rejection_reason String?
+  rental_value     Float?
+  source           String?   // 'hygglo', 'manual', etc.
+  created_at       DateTime  @default(now())
+
+  @@index([outcome])
+  @@index([created_at])
+}
+
+// === Phase 4A: Delivery Quote Calculator ===
+
+model item_spec {
+  id         String  @id @default(uuid())
+  item_name  String  @unique
+  weight_kg  Float?
+  length_cm  Float?
+  width_cm   Float?
+  height_cm  Float?
+  size_score Int     @default(2) // 1-5: XS/S/M/L/XL
+  category   String?
+  notes      String?
+
+  @@index([item_name])
+  @@index([size_score])
+}
+
+// === Phase 4B: Market Insight Tool ===
+
+model market_snapshot {
+  id           String   @id @default(uuid())
+  competitor   String
+  item_name    String
+  price_daily  Float?
+  review_count Int?
+  avg_rating   Float?
+  listing_url  String?
+  scraped_at   DateTime @default(now())
+
+  @@index([competitor])
+  @@index([item_name])
+  @@index([scraped_at])
+}
+
+model market_report {
+  id          String   @id @default(uuid())
+  report_type String   // 'weekly', 'on_demand'
+  content     String   @db.Text
+  insights    Json?
+  created_at  DateTime @default(now())
+
+  @@index([report_type])
+  @@index([created_at])
 }

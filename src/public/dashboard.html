@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rental Manager Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #0f1117;
+      color: #e4e6eb;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    a { color: #6ea8fe; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: #1a1d27;
+      border-bottom: 1px solid #2a2d3a;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #e4e6eb;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+    .status-dot.healthy { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+    .status-dot.unhealthy { background: #ef4444; box-shadow: 0 0 6px #ef444488; }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 13px;
+      color: #8b8fa3;
+    }
+    .refresh-btn {
+      background: #2a2d3a;
+      border: 1px solid #3a3d4a;
+      color: #e4e6eb;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+    .refresh-btn:hover { background: #3a3d4a; }
+    .refresh-btn:active { background: #4a4d5a; }
+
+    /* Main content */
+    .main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Stats cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .stat-card .label {
+      font-size: 13px;
+      color: #8b8fa3;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-card .value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #e4e6eb;
+    }
+    .stat-card .sub {
+      font-size: 12px;
+      color: #8b8fa3;
+      margin-top: 4px;
+    }
+    .stat-card .value.green { color: #22c55e; }
+    .stat-card .value.amber { color: #f59e0b; }
+    .stat-card .value.blue { color: #6ea8fe; }
+
+    /* Sections */
+    .section {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    .section-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #2a2d3a;
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .section-header .count {
+      font-size: 12px;
+      color: #8b8fa3;
+      font-weight: 400;
+    }
+    .section-body {
+      padding: 0;
+      overflow-x: auto;
+    }
+    .section-body.padded {
+      padding: 20px;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead th {
+      text-align: left;
+      padding: 10px 16px;
+      background: #151820;
+      color: #8b8fa3;
+      font-weight: 500;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      border-bottom: 1px solid #2a2d3a;
+    }
+    tbody td {
+      padding: 10px 16px;
+      border-bottom: 1px solid #1e2130;
+      color: #c9cdd8;
+      vertical-align: top;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: #1e2130; }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .badge-ongoing { background: #22c55e22; color: #22c55e; }
+    .badge-upcoming { background: #f59e0b22; color: #f59e0b; }
+    .badge-completed { background: #6ea8fe22; color: #6ea8fe; }
+    .badge-cancelled { background: #ef444422; color: #ef4444; }
+    .badge-photo { background: #3b82f622; color: #3b82f6; }
+    .badge-description { background: #a855f722; color: #a855f7; }
+
+    /* Health panel */
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    .health-item .health-label {
+      font-size: 12px;
+      color: #8b8fa3;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .health-item .health-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: #e4e6eb;
+    }
+
+    /* Loading & error states */
+    .loading, .error-state, .empty-state {
+      padding: 32px;
+      text-align: center;
+      color: #8b8fa3;
+      font-size: 14px;
+    }
+    .error-state { color: #ef4444; }
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #2a2d3a;
+      border-top-color: #6ea8fe;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Truncated text */
+    .truncate {
+      max-width: 300px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Two-column layout for bottom panels */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 900px) {
+      .two-col { grid-template-columns: 1fr; }
+    }
+
+    /* Chat panel */
+    .chat-panel {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      margin-bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      max-height: 500px;
+    }
+    .chat-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #2a2d3a;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      min-height: 200px;
+      max-height: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chat-msg {
+      max-width: 85%;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .chat-msg.user {
+      align-self: flex-end;
+      background: #2563eb;
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+    .chat-msg.assistant {
+      align-self: flex-start;
+      background: #2a2d3a;
+      color: #e4e6eb;
+      border-bottom-left-radius: 2px;
+    }
+    .chat-msg.error {
+      align-self: center;
+      background: #ef444433;
+      color: #ef4444;
+      font-size: 12px;
+    }
+    .chat-msg.thinking {
+      align-self: flex-start;
+      background: #2a2d3a;
+      color: #8b8fa3;
+      font-style: italic;
+    }
+    .chat-input-row {
+      display: flex;
+      border-top: 1px solid #2a2d3a;
+      padding: 12px 16px;
+      gap: 10px;
+    }
+    .chat-input {
+      flex: 1;
+      background: #151820;
+      border: 1px solid #2a2d3a;
+      color: #e4e6eb;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+    }
+    .chat-input:focus {
+      border-color: #2563eb;
+    }
+    .chat-send-btn {
+      background: #2563eb;
+      border: none;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .chat-send-btn:hover { background: #1d4ed8; }
+    .chat-send-btn:disabled { background: #374151; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1>Rental Manager</h1>
+      <span class="status-dot" id="statusDot"></span>
+    </div>
+    <div class="header-right">
+      <a href="/api-docs">API Docs</a>
+      <span id="lastRefreshed">--</span>
+      <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- Stats Cards -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="label">Total Rentals</div>
+        <div class="value" id="statTotal">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Ongoing</div>
+        <div class="value green" id="statOngoing">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Upcoming</div>
+        <div class="value amber" id="statUpcoming">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Scanner</div>
+        <div class="value blue" id="statScanner">--</div>
+        <div class="sub" id="statScannerSub"></div>
+      </div>
+    </div>
+
+    <!-- Recent Rentals -->
+    <div class="section">
+      <div class="section-header">
+        Recent Rentals
+        <span class="count" id="rentalsCount"></span>
+      </div>
+      <div class="section-body" id="rentalsBody">
+        <div class="loading"><div class="spinner"></div><br>Loading rentals...</div>
+      </div>
+    </div>
+
+    <!-- Two-column: Extracted Items + Item Catalog -->
+    <div class="two-col">
+      <div class="section">
+        <div class="section-header">
+          Extracted Items
+          <span class="count" id="itemsCount"></span>
+        </div>
+        <div class="section-body" id="itemsBody">
+          <div class="loading"><div class="spinner"></div><br>Loading items...</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          Item Catalog
+          <span class="count" id="catalogCount"></span>
+        </div>
+        <div class="section-body" id="catalogBody">
+          <div class="loading"><div class="spinner"></div><br>Loading catalog...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Health / Scanner Panel -->
+    <div class="section">
+      <div class="section-header">Health &amp; Scanner</div>
+      <div class="section-body padded" id="healthBody">
+        <div class="loading"><div class="spinner"></div><br>Loading health...</div>
+      </div>
+    </div>
+
+    <!-- Chat Panel -->
+    <div class="chat-panel">
+      <div class="chat-header">AI Chat</div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-msg assistant">Hello! I'm your rental manager AI. Ask me anything about rentals, inventory, bookings, or business insights.</div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" class="chat-input" id="chatInput" placeholder="Type a message..." autocomplete="off" />
+        <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()">Send</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ---- Helpers ----
+    function formatDate(val) {
+      if (!val) return '--';
+      var d = new Date(val);
+      if (isNaN(d.getTime())) return '--';
+      return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function formatUptime(seconds) {
+      if (seconds == null || isNaN(seconds)) return '--';
+      var s = Math.floor(seconds);
+      var d = Math.floor(s / 86400);
+      var h = Math.floor((s % 86400) / 3600);
+      var m = Math.floor((s % 3600) / 60);
+      var sec = s % 60;
+      var parts = [];
+      if (d > 0) parts.push(d + 'd');
+      if (h > 0) parts.push(h + 'h');
+      if (m > 0) parts.push(m + 'm');
+      parts.push(sec + 's');
+      return parts.join(' ');
+    }
+
+    function timeAgo(val) {
+      if (!val) return '--';
+      var d = new Date(val);
+      if (isNaN(d.getTime())) return '--';
+      var diff = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (diff < 0) return 'just now';
+      if (diff < 60) return diff + 's ago';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function statusBadge(status) {
+      var cls = 'badge-' + (status || '').toLowerCase();
+      return '<span class="badge ' + cls + '">' + escapeHtml(status || 'unknown') + '</span>';
+    }
+
+    function sourceBadge(source) {
+      var cls = source === 'photo' ? 'badge-photo' : 'badge-description';
+      return '<span class="badge ' + cls + '">' + escapeHtml(source || 'unknown') + '</span>';
+    }
+
+    function formatConfidence(val) {
+      if (val == null) return '--';
+      return (val * 100).toFixed(0) + '%';
+    }
+
+    function truncate(str, len) {
+      if (!str) return '';
+      return str.length > len ? str.substring(0, len) + '...' : str;
+    }
+
+    // ---- Data fetching ----
+    function fetchJSON(url) {
+      return fetch(url).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    }
+
+    function renderError(el, msg) {
+      el.innerHTML = '<div class="error-state">Error: ' + escapeHtml(msg) + '</div>';
+    }
+
+    function renderEmpty(el, msg) {
+      el.innerHTML = '<div class="empty-state">' + escapeHtml(msg) + '</div>';
+    }
+
+    // ---- Section renderers ----
+    function renderHealth(data) {
+      var dot = document.getElementById('statusDot');
+      dot.className = 'status-dot ' + (data.status === 'healthy' ? 'healthy' : 'unhealthy');
+
+      var sc = data.scanner || {};
+      var html = '<div class="health-grid">';
+      html += '<div class="health-item"><div class="health-label">Status</div><div class="health-value">' + escapeHtml(data.status || '--') + '</div></div>';
+      html += '<div class="health-item"><div class="health-label">Uptime</div><div class="health-value">' + formatUptime(data.uptime) + '</div></div>';
+      html += '<div class="health-item"><div class="health-label">Scan Interval</div><div class="health-value">' + (sc.currentScanInterval ? (sc.currentScanInterval / 1000) + 's' : '--') + '</div></div>';
+      html += '<div class="health-item"><div class="health-label">Last Activity</div><div class="health-value">' + timeAgo(sc.lastActivityTime) + '</div></div>';
+      html += '<div class="health-item"><div class="health-label">Authenticated</div><div class="health-value">' + (sc.authenticated != null ? (sc.authenticated ? 'Yes' : 'No') : '--') + '</div></div>';
+      html += '<div class="health-item"><div class="health-label">Scanning</div><div class="health-value">' + (sc.isScanning != null ? (sc.isScanning ? 'Active' : 'Idle') : '--') + '</div></div>';
+      var acctLabel = sc.currentAccount === 'dbcinema' ? 'DB Cinema' : sc.currentAccount === 'leo' ? 'Leo Adams' : (sc.currentAccount || 'None');
+      html += '<div class="health-item"><div class="health-label">Current Account</div><div class="health-value">' + escapeHtml(acctLabel) + '</div></div>';
+      var configuredLabel = (sc.configuredAccounts && sc.configuredAccounts.length > 0) ? sc.configuredAccounts.join(', ') : 'None';
+      html += '<div class="health-item"><div class="health-label">Accounts</div><div class="health-value">' + escapeHtml(configuredLabel) + '</div></div>';
+      html += '</div>';
+      document.getElementById('healthBody').innerHTML = html;
+    }
+
+    function renderStats(data) {
+      document.getElementById('statTotal').textContent = data.total != null ? data.total : '--';
+      document.getElementById('statOngoing').textContent = data.ongoing != null ? data.ongoing : '--';
+      document.getElementById('statUpcoming').textContent = data.upcoming != null ? data.upcoming : '--';
+    }
+
+    function renderScanner(data) {
+      var sc = data || {};
+      var label = sc.isScanning ? 'Active' : 'Idle';
+      document.getElementById('statScanner').textContent = label;
+      var subParts = [];
+      subParts.push(sc.authenticated ? 'Authenticated' : 'Not authenticated');
+      if (sc.currentAccount) {
+        subParts.push('Account: ' + (sc.currentAccount === 'dbcinema' ? 'DB Cinema' : sc.currentAccount === 'leo' ? 'Leo Adams' : sc.currentAccount));
+      }
+      if (sc.configuredAccounts && sc.configuredAccounts.length > 0) {
+        subParts.push(sc.configuredAccounts.length + ' account(s)');
+      }
+      document.getElementById('statScannerSub').textContent = subParts.join(' | ');
+    }
+
+    function renderRentals(data) {
+      var el = document.getElementById('rentalsBody');
+      var countEl = document.getElementById('rentalsCount');
+      if (!data || data.length === 0) {
+        renderEmpty(el, 'No rentals found');
+        countEl.textContent = '';
+        return;
+      }
+      countEl.textContent = data.length + ' shown';
+
+      var html = '<table><thead><tr>';
+      html += '<th>Title</th><th>Account</th><th>Status</th><th>Start</th><th>End</th><th>Renter</th><th>Created</th>';
+      html += '</tr></thead><tbody>';
+      for (var i = 0; i < data.length; i++) {
+        var r = data[i];
+        var titleHtml = escapeHtml(r.title || 'Untitled');
+        if (r.listing_url) {
+          titleHtml = '<a href="' + escapeHtml(r.listing_url) + '" target="_blank">' + titleHtml + '</a>';
+        }
+        var acct = r.account === 'dbcinema' ? 'DB Cinema' : r.account === 'leo' ? 'Leo Adams' : (r.account || '--');
+        html += '<tr>';
+        html += '<td>' + titleHtml + '</td>';
+        html += '<td>' + escapeHtml(acct) + '</td>';
+        html += '<td>' + statusBadge(r.status) + '</td>';
+        html += '<td>' + formatDate(r.start_date) + '</td>';
+        html += '<td>' + formatDate(r.end_date) + '</td>';
+        html += '<td>' + escapeHtml(r.renter_info || '--') + '</td>';
+        html += '<td>' + formatDate(r.created_at) + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    function renderItems(data) {
+      var el = document.getElementById('itemsBody');
+      var countEl = document.getElementById('itemsCount');
+      if (!data || data.length === 0) {
+        renderEmpty(el, 'No extracted items found');
+        countEl.textContent = '';
+        return;
+      }
+      countEl.textContent = data.length + ' shown';
+
+      var html = '<table><thead><tr>';
+      html += '<th>Item</th><th>Source</th><th>Confidence</th><th>Rental</th>';
+      html += '</tr></thead><tbody>';
+      for (var i = 0; i < data.length; i++) {
+        var item = data[i];
+        var rentalTitle = (item.rental && item.rental.title) ? escapeHtml(item.rental.title) : '--';
+        html += '<tr>';
+        html += '<td>' + escapeHtml(item.item_name || '--') + '</td>';
+        html += '<td>' + sourceBadge(item.source) + '</td>';
+        html += '<td>' + formatConfidence(item.confidence_score) + '</td>';
+        html += '<td>' + rentalTitle + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    function renderCatalog(data) {
+      var el = document.getElementById('catalogBody');
+      var countEl = document.getElementById('catalogCount');
+      if (!data || data.length === 0) {
+        renderEmpty(el, 'No catalog items found');
+        countEl.textContent = '';
+        return;
+      }
+      countEl.textContent = data.length + ' shown';
+
+      var html = '<table><thead><tr>';
+      html += '<th>Item</th><th>Listing ID</th><th>Description</th><th>First Seen</th>';
+      html += '</tr></thead><tbody>';
+      for (var i = 0; i < data.length; i++) {
+        var c = data[i];
+        html += '<tr>';
+        html += '<td>' + escapeHtml(c.item_name || '--') + '</td>';
+        html += '<td>' + escapeHtml(c.listing_id || '--') + '</td>';
+        html += '<td class="truncate">' + escapeHtml(truncate(c.description || '', 80)) + '</td>';
+        html += '<td>' + formatDate(c.first_seen_at) + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    // ---- Main refresh ----
+    var refreshTimer = null;
+
+    function refreshAll() {
+      var btn = document.getElementById('refreshBtn');
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+
+      Promise.allSettled([
+        fetchJSON('/health').then(function(d) { renderHealth(d); }),
+        fetchJSON('/rentals/stats').then(function(d) { renderStats(d); }),
+        fetchJSON('/scanner/status').then(function(d) { renderScanner(d); }),
+        fetchJSON('/rentals/recent?limit=20').then(function(d) { renderRentals(d); }).catch(function(e) { renderError(document.getElementById('rentalsBody'), e.message); }),
+        fetchJSON('/items/recent?limit=30').then(function(d) { renderItems(d); }).catch(function(e) { renderError(document.getElementById('itemsBody'), e.message); }),
+        fetchJSON('/items/catalog?limit=30').then(function(d) { renderCatalog(d); }).catch(function(e) { renderError(document.getElementById('catalogBody'), e.message); })
+      ]).then(function(results) {
+        // Handle health/stats/scanner errors individually
+        if (results[0].status === 'rejected') {
+          document.getElementById('statusDot').className = 'status-dot unhealthy';
+          renderError(document.getElementById('healthBody'), results[0].reason.message);
+        }
+        if (results[1].status === 'rejected') {
+          document.getElementById('statTotal').textContent = '!';
+          document.getElementById('statOngoing').textContent = '!';
+          document.getElementById('statUpcoming').textContent = '!';
+        }
+        if (results[2].status === 'rejected') {
+          document.getElementById('statScanner').textContent = '!';
+          document.getElementById('statScannerSub').textContent = 'Error';
+        }
+      }).finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Refresh';
+        document.getElementById('lastRefreshed').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+        // Reset auto-refresh timer
+        clearInterval(refreshTimer);
+        refreshTimer = setInterval(refreshAll, 30000);
+      });
+    }
+
+    // Initial load
+    refreshAll();
+
+    // ---- Chat ----
+    var chatInput = document.getElementById('chatInput');
+    var chatSendBtn = document.getElementById('chatSendBtn');
+    var chatMessages = document.getElementById('chatMessages');
+
+    chatInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+
+    function appendChatMessage(text, role) {
+      var div = document.createElement('div');
+      div.className = 'chat-msg ' + role;
+      div.textContent = text;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
+    }
+
+    function sendChatMessage() {
+      var text = chatInput.value.trim();
+      if (!text) return;
+
+      chatInput.value = '';
+      appendChatMessage(text, 'user');
+
+      chatSendBtn.disabled = true;
+      chatSendBtn.textContent = '...';
+      var thinkingEl = appendChatMessage('Thinking...', 'thinking');
+
+      fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        chatMessages.removeChild(thinkingEl);
+        if (data.error) {
+          appendChatMessage(data.error, 'error');
+        } else {
+          appendChatMessage(data.reply || 'No response', 'assistant');
+        }
+      })
+      .catch(function(err) {
+        chatMessages.removeChild(thinkingEl);
+        appendChatMessage('Error: ' + err.message, 'error');
+      })
+      .finally(function() {
+        chatSendBtn.disabled = false;
+        chatSendBtn.textContent = 'Send';
+        chatInput.focus();
+      });
+    }
+  </script>
+
+</body>
+</html>

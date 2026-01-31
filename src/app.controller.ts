@@ -1,11 +1,28 @@
-import { Controller, Get, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Query, Res, Header } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
+import type { Response } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AppService } from './app.service';
+import { AiService } from './ai/ai.service';
+import { RulesService } from './rules/rules.service';
+import { MemoryService } from './memory/memory.service';
+import { CalendarService } from './calendar/calendar.service';
+import { BlacklistService } from './blacklist/blacklist.service';
+import { PrismaService } from './prisma/prisma.service';
 
 @ApiTags('Health')
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+    private readonly aiService: AiService,
+    private readonly rulesService: RulesService,
+    private readonly memoryService: MemoryService,
+    private readonly calendarService: CalendarService,
+    private readonly blacklistService: BlacklistService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -145,7 +162,8 @@ export class AppController {
     },
   })
   async getRecentRentals(@Query('limit') limit?: string) {
-    const limitNum = Math.min(parseInt(limit || '10', 10), 100);
+    const parsed = parseInt(limit || '10', 10);
+    const limitNum = Math.min(Number.isNaN(parsed) ? 10 : Math.max(1, parsed), 100);
     return await this.appService.getRecentRentals(limitNum);
   }
 
@@ -187,7 +205,8 @@ export class AppController {
     },
   })
   async getRecentItems(@Query('limit') limit?: string) {
-    const limitNum = Math.min(parseInt(limit || '20', 10), 100);
+    const parsed = parseInt(limit || '20', 10);
+    const limitNum = Math.min(Number.isNaN(parsed) ? 20 : Math.max(1, parsed), 100);
     return await this.appService.getRecentItems(limitNum);
   }
 
@@ -222,7 +241,108 @@ export class AppController {
     },
   })
   async getItemCatalog(@Query('limit') limit?: string) {
-    const limitNum = Math.min(parseInt(limit || '50', 10), 100);
+    const parsed = parseInt(limit || '50', 10);
+    const limitNum = Math.min(Number.isNaN(parsed) ? 50 : Math.max(1, parsed), 100);
     return await this.appService.getItemCatalog(limitNum);
+  }
+
+  @Post('api/chat')
+  @ApiTags('Chat')
+  @ApiOperation({
+    summary: 'Dashboard chat',
+    description: 'Send a message through the AI pipeline with full context (rules, memories, rental context, calendar, blacklist)',
+  })
+  @ApiResponse({ status: 200, description: 'AI response' })
+  async chatMessage(@Body() body: { message: string }) {
+    const userMessage = body.message;
+    if (!userMessage || typeof userMessage !== 'string') {
+      return { error: 'Message is required' };
+    }
+
+    try {
+      const chatId = 'dashboard';
+
+      // Store user message
+      await this.memoryService.storeConversation(chatId, 'user', userMessage);
+
+      // Extract meaningful keywords
+      const dashKeywords = userMessage
+        .split(/[\s,.\-!?;:()]+/)
+        .filter((w: string) => w.length > 2)
+        .slice(0, 10);
+
+      // Detect pricing intent
+      const pricingTerms = /\b(price|pricing|cost|how much|rate|rates|quote|charge|fee|fees|per day|daily|weekly|budget|listing)\b/i;
+      const hasPricingIntent = pricingTerms.test(userMessage);
+
+      // Gather full context (same pipeline as Telegram)
+      const [rules, history, generalMemories, blacklist, schedule] = await Promise.all([
+        this.rulesService.getFormattedRules(),
+        this.memoryService.getConversationHistory(chatId, 10),
+        this.memoryService.getRelevantMemories(dashKeywords),
+        this.blacklistService.getFormattedBlacklist(),
+        this.calendarService.getFormattedSchedule(new Date()),
+      ]);
+
+      // Add pricing data when relevant
+      let memories = generalMemories;
+      if (hasPricingIntent) {
+        const pricingMem = await this.memoryService.getPricingMemories();
+        if (pricingMem) {
+          memories = [generalMemories, pricingMem].filter(Boolean).join('\n');
+        }
+      }
+
+      const recentRentals = await this.prisma.rental.findMany({
+        take: 5,
+        orderBy: { created_at: 'desc' },
+        select: { title: true, status: true, renter_info: true, account: true, start_date: true, end_date: true },
+      });
+      const rentalContext = recentRentals.length > 0
+        ? recentRentals.map((r) => `- ${r.title} (${r.status}, ${r.account || 'unknown'}) renter: ${r.renter_info || 'N/A'}`).join('\n')
+        : 'No recent rentals.';
+
+      const additionalParts: string[] = [
+        'You are chatting with Daniel through the web dashboard. ',
+        'Help him manage the business, answer questions, and provide insights. ',
+        'Store relevant information using <memory> tags when appropriate.',
+      ];
+
+      if (schedule) {
+        additionalParts.push(`\n\nTODAY'S SCHEDULE:\n${schedule}`);
+      }
+      if (blacklist) {
+        additionalParts.push(`\n\n${blacklist}`);
+      }
+
+      const response = await this.aiService.processComplex(userMessage, {
+        rules,
+        memories,
+        conversationHistory: history,
+        rentalContext,
+        additionalContext: additionalParts.join(''),
+      });
+
+      // Store assistant response
+      await this.memoryService.storeConversation(chatId, 'assistant', response.content);
+
+      // Process any memories
+      if (response.memories.length > 0) {
+        await this.memoryService.processAiMemories(response.memories);
+      }
+
+      return { reply: response.content, model: response.model };
+    } catch (error) {
+      return { error: `Chat error: ${error.message}` };
+    }
+  }
+
+  @Get('dashboard')
+  @ApiExcludeEndpoint()
+  @Header('Content-Type', 'text/html')
+  getDashboard(@Res() res: Response) {
+    const htmlPath = path.join(__dirname, 'public', 'dashboard.html');
+    const html = fs.readFileSync(htmlPath, 'utf-8');
+    res.send(html);
   }
 }
