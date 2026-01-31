@@ -7,6 +7,7 @@
  * This file contains:
  * - Listed prices for individual items (from Hygglo listings)
  * - Bundle prices (combinations of inventory items at bundle rates)
+ * - Multi-quantity listings (2x, 3x, 4x sets of same item)
  * - Marketing-only listings (items listed for data/visibility but not physically available)
  *
  * Bundles do NOT add inventory -- they are pricing tiers for combinations of
@@ -28,6 +29,10 @@ export interface PricingEntry {
 }
 
 export const PRICING_CATALOG: PricingEntry[] = [
+  // ══════════════════════════════════════════════════════════════
+  // INDIVIDUAL ITEMS (from Hygglo listings)
+  // ══════════════════════════════════════════════════════════════
+
   // ──────────────────────────────────────────
   // CAMERAS (individual)
   // ──────────────────────────────────────────
@@ -143,94 +148,92 @@ export const PRICING_CATALOG: PricingEntry[] = [
   { item_name: 'JBL Club 120 speaker', category: 'dj', daily_price_min: 39, daily_price_max: 49, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'DJ RX3 Pioneer controller', category: 'dj', daily_price_min: 40, daily_price_max: 55, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
 
-  // ══════════════════════════════════════════
-  // BUNDLES (combinations of MASTER_INVENTORY items at bundle pricing)
-  // These do NOT add to stock -- they are pricing tiers
-  // ══════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
+  // MULTI-QUANTITY LISTINGS (same item, multiple units)
+  // These are separate Hygglo listings for renting multiple units
+  // ══════════════════════════════════════════════════════════════
 
-  // Camera bundles
-  {
-    item_name: 'Sony FX3 + 24-70mm GM Kit',
-    category: 'bundle', daily_price_min: 41, daily_price_max: 60, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
-  },
-  {
-    item_name: 'Sony FX3 + 24-70mm GM + RS Gimbal Kit',
-    category: 'bundle', daily_price_min: 40, daily_price_max: 70, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
-  },
-  {
-    item_name: 'Sony FX3 Full Production Kit',
-    category: 'bundle', daily_price_min: 100, daily_price_max: 120, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
-  },
+  // -- Camera multi-quantity --
   {
     item_name: '2x Sony FX3 Set',
-    category: 'bundle', daily_price_min: 57, daily_price_max: 90, is_bundle: true,
+    category: 'bundle', daily_price_min: 57, daily_price_max: 75, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony FX3'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'BMPCC 6K Pro Cinema Kit',
-    category: 'bundle', daily_price_min: 79, daily_price_max: 140, is_bundle: true,
-    bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'DJI RS3 Pro gimbal', 'Atomos Ninja V'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    item_name: '3x Sony FX3 Set',
+    category: 'bundle', daily_price_min: 80, daily_price_max: 110, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony FX3', 'Sony FX3'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'BMPCC 6K Pro Interview Kit',
-    category: 'bundle', daily_price_min: 57, daily_price_max: 75, is_bundle: true,
-    bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'Nanlite Pavotube 30x II', 'Rode Wireless Mic Pro set'],
+    item_name: '2x DJI Osmo Action Pro 5 Set',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 58, is_bundle: true,
+    bundle_items: ['DJI Osmo Action Pro 5', 'DJI Osmo Action Pro 5'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x DJI Osmo Action Pro 5 Set',
+    category: 'bundle', daily_price_min: 60, daily_price_max: 85, is_bundle: true,
+    bundle_items: ['DJI Osmo Action Pro 5', 'DJI Osmo Action Pro 5', 'DJI Osmo Action Pro 5'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x GoPro 12 Hero Set',
+    category: 'bundle', daily_price_min: 24, daily_price_max: 32, is_bundle: true,
+    bundle_items: ['GoPro 12 Hero', 'GoPro 12 Hero'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x GoPro Hero 12 Set',
+    category: 'bundle', daily_price_min: 30, daily_price_max: 40, is_bundle: true,
+    bundle_items: ['GoPro 12 Hero', 'GoPro 12 Hero', 'GoPro 12 Hero'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
 
-  // Lens bundles
+  // -- Lens multi-quantity --
   {
-    item_name: 'Sony GM Triple Lens Set',
-    category: 'bundle', daily_price_min: 35, daily_price_max: 55, is_bundle: true,
-    bundle_items: ['Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    item_name: '2x Sony GM 24-70mm f2.8 Set',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 36, is_bundle: true,
+    bundle_items: ['Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'Great Joy Anamorphic Set (35+50+85mm)',
-    category: 'bundle', daily_price_min: 50, daily_price_max: 99, is_bundle: true,
-    bundle_items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm'],
+    item_name: '3x Sony GM 24-70mm f2.8 Set',
+    category: 'bundle', daily_price_min: 30, daily_price_max: 50, is_bundle: true,
+    bundle_items: ['Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'Blazar Remus 4-Lens Anamorphic Set',
-    category: 'bundle', daily_price_min: 80, daily_price_max: 120, is_bundle: true,
-    bundle_items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm'],
+    item_name: '4x Sony GM 24-70mm f2.8 Set',
+    category: 'bundle', daily_price_min: 40, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
-
-  // DJ & speaker bundle (delivery mandatory)
   {
-    item_name: 'JBL Speakers + Pioneer DJ RX3 Set',
-    category: 'bundle', daily_price_min: 79, daily_price_max: 100, is_bundle: true,
-    bundle_items: ['JBL Club 120 speaker', 'JBL Club 120 speaker', 'DJ RX3 Pioneer controller'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x. DELIVERY MANDATORY for this bundle.',
-  },
-
-  // Lighting bundles
-  {
-    item_name: 'Interview Lighting Kit',
+    item_name: '2x Sony GM 70-200mm f2.8 Set',
     category: 'bundle', daily_price_min: 25, daily_price_max: 40, is_bundle: true,
-    bundle_items: ['LED light panels RGB', 'LED light panels RGB', 'Softbox 85cm'],
+    bundle_items: ['Sony GM 70-200mm f2.8', 'Sony GM 70-200mm f2.8'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'Full Lighting Kit',
-    category: 'bundle', daily_price_min: 50, daily_price_max: 70, is_bundle: true,
-    bundle_items: ['Nanlite Forza 300', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'C-stand'],
+    item_name: '2x Sony 28-70mm Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['Sony 28-70mm', 'Sony 28-70mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
+
+  // -- Lighting multi-quantity --
   {
     item_name: '2x Nanlite Pavotube 30x II Set',
     category: 'bundle', daily_price_min: 20, daily_price_max: 30, is_bundle: true,
     bundle_items: ['Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x Nanlite Pavotube 30x II Set',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 42, is_bundle: true,
+    bundle_items: ['Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
@@ -240,10 +243,1004 @@ export const PRICING_CATALOG: PricingEntry[] = [
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: '3x GoPro Hero 12 Set',
-    category: 'bundle', daily_price_min: 30, daily_price_max: 40, is_bundle: true,
-    bundle_items: ['GoPro 12 Hero', 'GoPro 12 Hero', 'GoPro 12 Hero'],
+    item_name: '2x LED Light Panels RGB Set',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 40, is_bundle: true,
+    bundle_items: ['LED light panels RGB', 'LED light panels RGB'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x LED Light Panels RGB Set',
+    category: 'bundle', daily_price_min: 30, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['LED light panels RGB', 'LED light panels RGB', 'LED light panels RGB'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x Softbox 85cm Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['Softbox 85cm', 'Softbox 85cm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x Ambitful RGB Light Tubes Set',
+    category: 'bundle', daily_price_min: 6, daily_price_max: 30, is_bundle: true,
+    bundle_items: ['Ambitful RGB light tubes 2x set', 'Ambitful RGB light tubes 2x set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 tubes total.',
+  },
+
+  // -- Support multi-quantity --
+  {
+    item_name: '2x Small Rig Tripod Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['Small rig tripod', 'Small rig tripod'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x Small Rig Tripod Set',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 20, is_bundle: true,
+    bundle_items: ['Small rig tripod', 'Small rig tripod', 'Small rig tripod'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // -- Power multi-quantity --
+  {
+    item_name: '2x V-mount 95mAh Set',
+    category: 'bundle', daily_price_min: 18, daily_price_max: 26, is_bundle: true,
+    bundle_items: ['V-mount 95mAh', 'V-mount 95mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x V-mount 150mAh Set',
+    category: 'bundle', daily_price_min: 30, daily_price_max: 48, is_bundle: true,
+    bundle_items: ['V-mount 150mAh', 'V-mount 150mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x V-mount 150mAh Set',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['V-mount 150mAh', 'V-mount 150mAh', 'V-mount 150mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '4x V-mount 150mAh Set',
+    category: 'bundle', daily_price_min: 55, daily_price_max: 80, is_bundle: true,
+    bundle_items: ['V-mount 150mAh', 'V-mount 150mAh', 'V-mount 150mAh', 'V-mount 150mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x Sony NPF 970 Batteries Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 batteries total.',
+  },
+  {
+    item_name: '3x Sony NPF 970 Batteries Set',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
+    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 6 batteries total.',
+  },
+  {
+    item_name: '4x Sony NPF 970 Batteries Set',
+    category: 'bundle', daily_price_min: 12, daily_price_max: 22, is_bundle: true,
+    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 8 batteries total.',
+  },
+  {
+    item_name: '2x DJI Gimbal Battery Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['DJI gimbal battery', 'DJI gimbal battery'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x DJI Gimbal Battery Set',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
+    bundle_items: ['DJI gimbal battery', 'DJI gimbal battery', 'DJI gimbal battery'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // -- Accessory multi-quantity --
+  {
+    item_name: '2x ND Filter Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['ND filter', 'ND filter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x ND Filter Set',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
+    bundle_items: ['ND filter', 'ND filter', 'ND filter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x 256GB Memory Card Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['256GB card', '256GB card'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x 256GB Memory Card Set',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
+    bundle_items: ['256GB card', '256GB card', '256GB card'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x Suction Cup Mount Set',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 16, is_bundle: true,
+    bundle_items: ['Suction cups', 'Suction cups'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3x Suction Cup Mount Set',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 22, is_bundle: true,
+    bundle_items: ['Suction cups', 'Suction cups', 'Suction cups'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '4x Suction Cup Mount Set',
+    category: 'bundle', daily_price_min: 14, daily_price_max: 28, is_bundle: true,
+    bundle_items: ['Suction cups', 'Suction cups', 'Suction cups', 'Suction cups'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '6x Suction Cup Mount Set',
+    category: 'bundle', daily_price_min: 18, daily_price_max: 38, is_bundle: true,
+    bundle_items: ['Suction cups', 'Suction cups', 'Suction cups', 'Suction cups', 'Suction cups', 'Suction cups'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x Rode Wireless Mic Pro Set',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 44, is_bundle: true,
+    bundle_items: ['Rode Wireless Mic Pro set', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 channels total.',
+  },
+  {
+    item_name: '2x PL to Sony E Mount Adapter Set',
+    category: 'bundle', daily_price_min: 12, daily_price_max: 20, is_bundle: true,
+    bundle_items: ['PL to Sony E mount', 'PL to Sony E mount'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x DJI RS3 Pro Gimbal Set',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 42, is_bundle: true,
+    bundle_items: ['DJI RS3 Pro gimbal', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '2x JBL Club 120 Speaker Set',
+    category: 'bundle', daily_price_min: 60, daily_price_max: 85, is_bundle: true,
+    bundle_items: ['JBL Club 120 speaker', 'JBL Club 120 speaker'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // CAMERA + LENS COMBO BUNDLES
+  // ══════════════════════════════════════════════════════════════
+
+  // -- Sony FX3 + Lens Combos --
+  {
+    item_name: 'Sony FX3 + 24-70mm GM Kit',
+    category: 'bundle', daily_price_min: 41, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 + 16-35mm GM Kit',
+    category: 'bundle', daily_price_min: 40, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 + 70-200mm GM Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 57, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 + 90mm GM Macro Kit',
+    category: 'bundle', daily_price_min: 38, daily_price_max: 50, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 90mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 + GM Triple Lens Kit',
+    category: 'bundle', daily_price_min: 60, daily_price_max: 85, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 + 28-70mm Starter Kit',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 44, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony 28-70mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 + 11mm Fisheye Kit',
+    category: 'bundle', daily_price_min: 36, daily_price_max: 48, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony 11mm f2.8 fisheye'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // -- Sony FX3 + Anamorphic Combos --
+  {
+    item_name: 'Sony FX3 + Great Joy 35mm Anamorphic',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 35mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Great Joy 50mm Anamorphic',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 50mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Great Joy 85mm Anamorphic',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 85mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Blazar Remus 33mm Anamorphic',
+    category: 'bundle', daily_price_min: 48, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Blazar Remus 33mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Blazar Remus 45mm Anamorphic',
+    category: 'bundle', daily_price_min: 48, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Blazar Remus 45mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Blazar Remus 65mm Anamorphic',
+    category: 'bundle', daily_price_min: 48, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Blazar Remus 65mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // -- Sony A7 III + Lens Combos --
+  {
+    item_name: 'Sony A7 III + 24-70mm GM Kit',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 45, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Sony GM 24-70mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony A7 III + 16-35mm GM Kit',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 45, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Sony GM 16-35mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony A7 III + 70-200mm GM Kit',
+    category: 'bundle', daily_price_min: 30, daily_price_max: 47, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony A7 III + GM Triple Lens Kit',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 75, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+
+  // -- Sony A7 II + Lens Combos --
+  {
+    item_name: 'Sony A7 II + 28-70mm Kit',
+    category: 'bundle', daily_price_min: 18, daily_price_max: 32, is_bundle: true,
+    bundle_items: ['Sony A7 II', 'Sony 28-70mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony A7 II + 24-70mm GM Kit',
+    category: 'bundle', daily_price_min: 25, daily_price_max: 42, is_bundle: true,
+    bundle_items: ['Sony A7 II', 'Sony GM 24-70mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+
+  // -- BMPCC + Lens Combos --
+  {
+    item_name: 'BMPCC 6K Pro + Canon 24-105mm Kit',
+    category: 'bundle', daily_price_min: 36, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'BMPCC 6K Pro + Canon 16-35mm f2.8 Kit',
+    category: 'bundle', daily_price_min: 38, daily_price_max: 60, is_bundle: true,
+    bundle_items: ['BMPCC 6K Pro', 'Canon EF 16-35mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'BMPCC 6K FF + Canon 24-105mm Kit',
+    category: 'bundle', daily_price_min: 36, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['BMPCC 6K Full Frame', 'Canon EF 24-105mm f4'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // CAMERA + GIMBAL COMBOS
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Sony FX3 + RS3 Pro Gimbal Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 58, is_bundle: true,
+    bundle_items: ['Sony FX3', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + 24-70mm GM + RS3 Gimbal Kit',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 70, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony A7 III + RS3 Pro Gimbal Kit',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 48, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony A7 III + 24-70mm + RS3 Gimbal Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 60, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'BMPCC 6K Pro + RS3 Pro Gimbal Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['BMPCC 6K Pro', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + 24-70mm + Tilta Shoulder Rig Kit',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 70, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'Tilta shoulder rig'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Motorized Slider Kit',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 58, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Motorized slider'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // CAMERA + AUDIO COMBOS
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Sony FX3 + Rode Wireless Mic Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 58, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + DJI Mic 2 Kit',
+    category: 'bundle', daily_price_min: 40, daily_price_max: 52, is_bundle: true,
+    bundle_items: ['Sony FX3', 'DJI Mic 2 wireless'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony A7 III + Rode Wireless Mic Kit',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 48, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // CAMERA + MONITOR COMBOS
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Sony FX3 + Atomos Ninja V Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Atomos Ninja V'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony FX3 + Hollyland 7-inch Monitor Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Hollyland 7-inch monitor'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'BMPCC 6K Pro + Atomos Ninja V Kit',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 62, is_bundle: true,
+    bundle_items: ['BMPCC 6K Pro', 'Atomos Ninja V'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // LENS SET BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Sony GM Triple Lens Set (16-35 + 24-70 + 70-200)',
+    category: 'bundle', daily_price_min: 35, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony GM Duo (24-70 + 70-200)',
+    category: 'bundle', daily_price_min: 24, daily_price_max: 38, is_bundle: true,
+    bundle_items: ['Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Sony GM Duo (16-35 + 24-70)',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 36, is_bundle: true,
+    bundle_items: ['Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Canon EF Dual Lens Set (24-105 + 16-35)',
+    category: 'bundle', daily_price_min: 16, daily_price_max: 26, is_bundle: true,
+    bundle_items: ['Canon EF 24-105mm f4', 'Canon EF 16-35mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Great Joy Anamorphic Set (35+50+85mm)',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 90, is_bundle: true,
+    bundle_items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Blazar Remus 4-Lens Anamorphic Set (33+45+65+100)',
+    category: 'bundle', daily_price_min: 80, daily_price_max: 110, is_bundle: true,
+    bundle_items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Blazar Remus 2-Lens Anamorphic Set (33+65)',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 65mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Blazar Remus 3-Lens Anamorphic Set (33+45+65)',
+    category: 'bundle', daily_price_min: 62, daily_price_max: 82, is_bundle: true,
+    bundle_items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Great Joy Anamorphic Duo (35+50)',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 58, is_bundle: true,
+    bundle_items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // PRODUCTION / SCENARIO KITS
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Sony FX3 Full Production Kit',
+    category: 'bundle', daily_price_min: 100, daily_price_max: 120, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Documentary Filmmaker Kit',
+    category: 'bundle', daily_price_min: 75, daily_price_max: 100, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Wedding Dual Camera Kit',
+    category: 'bundle', daily_price_min: 85, daily_price_max: 120, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony FX3', 'Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Wedding Full Kit',
+    category: 'bundle', daily_price_min: 110, daily_price_max: 150, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony FX3', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8', 'Rode Wireless Mic Pro set', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Corporate Interview Kit',
+    category: 'bundle', daily_price_min: 65, daily_price_max: 90, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'LED light panels RGB', 'LED light panels RGB', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Music Video Kit',
+    category: 'bundle', daily_price_min: 90, daily_price_max: 120, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 50mm', 'DJI RS3 Pro gimbal', 'Smoke Ninja', 'Nanlite Pavotube 30x II'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Run & Gun Kit',
+    category: 'bundle', daily_price_min: 60, daily_price_max: 78, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'DJI Mic 2 wireless'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Talking Head / Vlog Kit',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 62, is_bundle: true,
+    bundle_items: ['Sony A7 III', 'Sony GM 24-70mm f2.8', 'LED light panels RGB', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Real Estate Kit',
+    category: 'bundle', daily_price_min: 75, daily_price_max: 100, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8', 'DJI RS3 Pro gimbal', 'DJI Mini 4 Pro'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Event Coverage Kit',
+    category: 'bundle', daily_price_min: 95, daily_price_max: 130, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony FX3', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Podcast / Talking Heads Kit',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 70, is_bundle: true,
+    bundle_items: ['LED light panels RGB', 'LED light panels RGB', 'Rode Wireless Mic Pro set', 'Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Short Film Kit',
+    category: 'bundle', daily_price_min: 110, daily_price_max: 145, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8', 'DJI RS3 Pro gimbal', 'Atomos Ninja V', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Anamorphic Film Kit (FX3 + Great Joy Set + RS3)',
+    category: 'bundle', daily_price_min: 95, daily_price_max: 130, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Blazar Anamorphic Film Kit (FX3 + Blazar Set + RS3)',
+    category: 'bundle', daily_price_min: 120, daily_price_max: 155, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm', 'DJI RS3 Pro gimbal'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'BMPCC 6K Pro Cinema Kit',
+    category: 'bundle', daily_price_min: 79, daily_price_max: 120, is_bundle: true,
+    bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'DJI RS3 Pro gimbal', 'Atomos Ninja V'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'BMPCC 6K Pro Interview Kit',
+    category: 'bundle', daily_price_min: 57, daily_price_max: 75, is_bundle: true,
+    bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'Nanlite Pavotube 30x II', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'FX3 Vlog Kit',
+    category: 'bundle', daily_price_min: 48, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI Mic 2 wireless'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Steadicam Kit (FX3 + Shoulder Rig + Follow Focus)',
+    category: 'bundle', daily_price_min: 55, daily_price_max: 68, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Tilta shoulder rig', 'Tilta Nucleus Nano 2 follow focus'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Multi-Cam Interview Kit (3x FX3 + 3x Lenses)',
+    category: 'bundle', daily_price_min: 130, daily_price_max: 175, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony FX3', 'Sony FX3', 'Sony GM 24-70mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // AUDIO BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Dual Wireless Mic Kit (2x Rode)',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 44, is_bundle: true,
+    bundle_items: ['Rode Wireless Mic Pro set', 'Rode Wireless Mic Pro set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 channels total.',
+  },
+  {
+    item_name: 'Full Audio Kit (Rode Wireless + Boom + VideoMic Pro)',
+    category: 'bundle', daily_price_min: 35, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser', 'Rode Video Mic Pro Plus'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Interview Audio Kit (Rode Wireless + Boom)',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 45, is_bundle: true,
+    bundle_items: ['Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'On-Camera Audio Kit (VideoMic Go + DJI Mic 2)',
+    category: 'bundle', daily_price_min: 16, daily_price_max: 22, is_bundle: true,
+    bundle_items: ['Rode Video Mic Go', 'DJI Mic 2 wireless'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Wireless Mic Duo (Rode + DJI)',
+    category: 'bundle', daily_price_min: 26, daily_price_max: 38, is_bundle: true,
+    bundle_items: ['Rode Wireless Mic Pro set', 'DJI Mic 2 wireless'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 channels combined.',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // LIGHTING BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Interview Lighting Kit (2x LED + Softbox)',
+    category: 'bundle', daily_price_min: 25, daily_price_max: 40, is_bundle: true,
+    bundle_items: ['LED light panels RGB', 'LED light panels RGB', 'Softbox 85cm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Full Lighting Kit (Forza + 2x Pavotube + C-stand)',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 70, is_bundle: true,
+    bundle_items: ['Nanlite Forza 300', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'C-stand'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Nanlite Studio Kit (Forza 300 + 500B)',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 52, is_bundle: true,
+    bundle_items: ['Nanlite Forza 300', 'Nanlite 500B'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Nanlite Key + Fill Kit (Forza 300 + Pavotube)',
+    category: 'bundle', daily_price_min: 26, daily_price_max: 42, is_bundle: true,
+    bundle_items: ['Nanlite Forza 300', 'Nanlite Pavotube 30x II'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Tube Light Full Set (4x Pavotube + 2x Ambitful)',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 75, is_bundle: true,
+    bundle_items: ['Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'Ambitful RGB light tubes 2x set', 'Ambitful RGB light tubes 2x set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 Pavotubes + 4 Ambitful tubes.',
+  },
+  {
+    item_name: 'Studio Lighting + Stands (2x LED + 2x Softbox)',
+    category: 'bundle', daily_price_min: 30, daily_price_max: 50, is_bundle: true,
+    bundle_items: ['LED light panels RGB', 'LED light panels RGB', 'Softbox 85cm', 'Softbox 85cm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Forza 300 + Softbox Kit',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 34, is_bundle: true,
+    bundle_items: ['Nanlite Forza 300', 'Softbox 85cm'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Nanlite 500B + C-stand Kit',
+    category: 'bundle', daily_price_min: 20, daily_price_max: 34, is_bundle: true,
+    bundle_items: ['Nanlite 500B', 'C-stand'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: '3-Point LED Lighting Kit (3x LED panels)',
+    category: 'bundle', daily_price_min: 35, daily_price_max: 60, is_bundle: true,
+    bundle_items: ['LED light panels RGB', 'LED light panels RGB', 'LED light panels RGB'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Ambient RGB Lighting Kit (2x Ambitful + 2x Pavotube)',
+    category: 'bundle', daily_price_min: 28, daily_price_max: 55, is_bundle: true,
+    bundle_items: ['Ambitful RGB light tubes 2x set', 'Ambitful RGB light tubes 2x set', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 Ambitful + 2 Pavotubes.',
+  },
+  {
+    item_name: 'Nanlite 500B + Softbox + C-stand Kit',
+    category: 'bundle', daily_price_min: 24, daily_price_max: 40, is_bundle: true,
+    bundle_items: ['Nanlite 500B', 'Softbox 85cm', 'C-stand'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // EFFECTS BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Full Smoke Kit (Fogger + Ninja Pro + Ninja)',
+    category: 'bundle', daily_price_min: 45, daily_price_max: 70, is_bundle: true,
+    bundle_items: ['Smoke machine fogger', 'Smoke Ninja Pro hazer', 'Smoke Ninja'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Atmosphere Kit (Smoke Ninja + 2x Ambitful Tubes)',
+    category: 'bundle', daily_price_min: 18, daily_price_max: 35, is_bundle: true,
+    bundle_items: ['Smoke Ninja', 'Ambitful RGB light tubes 2x set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Smoke Duo (Ninja + Ninja Pro)',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 50, is_bundle: true,
+    bundle_items: ['Smoke Ninja', 'Smoke Ninja Pro hazer'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Music Video Atmosphere Kit (Smoke Ninja Pro + 2x Pavotube)',
+    category: 'bundle', daily_price_min: 38, daily_price_max: 60, is_bundle: true,
+    bundle_items: ['Smoke Ninja Pro hazer', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // DRONE BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Dual Drone Kit (Mavic 3 Pro + Mini 4 Pro)',
+    category: 'bundle', daily_price_min: 42, daily_price_max: 52, is_bundle: true,
+    bundle_items: ['DJI Mavic 3 Pro', 'DJI Mini 4 Pro'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Aerial + Ground Kit (Mavic 3 + FX3 + 16-35mm)',
+    category: 'bundle', daily_price_min: 70, daily_price_max: 88, is_bundle: true,
+    bundle_items: ['DJI Mavic 3 Pro', 'Sony FX3', 'Sony GM 16-35mm f2.8'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // MONITOR / TRANSMITTER BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Wireless Monitor Kit (Hollyland 7" + Mars 4K)',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 38, is_bundle: true,
+    bundle_items: ['Hollyland 7-inch monitor', 'Hollyland Mars 4K transmitter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Wireless Director Kit (Hollyland 7" + Pyro S)',
+    category: 'bundle', daily_price_min: 24, daily_price_max: 35, is_bundle: true,
+    bundle_items: ['Hollyland 7-inch monitor', 'Hollyland Pyro S transmitter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Dual Monitor Kit (Atomos Ninja V + Hollyland 7")',
+    category: 'bundle', daily_price_min: 24, daily_price_max: 35, is_bundle: true,
+    bundle_items: ['Atomos Ninja V', 'Hollyland 7-inch monitor'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Full Wireless Monitoring Kit (Atomos + Hollyland 7" + Mars 4K)',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 50, is_bundle: true,
+    bundle_items: ['Atomos Ninja V', 'Hollyland 7-inch monitor', 'Hollyland Mars 4K transmitter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // POWER BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'V-Mount Power Pack (2x 95mAh + 2x 150mAh)',
+    category: 'bundle', daily_price_min: 48, daily_price_max: 70, is_bundle: true,
+    bundle_items: ['V-mount 95mAh', 'V-mount 95mAh', 'V-mount 150mAh', 'V-mount 150mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Full Power Kit (Anker Station + 2x V-mount 150mAh)',
+    category: 'bundle', daily_price_min: 50, daily_price_max: 75, is_bundle: true,
+    bundle_items: ['Anker Power Station F2000', 'V-mount 150mAh', 'V-mount 150mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Camera Power Pack (2x NPF 970 + 2x V-mount 95mAh)',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 38, is_bundle: true,
+    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'V-mount 95mAh', 'V-mount 95mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Anker Power Station + Cable Kit',
+    category: 'bundle', daily_price_min: 25, daily_price_max: 35, is_bundle: true,
+    bundle_items: ['Anker Power Station F2000'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. Includes all necessary cables.',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // DJ & PARTY BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'JBL Speakers + Pioneer DJ RX3 Set',
+    category: 'bundle', daily_price_min: 79, daily_price_max: 100, is_bundle: true,
+    bundle_items: ['JBL Club 120 speaker', 'JBL Club 120 speaker', 'DJ RX3 Pioneer controller'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. DELIVERY MANDATORY for this bundle.',
+  },
+  {
+    item_name: 'Full Party Kit (DJ + Speakers + Smoke)',
+    category: 'bundle', daily_price_min: 95, daily_price_max: 120, is_bundle: true,
+    bundle_items: ['JBL Club 120 speaker', 'JBL Club 120 speaker', 'DJ RX3 Pioneer controller', 'Smoke machine fogger'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. DELIVERY MANDATORY.',
+  },
+  {
+    item_name: 'DJ + Lights Party Kit',
+    category: 'bundle', daily_price_min: 105, daily_price_max: 140, is_bundle: true,
+    bundle_items: ['JBL Club 120 speaker', 'JBL Club 120 speaker', 'DJ RX3 Pioneer controller', 'LED light panels RGB', 'LED light panels RGB'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. DELIVERY MANDATORY.',
+  },
+  {
+    item_name: 'Ultimate Party Kit (DJ + Speakers + Smoke + Lights)',
+    category: 'bundle', daily_price_min: 130, daily_price_max: 170, is_bundle: true,
+    bundle_items: ['JBL Club 120 speaker', 'JBL Club 120 speaker', 'DJ RX3 Pioneer controller', 'Smoke machine fogger', 'LED light panels RGB', 'LED light panels RGB', 'Ambitful RGB light tubes 2x set'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x. DELIVERY MANDATORY.',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // ACCESSORY / FILTER / SUPPORT BUNDLES
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Filter Kit (ND + Cinebloom)',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 13, is_bundle: true,
+    bundle_items: ['ND filter', 'Cinebloom filter mist'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Memory Card Pack (3x 256GB)',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
+    bundle_items: ['256GB card', '256GB card', '256GB card'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Memory Card + CFexpress Kit',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 16, is_bundle: true,
+    bundle_items: ['256GB card', 'CF Express Type A card'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Support Kit (Tripod + Monopod)',
+    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    bundle_items: ['Small rig tripod', 'Monopod arm support'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Dual Tripod Kit (SmallRig + Sirui)',
+    category: 'bundle', daily_price_min: 10, daily_price_max: 16, is_bundle: true,
+    bundle_items: ['Small rig tripod', 'Sirui tripod'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Camera Cage Kit (Shoulder Rig + Follow Focus)',
+    category: 'bundle', daily_price_min: 18, daily_price_max: 30, is_bundle: true,
+    bundle_items: ['Tilta shoulder rig', 'Tilta Nucleus Nano 2 follow focus'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Car Mount Kit (3x Suction Cups + GoPro)',
+    category: 'bundle', daily_price_min: 18, daily_price_max: 38, is_bundle: true,
+    bundle_items: ['Suction cups', 'Suction cups', 'Suction cups', 'GoPro 12 Hero'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'GoPro Multi-Angle Kit (3x GoPro + 3x Suction Cups)',
+    category: 'bundle', daily_price_min: 40, daily_price_max: 65, is_bundle: true,
+    bundle_items: ['GoPro 12 Hero', 'GoPro 12 Hero', 'GoPro 12 Hero', 'Suction cups', 'Suction cups', 'Suction cups'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'Action Cam Duo (GoPro + DJI Osmo)',
+    category: 'bundle', daily_price_min: 32, daily_price_max: 44, is_bundle: true,
+    bundle_items: ['GoPro 12 Hero', 'DJI Osmo Action Pro 5'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+  {
+    item_name: 'PL Mount Adapter Set (E + EF + RF + L)',
+    category: 'bundle', daily_price_min: 22, daily_price_max: 35, is_bundle: true,
+    bundle_items: ['PL to Sony E mount', 'PL to EF mount', 'PL to RF mount', 'PL to L mount'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // MARKETING-ONLY LISTINGS (listed for visibility/SEO, NOT physically available)
+  // ══════════════════════════════════════════════════════════════
+  {
+    item_name: 'Sony FX6',
+    category: 'camera', daily_price_min: 60, daily_price_max: 80, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sony A7S III',
+    category: 'camera', daily_price_min: 35, daily_price_max: 50, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Canon R5',
+    category: 'camera', daily_price_min: 40, daily_price_max: 55, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Canon C70',
+    category: 'camera', daily_price_min: 55, daily_price_max: 75, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'RED Komodo',
+    category: 'camera', daily_price_min: 80, daily_price_max: 120, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'DJI Ronin 4D',
+    category: 'camera', daily_price_min: 90, daily_price_max: 130, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sony A1',
+    category: 'camera', daily_price_min: 55, daily_price_max: 75, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Panasonic S5 II',
+    category: 'camera', daily_price_min: 25, daily_price_max: 40, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    marketing_only: true,
+  },
+  {
+    item_name: 'DJI Air 3',
+    category: 'drone', daily_price_min: 22, daily_price_max: 30, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'DJI Inspire 3',
+    category: 'drone', daily_price_min: 120, daily_price_max: 180, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Aputure 600d Pro',
+    category: 'lighting', daily_price_min: 35, daily_price_max: 50, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Aputure 300x',
+    category: 'lighting', daily_price_min: 25, daily_price_max: 40, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'DJI RS4 Pro',
+    category: 'stabilizer', daily_price_min: 22, daily_price_max: 30, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sennheiser EW 500 Wireless',
+    category: 'audio', daily_price_min: 25, daily_price_max: 35, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sigma 24-70mm f2.8 Art',
+    category: 'lens', daily_price_min: 12, daily_price_max: 18, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sony FE 135mm f1.8 GM',
+    category: 'lens', daily_price_min: 16, daily_price_max: 25, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sony FE 50mm f1.2 GM',
+    category: 'lens', daily_price_min: 14, daily_price_max: 22, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Sony FE 14mm f1.8 GM',
+    category: 'lens', daily_price_min: 14, daily_price_max: 22, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Tilta Float Gimbal Support',
+    category: 'stabilizer', daily_price_min: 30, daily_price_max: 45, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'SmallHD Cine 7 Monitor',
+    category: 'monitor', daily_price_min: 25, daily_price_max: 40, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
   },
 ];
 

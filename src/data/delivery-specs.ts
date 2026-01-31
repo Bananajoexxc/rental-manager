@@ -1,7 +1,7 @@
 /**
  * DELIVERY ITEM SPECIFICATIONS
  *
- * Packed dimensions, weights, and courier suitability for every item.
+ * Packed dimensions, weights, and courier suitability for every item AND bundle.
  * Used to determine courier type (motorcycle / small car / large van)
  * and communicate courier requirements to renters.
  *
@@ -13,6 +13,10 @@
  * - size_score 5 (XL): Bulky/very heavy -> Van territory
  *
  * is_heavy_large = true when item needs special handling (size_score >= 4 OR weight >= 5kg)
+ *
+ * Bundle weights = sum of individual item weights.
+ * Bundle dimensions = estimated packed size (items packed together or in multiple bags).
+ * Bundle size_score = max(individual scores) + adjustment for quantity/total weight.
  */
 
 export interface DeliverySpec {
@@ -28,6 +32,10 @@ export interface DeliverySpec {
 }
 
 export const DELIVERY_SPECS: DeliverySpec[] = [
+  // ══════════════════════════════════════════════════════════════
+  // INDIVIDUAL ITEMS
+  // ══════════════════════════════════════════════════════════════
+
   // ── XS (score 1) - Motorcycle OK ──
   { item_name: 'Rode Wireless Mic Pro set', weight_kg: 0.5, packed_length_cm: 22, packed_width_cm: 18, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Small case, fits in backpack', category: 'audio' },
   { item_name: 'DJI Wireless Mics', weight_kg: 0.4, packed_length_cm: 20, packed_width_cm: 15, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small case, fits in backpack', category: 'audio' },
@@ -108,6 +116,200 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   { item_name: 'Smoke machine fogger', weight_kg: 4.0, packed_length_cm: 40, packed_width_cm: 30, packed_height_cm: 25, size_score: 5, is_heavy_large: true, courier_note: 'Heavy fogger with fluid tank, needs car/van', category: 'effects' },
   { item_name: 'Smoke Ninja Pro hazer', weight_kg: 3.0, packed_length_cm: 35, packed_width_cm: 25, packed_height_cm: 20, size_score: 5, is_heavy_large: true, courier_note: 'Professional hazer, needs car/van', category: 'effects' },
   { item_name: 'Smoke Ninja', weight_kg: 1.5, packed_length_cm: 25, packed_width_cm: 15, packed_height_cm: 15, size_score: 5, is_heavy_large: true, courier_note: 'Compact hazer, car sufficient', category: 'effects' },
+
+  // ══════════════════════════════════════════════════════════════
+  // BUNDLE / COMBO DELIVERY SPECS
+  // Weight = sum of items. Dimensions = estimated packed together.
+  // Score = max item score, raised if total weight/count is high.
+  // ══════════════════════════════════════════════════════════════
+
+  // ── Camera multi-quantity bundles ──
+  { item_name: '2x Sony FX3 Set', weight_kg: 1.4, packed_length_cm: 30, packed_width_cm: 25, packed_height_cm: 18, size_score: 2, is_heavy_large: false, courier_note: '2 cameras in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: '3x Sony FX3 Set', weight_kg: 2.1, packed_length_cm: 35, packed_width_cm: 28, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: '3 cameras in carry bag, needs car', category: 'bundle' },
+  { item_name: '2x DJI Osmo Action Pro 5 Set', weight_kg: 0.4, packed_length_cm: 20, packed_width_cm: 15, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: '2 action cams, fits in backpack', category: 'bundle' },
+  { item_name: '3x DJI Osmo Action Pro 5 Set', weight_kg: 0.6, packed_length_cm: 22, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '3 action cams, fits in backpack', category: 'bundle' },
+  { item_name: '2x GoPro 12 Hero Set', weight_kg: 0.4, packed_length_cm: 20, packed_width_cm: 15, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: '2 GoPros in small case', category: 'bundle' },
+  { item_name: '3x GoPro Hero 12 Set', weight_kg: 0.6, packed_length_cm: 22, packed_width_cm: 18, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: '3 GoPros in small case', category: 'bundle' },
+
+  // ── Lens multi-quantity bundles ──
+  { item_name: '2x Sony GM 24-70mm f2.8 Set', weight_kg: 1.8, packed_length_cm: 28, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '2 lenses in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: '3x Sony GM 24-70mm f2.8 Set', weight_kg: 2.7, packed_length_cm: 32, packed_width_cm: 22, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '3 lenses in carry bag, needs car', category: 'bundle' },
+  { item_name: '4x Sony GM 24-70mm f2.8 Set', weight_kg: 3.6, packed_length_cm: 35, packed_width_cm: 25, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '4 lenses in carry bag, needs car', category: 'bundle' },
+  { item_name: '2x Sony GM 70-200mm f2.8 Set', weight_kg: 3.0, packed_length_cm: 35, packed_width_cm: 20, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '2 large telephotos, needs car', category: 'bundle' },
+  { item_name: '2x Sony 28-70mm Set', weight_kg: 0.6, packed_length_cm: 22, packed_width_cm: 14, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: '2 small lenses in bag, motorcycle OK', category: 'bundle' },
+
+  // ── Lighting multi-quantity bundles ──
+  { item_name: '2x Nanlite Pavotube 30x II Set', weight_kg: 3.0, packed_length_cm: 90, packed_width_cm: 15, packed_height_cm: 15, size_score: 4, is_heavy_large: true, courier_note: '2 long tube lights (90cm), needs car for length', category: 'bundle' },
+  { item_name: '3x Nanlite Pavotube 30x II Set', weight_kg: 4.5, packed_length_cm: 90, packed_width_cm: 20, packed_height_cm: 18, size_score: 4, is_heavy_large: true, courier_note: '3 tube lights (90cm), needs car', category: 'bundle' },
+  { item_name: '4x Nanlite Pavotube 30x II Set', weight_kg: 6.0, packed_length_cm: 90, packed_width_cm: 25, packed_height_cm: 20, size_score: 4, is_heavy_large: true, courier_note: '4 tube lights (90cm, 6kg total), car minimum', category: 'bundle' },
+  { item_name: '2x LED Light Panels RGB Set', weight_kg: 3.0, packed_length_cm: 40, packed_width_cm: 35, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '2 LED panels stacked in bag, needs car', category: 'bundle' },
+  { item_name: '3x LED Light Panels RGB Set', weight_kg: 4.5, packed_length_cm: 40, packed_width_cm: 35, packed_height_cm: 24, size_score: 3, is_heavy_large: false, courier_note: '3 LED panels, needs car', category: 'bundle' },
+  { item_name: '2x Softbox 85cm Set', weight_kg: 2.0, packed_length_cm: 60, packed_width_cm: 18, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '2 folded softboxes in tube bag, needs car', category: 'bundle' },
+  { item_name: '2x Ambitful RGB Light Tubes Set', weight_kg: 3.0, packed_length_cm: 58, packed_width_cm: 18, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '4 tubes total in carry tubes, needs car', category: 'bundle' },
+
+  // ── Support multi-quantity bundles ──
+  { item_name: '2x Small Rig Tripod Set', weight_kg: 3.0, packed_length_cm: 58, packed_width_cm: 16, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '2 tripods in bags, needs car', category: 'bundle' },
+  { item_name: '3x Small Rig Tripod Set', weight_kg: 4.5, packed_length_cm: 58, packed_width_cm: 22, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '3 tripods in bags, needs car', category: 'bundle' },
+
+  // ── Power multi-quantity bundles ──
+  { item_name: '2x V-mount 95mAh Set', weight_kg: 1.4, packed_length_cm: 22, packed_width_cm: 14, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: '2 batteries in case, motorcycle OK', category: 'bundle' },
+  { item_name: '2x V-mount 150mAh Set', weight_kg: 2.0, packed_length_cm: 24, packed_width_cm: 16, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: '2 batteries in case, motorcycle OK', category: 'bundle' },
+  { item_name: '3x V-mount 150mAh Set', weight_kg: 3.0, packed_length_cm: 28, packed_width_cm: 18, packed_height_cm: 14, size_score: 3, is_heavy_large: false, courier_note: '3 batteries in case, needs car', category: 'bundle' },
+  { item_name: '4x V-mount 150mAh Set', weight_kg: 4.0, packed_length_cm: 30, packed_width_cm: 20, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '4 batteries in case, needs car', category: 'bundle' },
+  { item_name: '2x Sony NPF 970 Batteries Set', weight_kg: 0.8, packed_length_cm: 20, packed_width_cm: 14, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Battery cases, fits in backpack', category: 'bundle' },
+  { item_name: '3x Sony NPF 970 Batteries Set', weight_kg: 1.2, packed_length_cm: 22, packed_width_cm: 16, packed_height_cm: 10, size_score: 1, is_heavy_large: false, courier_note: 'Battery cases, fits in backpack', category: 'bundle' },
+  { item_name: '4x Sony NPF 970 Batteries Set', weight_kg: 1.6, packed_length_cm: 24, packed_width_cm: 18, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Battery cases, fits in courier bag', category: 'bundle' },
+  { item_name: '2x DJI Gimbal Battery Set', weight_kg: 0.4, packed_length_cm: 18, packed_width_cm: 10, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Small batteries, fits in backpack', category: 'bundle' },
+  { item_name: '3x DJI Gimbal Battery Set', weight_kg: 0.6, packed_length_cm: 20, packed_width_cm: 12, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Small batteries, fits in backpack', category: 'bundle' },
+
+  // ── Accessory multi-quantity bundles ──
+  { item_name: '2x ND Filter Set', weight_kg: 0.2, packed_length_cm: 15, packed_width_cm: 14, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Filter pouches, tiny', category: 'bundle' },
+  { item_name: '3x ND Filter Set', weight_kg: 0.3, packed_length_cm: 16, packed_width_cm: 14, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Filter pouches, tiny', category: 'bundle' },
+  { item_name: '2x 256GB Memory Card Set', weight_kg: 0.02, packed_length_cm: 10, packed_width_cm: 8, packed_height_cm: 3, size_score: 1, is_heavy_large: false, courier_note: 'Card case, pocket-sized', category: 'bundle' },
+  { item_name: '3x 256GB Memory Card Set', weight_kg: 0.03, packed_length_cm: 10, packed_width_cm: 8, packed_height_cm: 4, size_score: 1, is_heavy_large: false, courier_note: 'Card case, pocket-sized', category: 'bundle' },
+  { item_name: '2x Suction Cup Mount Set', weight_kg: 1.0, packed_length_cm: 25, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: 'Suction mounts in bag, motorcycle OK', category: 'bundle' },
+  { item_name: '3x Suction Cup Mount Set', weight_kg: 1.5, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Suction mounts in bag, motorcycle OK', category: 'bundle' },
+  { item_name: '4x Suction Cup Mount Set', weight_kg: 2.0, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '4 suction mounts, needs car', category: 'bundle' },
+  { item_name: '6x Suction Cup Mount Set', weight_kg: 3.0, packed_length_cm: 35, packed_width_cm: 25, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: '6 suction mounts, needs car', category: 'bundle' },
+  { item_name: '2x Rode Wireless Mic Pro Set', weight_kg: 1.0, packed_length_cm: 26, packed_width_cm: 22, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: '2 mic sets in bag, motorcycle OK', category: 'bundle' },
+  { item_name: '2x PL to Sony E Mount Adapter Set', weight_kg: 0.4, packed_length_cm: 16, packed_width_cm: 14, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: '2 adapters in pouch, tiny', category: 'bundle' },
+  { item_name: '2x DJI RS3 Pro Gimbal Set', weight_kg: 3.0, packed_length_cm: 45, packed_width_cm: 25, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: '2 gimbals in cases, needs car', category: 'bundle' },
+  { item_name: '2x JBL Club 120 Speaker Set', weight_kg: 24.0, packed_length_cm: 55, packed_width_cm: 40, packed_height_cm: 40, size_score: 5, is_heavy_large: true, courier_note: '2 speakers (24kg total), van required', category: 'bundle' },
+
+  // ── Camera + Lens combo bundles ──
+  { item_name: 'Sony FX3 + 24-70mm GM Kit', weight_kg: 1.6, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + 16-35mm GM Kit', weight_kg: 1.4, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + 70-200mm GM Kit', weight_kg: 2.2, packed_length_cm: 35, packed_width_cm: 22, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: 'Camera + large telephoto, needs car', category: 'bundle' },
+  { item_name: 'Sony FX3 + 90mm GM Macro Kit', weight_kg: 1.3, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + GM Triple Lens Kit', weight_kg: 3.8, packed_length_cm: 40, packed_width_cm: 30, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera + 3 lenses in carry bag, needs car', category: 'bundle' },
+  { item_name: 'Sony FX3 + 28-70mm Starter Kit', weight_kg: 1.0, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + 11mm Fisheye Kit', weight_kg: 0.9, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + small lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Great Joy 35mm Anamorphic', weight_kg: 1.7, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + anamorphic lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Great Joy 50mm Anamorphic', weight_kg: 1.7, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + anamorphic lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Great Joy 85mm Anamorphic', weight_kg: 1.7, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + anamorphic lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Blazar Remus 33mm Anamorphic', weight_kg: 1.6, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + anamorphic lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Blazar Remus 45mm Anamorphic', weight_kg: 1.6, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + anamorphic lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Blazar Remus 65mm Anamorphic', weight_kg: 1.6, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + anamorphic lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony A7 III + 24-70mm GM Kit', weight_kg: 1.6, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony A7 III + 16-35mm GM Kit', weight_kg: 1.4, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony A7 III + 70-200mm GM Kit', weight_kg: 2.2, packed_length_cm: 35, packed_width_cm: 22, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: 'Camera + large telephoto, needs car', category: 'bundle' },
+  { item_name: 'Sony A7 III + GM Triple Lens Kit', weight_kg: 3.8, packed_length_cm: 40, packed_width_cm: 30, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera + 3 lenses in carry bag, needs car', category: 'bundle' },
+  { item_name: 'Sony A7 II + 28-70mm Kit', weight_kg: 0.9, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony A7 II + 24-70mm GM Kit', weight_kg: 1.5, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens, motorcycle OK', category: 'bundle' },
+  { item_name: 'BMPCC 6K Pro + Canon 24-105mm Kit', weight_kg: 1.7, packed_length_cm: 32, packed_width_cm: 22, packed_height_cm: 18, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'BMPCC 6K Pro + Canon 16-35mm f2.8 Kit', weight_kg: 1.7, packed_length_cm: 32, packed_width_cm: 22, packed_height_cm: 18, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'BMPCC 6K FF + Canon 24-105mm Kit', weight_kg: 1.7, packed_length_cm: 32, packed_width_cm: 22, packed_height_cm: 18, size_score: 2, is_heavy_large: false, courier_note: 'Camera + lens in padded bag, motorcycle OK', category: 'bundle' },
+
+  // ── Camera + Gimbal combo bundles ──
+  { item_name: 'Sony FX3 + RS3 Pro Gimbal Kit', weight_kg: 2.2, packed_length_cm: 42, packed_width_cm: 25, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera + gimbal, needs car for gimbal case', category: 'bundle' },
+  { item_name: 'Sony FX3 + 24-70mm GM + RS3 Gimbal Kit', weight_kg: 3.1, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: 'Camera + lens + gimbal, needs car', category: 'bundle' },
+  { item_name: 'Sony A7 III + RS3 Pro Gimbal Kit', weight_kg: 2.2, packed_length_cm: 42, packed_width_cm: 25, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera + gimbal, needs car', category: 'bundle' },
+  { item_name: 'Sony A7 III + 24-70mm + RS3 Gimbal Kit', weight_kg: 3.1, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: 'Camera + lens + gimbal, needs car', category: 'bundle' },
+  { item_name: 'BMPCC 6K Pro + RS3 Pro Gimbal Kit', weight_kg: 2.4, packed_length_cm: 42, packed_width_cm: 25, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera + gimbal, needs car', category: 'bundle' },
+  { item_name: 'Sony FX3 + 24-70mm + Tilta Shoulder Rig Kit', weight_kg: 3.1, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera + lens + shoulder rig, needs car', category: 'bundle' },
+  { item_name: 'Sony FX3 + Motorized Slider Kit', weight_kg: 3.7, packed_length_cm: 68, packed_width_cm: 22, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: 'Camera + slider (65cm long), needs car', category: 'bundle' },
+
+  // ── Camera + Audio combo bundles ──
+  { item_name: 'Sony FX3 + Rode Wireless Mic Kit', weight_kg: 1.2, packed_length_cm: 28, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + wireless mic, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + DJI Mic 2 Kit', weight_kg: 1.1, packed_length_cm: 28, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + wireless mic, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony A7 III + Rode Wireless Mic Kit', weight_kg: 1.2, packed_length_cm: 28, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + wireless mic, motorcycle OK', category: 'bundle' },
+
+  // ── Camera + Monitor combo bundles ──
+  { item_name: 'Sony FX3 + Atomos Ninja V Kit', weight_kg: 1.1, packed_length_cm: 28, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + monitor, motorcycle OK', category: 'bundle' },
+  { item_name: 'Sony FX3 + Hollyland 7-inch Monitor Kit', weight_kg: 1.2, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera + monitor, motorcycle OK', category: 'bundle' },
+  { item_name: 'BMPCC 6K Pro + Atomos Ninja V Kit', weight_kg: 1.3, packed_length_cm: 30, packed_width_cm: 22, packed_height_cm: 18, size_score: 2, is_heavy_large: false, courier_note: 'Camera + monitor, motorcycle OK', category: 'bundle' },
+
+  // ── Lens set bundles ──
+  { item_name: 'Sony GM Triple Lens Set (16-35 + 24-70 + 70-200)', weight_kg: 3.1, packed_length_cm: 35, packed_width_cm: 25, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '3 GM lenses in padded bag, needs car for telephoto', category: 'bundle' },
+  { item_name: 'Sony GM Duo (24-70 + 70-200)', weight_kg: 2.4, packed_length_cm: 32, packed_width_cm: 20, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '2 GM lenses including telephoto, needs car', category: 'bundle' },
+  { item_name: 'Sony GM Duo (16-35 + 24-70)', weight_kg: 1.6, packed_length_cm: 26, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '2 GM lenses in padded bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Canon EF Dual Lens Set (24-105 + 16-35)', weight_kg: 1.6, packed_length_cm: 26, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '2 Canon lenses in bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Great Joy Anamorphic Set (35+50+85mm)', weight_kg: 3.0, packed_length_cm: 35, packed_width_cm: 22, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '3 anamorphic lenses in padded bag, needs car', category: 'bundle' },
+  { item_name: 'Blazar Remus 4-Lens Anamorphic Set (33+45+65+100)', weight_kg: 3.7, packed_length_cm: 38, packed_width_cm: 25, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '4 anamorphic lenses in padded case, needs car', category: 'bundle' },
+  { item_name: 'Blazar Remus 2-Lens Anamorphic Set (33+65)', weight_kg: 1.8, packed_length_cm: 28, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '2 anamorphic lenses in bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Blazar Remus 3-Lens Anamorphic Set (33+45+65)', weight_kg: 2.7, packed_length_cm: 32, packed_width_cm: 22, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '3 anamorphic lenses in bag, needs car', category: 'bundle' },
+  { item_name: 'Great Joy Anamorphic Duo (35+50)', weight_kg: 2.0, packed_length_cm: 28, packed_width_cm: 18, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '2 anamorphic lenses, motorcycle OK', category: 'bundle' },
+
+  // ── Production / Scenario kit bundles ──
+  { item_name: 'Sony FX3 Full Production Kit', weight_kg: 4.5, packed_length_cm: 50, packed_width_cm: 35, packed_height_cm: 25, size_score: 3, is_heavy_large: false, courier_note: '6 items: camera, lens, gimbal, mic, monitor, filter. Needs car', category: 'bundle' },
+  { item_name: 'Documentary Filmmaker Kit', weight_kg: 2.9, packed_length_cm: 58, packed_width_cm: 25, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera, lens, wireless mic, boom. Needs car for boom length', category: 'bundle' },
+  { item_name: 'Wedding Dual Camera Kit', weight_kg: 3.2, packed_length_cm: 35, packed_width_cm: 28, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: '2 cameras + 2 lenses in carry bag, needs car', category: 'bundle' },
+  { item_name: 'Wedding Full Kit', weight_kg: 5.8, packed_length_cm: 50, packed_width_cm: 35, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: '6 items (5.8kg): 2 cameras, 2 lenses, mic, gimbal. Car minimum', category: 'bundle' },
+  { item_name: 'Corporate Interview Kit', weight_kg: 5.2, packed_length_cm: 45, packed_width_cm: 38, packed_height_cm: 25, size_score: 3, is_heavy_large: true, courier_note: 'Camera, lens, 2 LED panels, mic (5.2kg). Car minimum', category: 'bundle' },
+  { item_name: 'Music Video Kit', weight_kg: 5.2, packed_length_cm: 50, packed_width_cm: 35, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: 'Camera, anamorphic, gimbal, hazer, tube light (5.2kg). Car minimum', category: 'bundle' },
+  { item_name: 'Run & Gun Kit', weight_kg: 3.5, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: 'Camera, lens, gimbal, wireless mic. Needs car for gimbal', category: 'bundle' },
+  { item_name: 'Talking Head / Vlog Kit', weight_kg: 3.4, packed_length_cm: 38, packed_width_cm: 32, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Camera, lens, LED panel, mic. Needs car', category: 'bundle' },
+  { item_name: 'Real Estate Kit', weight_kg: 3.0, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: 'Camera, wide lens, gimbal, drone. Needs car', category: 'bundle' },
+  { item_name: 'Event Coverage Kit', weight_kg: 4.3, packed_length_cm: 45, packed_width_cm: 30, packed_height_cm: 25, size_score: 3, is_heavy_large: false, courier_note: '2 cameras, 2 lenses, mic. Needs car', category: 'bundle' },
+  { item_name: 'Podcast / Talking Heads Kit', weight_kg: 4.3, packed_length_cm: 45, packed_width_cm: 35, packed_height_cm: 22, size_score: 3, is_heavy_large: false, courier_note: '2 LED panels, 2 wireless mics, boom. Needs car', category: 'bundle' },
+  { item_name: 'Short Film Kit', weight_kg: 6.2, packed_length_cm: 55, packed_width_cm: 38, packed_height_cm: 30, size_score: 4, is_heavy_large: true, courier_note: '7 items (6.2kg): camera, 3 lenses, gimbal, monitor, mic. Car minimum', category: 'bundle' },
+  { item_name: 'Anamorphic Film Kit (FX3 + Great Joy Set + RS3)', weight_kg: 5.2, packed_length_cm: 50, packed_width_cm: 30, packed_height_cm: 25, size_score: 3, is_heavy_large: true, courier_note: 'Camera, 3 anamorphic lenses, gimbal (5.2kg). Car minimum', category: 'bundle' },
+  { item_name: 'Blazar Anamorphic Film Kit (FX3 + Blazar Set + RS3)', weight_kg: 5.9, packed_length_cm: 50, packed_width_cm: 32, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: 'Camera, 4 anamorphic lenses, gimbal (5.9kg). Car minimum', category: 'bundle' },
+  { item_name: 'BMPCC 6K Pro Cinema Kit', weight_kg: 4.6, packed_length_cm: 50, packed_width_cm: 30, packed_height_cm: 25, size_score: 3, is_heavy_large: false, courier_note: 'Camera, lens, gimbal, monitor in carry bag. Needs car', category: 'bundle' },
+  { item_name: 'BMPCC 6K Pro Interview Kit', weight_kg: 4.4, packed_length_cm: 90, packed_width_cm: 25, packed_height_cm: 22, size_score: 4, is_heavy_large: true, courier_note: 'Camera, lens, tube light (85cm), mic. Car for tube length', category: 'bundle' },
+  { item_name: 'FX3 Vlog Kit', weight_kg: 2.0, packed_length_cm: 30, packed_width_cm: 24, packed_height_cm: 18, size_score: 2, is_heavy_large: false, courier_note: 'Camera, lens, wireless mic. Motorcycle OK', category: 'bundle' },
+  { item_name: 'Steadicam Kit (FX3 + Shoulder Rig + Follow Focus)', weight_kg: 2.5, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: 'Camera, shoulder rig, follow focus. Needs car', category: 'bundle' },
+  { item_name: 'Multi-Cam Interview Kit (3x FX3 + 3x Lenses)', weight_kg: 5.6, packed_length_cm: 50, packed_width_cm: 35, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: '3 cameras, 3 lenses (5.6kg). Car minimum', category: 'bundle' },
+
+  // ── Audio bundles ──
+  { item_name: 'Dual Wireless Mic Kit (2x Rode)', weight_kg: 1.0, packed_length_cm: 26, packed_width_cm: 22, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: '2 mic sets in bag, motorcycle OK', category: 'bundle' },
+  { item_name: 'Full Audio Kit (Rode Wireless + Boom + VideoMic Pro)', weight_kg: 1.5, packed_length_cm: 58, packed_width_cm: 18, packed_height_cm: 12, size_score: 3, is_heavy_large: false, courier_note: 'Wireless mic, boom (55cm), video mic. Needs car for boom length', category: 'bundle' },
+  { item_name: 'Interview Audio Kit (Rode Wireless + Boom)', weight_kg: 1.3, packed_length_cm: 58, packed_width_cm: 15, packed_height_cm: 12, size_score: 3, is_heavy_large: false, courier_note: 'Wireless mic + boom (55cm). Needs car for boom length', category: 'bundle' },
+  { item_name: 'On-Camera Audio Kit (VideoMic Go + DJI Mic 2)', weight_kg: 0.5, packed_length_cm: 24, packed_width_cm: 16, packed_height_cm: 8, size_score: 2, is_heavy_large: false, courier_note: 'Small mics in case, motorcycle OK', category: 'bundle' },
+  { item_name: 'Wireless Mic Duo (Rode + DJI)', weight_kg: 0.9, packed_length_cm: 26, packed_width_cm: 20, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: '2 wireless mic sets, motorcycle OK', category: 'bundle' },
+
+  // ── Lighting bundles ──
+  { item_name: 'Interview Lighting Kit (2x LED + Softbox)', weight_kg: 4.0, packed_length_cm: 58, packed_width_cm: 35, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: '2 LED panels + softbox, needs car', category: 'bundle' },
+  { item_name: 'Full Lighting Kit (Forza + 2x Pavotube + C-stand)', weight_kg: 11.5, packed_length_cm: 100, packed_width_cm: 40, packed_height_cm: 30, size_score: 5, is_heavy_large: true, courier_note: 'Heavy kit (11.5kg) with C-stand (100cm). Van recommended', category: 'bundle' },
+  { item_name: 'Nanlite Studio Kit (Forza 300 + 500B)', weight_kg: 8.5, packed_length_cm: 55, packed_width_cm: 40, packed_height_cm: 35, size_score: 4, is_heavy_large: true, courier_note: '2 heavy lights (8.5kg). Car minimum, van if more items', category: 'bundle' },
+  { item_name: 'Nanlite Key + Fill Kit (Forza 300 + Pavotube)', weight_kg: 5.0, packed_length_cm: 88, packed_width_cm: 38, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: 'Forza + tube light (5kg, 85cm length). Car minimum', category: 'bundle' },
+  { item_name: 'Tube Light Full Set (4x Pavotube + 2x Ambitful)', weight_kg: 9.0, packed_length_cm: 90, packed_width_cm: 30, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: '6 tube lights (9kg, 85cm length). Car minimum, van preferred', category: 'bundle' },
+  { item_name: 'Studio Lighting + Stands (2x LED + 2x Softbox)', weight_kg: 5.0, packed_length_cm: 60, packed_width_cm: 38, packed_height_cm: 22, size_score: 3, is_heavy_large: true, courier_note: '2 LED panels + 2 softboxes (5kg). Car minimum', category: 'bundle' },
+  { item_name: 'Forza 300 + Softbox Kit', weight_kg: 4.5, packed_length_cm: 58, packed_width_cm: 38, packed_height_cm: 28, size_score: 4, is_heavy_large: true, courier_note: 'Heavy Forza light + softbox. Car minimum', category: 'bundle' },
+  { item_name: 'Nanlite 500B + C-stand Kit', weight_kg: 10.0, packed_length_cm: 100, packed_width_cm: 38, packed_height_cm: 32, size_score: 5, is_heavy_large: true, courier_note: 'Heavy light + C-stand (10kg, 100cm). Van recommended', category: 'bundle' },
+  { item_name: '3-Point LED Lighting Kit (3x LED panels)', weight_kg: 4.5, packed_length_cm: 40, packed_width_cm: 35, packed_height_cm: 24, size_score: 3, is_heavy_large: false, courier_note: '3 LED panels stacked, needs car', category: 'bundle' },
+  { item_name: 'Ambient RGB Lighting Kit (2x Ambitful + 2x Pavotube)', weight_kg: 6.0, packed_length_cm: 88, packed_width_cm: 22, packed_height_cm: 20, size_score: 4, is_heavy_large: true, courier_note: '4 tube lights (6kg, 85cm length). Car minimum', category: 'bundle' },
+  { item_name: 'Nanlite 500B + Softbox + C-stand Kit', weight_kg: 11.0, packed_length_cm: 100, packed_width_cm: 40, packed_height_cm: 35, size_score: 5, is_heavy_large: true, courier_note: 'Very heavy kit (11kg) with C-stand. Van recommended', category: 'bundle' },
+
+  // ── Effects bundles ──
+  { item_name: 'Full Smoke Kit (Fogger + Ninja Pro + Ninja)', weight_kg: 8.5, packed_length_cm: 45, packed_width_cm: 35, packed_height_cm: 30, size_score: 5, is_heavy_large: true, courier_note: '3 smoke machines (8.5kg). Van recommended', category: 'bundle' },
+  { item_name: 'Atmosphere Kit (Smoke Ninja + 2x Ambitful Tubes)', weight_kg: 3.0, packed_length_cm: 58, packed_width_cm: 18, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: 'Hazer + light tubes, needs car', category: 'bundle' },
+  { item_name: 'Smoke Duo (Ninja + Ninja Pro)', weight_kg: 4.5, packed_length_cm: 38, packed_width_cm: 28, packed_height_cm: 22, size_score: 5, is_heavy_large: true, courier_note: '2 hazers, needs car/van', category: 'bundle' },
+  { item_name: 'Music Video Atmosphere Kit (Smoke Ninja Pro + 2x Pavotube)', weight_kg: 6.0, packed_length_cm: 88, packed_width_cm: 28, packed_height_cm: 22, size_score: 4, is_heavy_large: true, courier_note: 'Hazer + 2 tube lights (6kg, 85cm). Car minimum', category: 'bundle' },
+
+  // ── Drone bundles ──
+  { item_name: 'Dual Drone Kit (Mavic 3 Pro + Mini 4 Pro)', weight_kg: 1.3, packed_length_cm: 38, packed_width_cm: 28, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '2 drone cases, needs car', category: 'bundle' },
+  { item_name: 'Aerial + Ground Kit (Mavic 3 + FX3 + 16-35mm)', weight_kg: 2.4, packed_length_cm: 40, packed_width_cm: 30, packed_height_cm: 20, size_score: 3, is_heavy_large: false, courier_note: 'Drone + camera + wide lens, needs car', category: 'bundle' },
+
+  // ── Monitor / Transmitter bundles ──
+  { item_name: 'Wireless Monitor Kit (Hollyland 7" + Mars 4K)', weight_kg: 0.8, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: 'Monitor + transmitter, motorcycle OK', category: 'bundle' },
+  { item_name: 'Wireless Director Kit (Hollyland 7" + Pyro S)', weight_kg: 0.8, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: 'Monitor + transmitter, motorcycle OK', category: 'bundle' },
+  { item_name: 'Dual Monitor Kit (Atomos Ninja V + Hollyland 7")', weight_kg: 0.9, packed_length_cm: 28, packed_width_cm: 22, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: '2 monitors, motorcycle OK', category: 'bundle' },
+  { item_name: 'Full Wireless Monitoring Kit (Atomos + Hollyland 7" + Mars 4K)', weight_kg: 1.2, packed_length_cm: 30, packed_width_cm: 24, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '2 monitors + transmitter, motorcycle OK', category: 'bundle' },
+
+  // ── Power bundles ──
+  { item_name: 'V-Mount Power Pack (2x 95mAh + 2x 150mAh)', weight_kg: 3.4, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: '4 batteries in case, motorcycle OK', category: 'bundle' },
+  { item_name: 'Full Power Kit (Anker Station + 2x V-mount 150mAh)', weight_kg: 22.0, packed_length_cm: 55, packed_width_cm: 35, packed_height_cm: 35, size_score: 5, is_heavy_large: true, courier_note: 'Very heavy (22kg) power station + batteries. Van recommended', category: 'bundle' },
+  { item_name: 'Camera Power Pack (2x NPF 970 + 2x V-mount 95mAh)', weight_kg: 2.2, packed_length_cm: 24, packed_width_cm: 18, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Battery pack in case, motorcycle OK', category: 'bundle' },
+  { item_name: 'Anker Power Station + Cable Kit', weight_kg: 20.0, packed_length_cm: 55, packed_width_cm: 32, packed_height_cm: 32, size_score: 4, is_heavy_large: true, courier_note: 'Very heavy power station (20kg). Car minimum', category: 'bundle' },
+
+  // ── DJ & Party bundles ──
+  { item_name: 'JBL Speakers + Pioneer DJ RX3 Set', weight_kg: 29.5, packed_length_cm: 75, packed_width_cm: 50, packed_height_cm: 45, size_score: 5, is_heavy_large: true, courier_note: '2 speakers + DJ controller (29.5kg). VAN REQUIRED', category: 'bundle' },
+  { item_name: 'Full Party Kit (DJ + Speakers + Smoke)', weight_kg: 33.5, packed_length_cm: 80, packed_width_cm: 55, packed_height_cm: 50, size_score: 5, is_heavy_large: true, courier_note: 'Speakers, DJ, fogger (33.5kg). VAN REQUIRED', category: 'bundle' },
+  { item_name: 'DJ + Lights Party Kit', weight_kg: 32.5, packed_length_cm: 80, packed_width_cm: 55, packed_height_cm: 50, size_score: 5, is_heavy_large: true, courier_note: 'Speakers, DJ, LED panels (32.5kg). VAN REQUIRED', category: 'bundle' },
+  { item_name: 'Ultimate Party Kit (DJ + Speakers + Smoke + Lights)', weight_kg: 35.5, packed_length_cm: 85, packed_width_cm: 60, packed_height_cm: 55, size_score: 5, is_heavy_large: true, courier_note: 'Full party setup (35.5kg). LARGE VAN REQUIRED', category: 'bundle' },
+
+  // ── Accessory / Filter / Support bundles ──
+  { item_name: 'Filter Kit (ND + Cinebloom)', weight_kg: 0.2, packed_length_cm: 15, packed_width_cm: 14, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: '2 filter pouches, tiny', category: 'bundle' },
+  { item_name: 'Memory Card Pack (3x 256GB)', weight_kg: 0.03, packed_length_cm: 12, packed_width_cm: 8, packed_height_cm: 4, size_score: 1, is_heavy_large: false, courier_note: 'Card case, pocket-sized', category: 'bundle' },
+  { item_name: 'Memory Card + CFexpress Kit', weight_kg: 0.02, packed_length_cm: 12, packed_width_cm: 8, packed_height_cm: 4, size_score: 1, is_heavy_large: false, courier_note: 'Card case, pocket-sized', category: 'bundle' },
+  { item_name: 'Support Kit (Tripod + Monopod)', weight_kg: 2.5, packed_length_cm: 58, packed_width_cm: 16, packed_height_cm: 14, size_score: 3, is_heavy_large: false, courier_note: 'Tripod + monopod in bags, needs car', category: 'bundle' },
+  { item_name: 'Dual Tripod Kit (SmallRig + Sirui)', weight_kg: 3.5, packed_length_cm: 62, packed_width_cm: 18, packed_height_cm: 16, size_score: 3, is_heavy_large: false, courier_note: '2 tripods in bags, needs car', category: 'bundle' },
+  { item_name: 'Camera Cage Kit (Shoulder Rig + Follow Focus)', weight_kg: 1.8, packed_length_cm: 42, packed_width_cm: 28, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: 'Shoulder rig + follow focus, needs car', category: 'bundle' },
+  { item_name: 'Car Mount Kit (3x Suction Cups + GoPro)', weight_kg: 1.7, packed_length_cm: 28, packed_width_cm: 22, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: '3 suction mounts + GoPro, motorcycle OK', category: 'bundle' },
+  { item_name: 'GoPro Multi-Angle Kit (3x GoPro + 3x Suction Cups)', weight_kg: 2.1, packed_length_cm: 32, packed_width_cm: 25, packed_height_cm: 18, size_score: 3, is_heavy_large: false, courier_note: '3 GoPros + 3 suction mounts, needs car', category: 'bundle' },
+  { item_name: 'Action Cam Duo (GoPro + DJI Osmo)', weight_kg: 0.4, packed_length_cm: 20, packed_width_cm: 15, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: '2 action cams, motorcycle OK', category: 'bundle' },
+  { item_name: 'PL Mount Adapter Set (E + EF + RF + L)', weight_kg: 0.8, packed_length_cm: 18, packed_width_cm: 16, packed_height_cm: 10, size_score: 1, is_heavy_large: false, courier_note: '4 adapters in pouch, fits in backpack', category: 'bundle' },
 ];
 
 /** Get delivery spec for a specific item */
