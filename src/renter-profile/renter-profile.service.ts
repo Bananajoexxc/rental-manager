@@ -282,4 +282,220 @@ export class RenterProfileService {
       where: { id: profileId },
     });
   }
+
+  /**
+   * Find a renter profile linked to a rental.
+   */
+  async getProfileForRental(rentalId: string) {
+    const link = await this.prisma.rental_renter_link.findFirst({
+      where: { rental_id: rentalId },
+      include: { renter_profile: true },
+    });
+    return link?.renter_profile ?? null;
+  }
+
+  /**
+   * Build a comprehensive renter context string for AI prompts.
+   * Pulls together: profile data, booking history across all linked rentals,
+   * items previously requested, progress on the current request, and any
+   * previous agreements that should carry over after cancellations/re-requests.
+   */
+  async buildRenterContext(profileId: string, currentRentalId: string): Promise<string> {
+    const profile = await this.prisma.renter_profile.findUnique({
+      where: { id: profileId },
+      include: {
+        renter_links: {
+          include: {
+            rental: {
+              include: {
+                bookings: { where: { status: { not: 'cancelled' } } },
+                extracted_items: true,
+              },
+            },
+          },
+          orderBy: { created_at: 'desc' },
+        },
+      },
+    });
+
+    if (!profile) return '';
+
+    const parts: string[] = [];
+    parts.push(`--- RENTER PROFILE: ${profile.name} ---`);
+    parts.push(`Total rentals: ${profile.total_rentals}`);
+    parts.push(`First seen: ${profile.first_seen_at.toISOString().split('T')[0]}`);
+
+    if (profile.verification_status !== 'unknown') {
+      parts.push(`Verification: ${profile.verification_status}`);
+    }
+
+    if (profile.items_interested.length > 0) {
+      parts.push(`Items previously interested in: ${profile.items_interested.join(', ')}`);
+    }
+
+    if (profile.rental_progress) {
+      parts.push(`Current request progress: ${profile.rental_progress}`);
+    }
+
+    if (profile.previous_agreements) {
+      parts.push(`Previous agreements (carry forward): ${profile.previous_agreements}`);
+    }
+
+    if (profile.last_inquiry_summary) {
+      parts.push(`Last inquiry: ${profile.last_inquiry_summary}`);
+    }
+
+    // Build history from all linked rentals (excluding current)
+    const previousRentals = profile.renter_links.filter(
+      (link) => link.rental_id !== currentRentalId,
+    );
+
+    if (previousRentals.length > 0) {
+      parts.push('');
+      parts.push('RENTAL HISTORY:');
+
+      for (const link of previousRentals.slice(0, 5)) {
+        const r = link.rental;
+        const dateRange = r.start_date && r.end_date
+          ? `${r.start_date.toISOString().split('T')[0]} to ${r.end_date.toISOString().split('T')[0]}`
+          : 'dates unknown';
+        const items = r.extracted_items.map((ei) => ei.item_name).join(', ');
+        const price = r.rental_price ? ` £${r.rental_price}` : '';
+
+        parts.push(`- ${r.title} (${r.status}) ${dateRange}${price}${items ? ` [items: ${items}]` : ''}`);
+      }
+    }
+
+    // Current rental bookings & items
+    const currentLink = profile.renter_links.find(
+      (link) => link.rental_id === currentRentalId,
+    );
+    if (currentLink) {
+      const r = currentLink.rental;
+      const bookings = r.bookings || [];
+      const items = r.extracted_items || [];
+
+      if (bookings.length > 0 || items.length > 0) {
+        parts.push('');
+        parts.push('CURRENT REQUEST:');
+        if (items.length > 0) {
+          parts.push(`Items: ${items.map((i) => i.item_name).join(', ')}`);
+        }
+        for (const b of bookings) {
+          const dates = `${b.start_date.toISOString().split('T')[0]} to ${b.end_date.toISOString().split('T')[0]}`;
+          const times = [
+            b.pickup_time ? `pickup ${b.pickup_time}` : '',
+            b.return_time ? `return ${b.return_time}` : '',
+          ].filter(Boolean).join(', ');
+          parts.push(`- Booking: ${b.item_name} x${b.quantity} (${dates})${times ? ` [${times}]` : ''} status=${b.status}`);
+        }
+      }
+    }
+
+    parts.push('---');
+    return parts.join('\n');
+  }
+
+  /**
+   * Update the progress snapshot on the renter profile.
+   * Called after every AI interaction so the bot always knows where things stand.
+   */
+  async updateProgress(
+    profileId: string,
+    updates: {
+      rental_progress?: string;
+      last_inquiry_summary?: string;
+      items_interested?: string[];
+    },
+  ): Promise<void> {
+    const data: any = { last_seen_at: new Date() };
+
+    if (updates.rental_progress !== undefined) {
+      data.rental_progress = updates.rental_progress;
+    }
+    if (updates.last_inquiry_summary !== undefined) {
+      data.last_inquiry_summary = updates.last_inquiry_summary;
+    }
+    if (updates.items_interested !== undefined && updates.items_interested.length > 0) {
+      // Merge with existing items, deduplicate
+      const profile = await this.prisma.renter_profile.findUnique({
+        where: { id: profileId },
+        select: { items_interested: true },
+      });
+      const existing = profile?.items_interested || [];
+      const merged = [...new Set([...existing, ...updates.items_interested])];
+      data.items_interested = merged;
+    }
+
+    await this.prisma.renter_profile.update({
+      where: { id: profileId },
+      data,
+    });
+  }
+
+  /**
+   * Snapshot the current rental's agreements into previous_agreements.
+   * Called when a rental is cancelled or completed, so that if the same renter
+   * sends a new request, the bot can skip re-asking everything and jump
+   * straight to reconfirming and accepting.
+   */
+  async snapshotAgreements(profileId: string, rentalId: string): Promise<void> {
+    // Build the snapshot from the rental's bookings, chat, and extracted items
+    const rental = await this.prisma.rental.findUnique({
+      where: { id: rentalId },
+      include: {
+        bookings: { where: { status: { not: 'cancelled' } } },
+        extracted_items: true,
+      },
+    });
+
+    if (!rental) return;
+
+    const parts: string[] = [];
+    parts.push(`Previously agreed rental: ${rental.title}`);
+
+    if (rental.start_date && rental.end_date) {
+      parts.push(`Dates: ${rental.start_date.toISOString().split('T')[0]} to ${rental.end_date.toISOString().split('T')[0]}`);
+    }
+    if (rental.rental_price) {
+      parts.push(`Price: £${rental.rental_price}`);
+    }
+
+    const items = rental.extracted_items.map((i) => i.item_name);
+    if (items.length > 0) {
+      parts.push(`Items: ${items.join(', ')}`);
+    }
+
+    for (const b of rental.bookings) {
+      const times = [
+        b.pickup_time ? `pickup ${b.pickup_time}` : '',
+        b.return_time ? `return ${b.return_time}` : '',
+      ].filter(Boolean).join(', ');
+      if (times) {
+        parts.push(`Times: ${times}`);
+        break; // Just need the first booking's times
+      }
+    }
+
+    // Read last few chat messages for any final agreements
+    const lastMessages = await this.prisma.conversation.findMany({
+      where: { chat_id: `rental:${rentalId}` },
+      orderBy: { created_at: 'desc' },
+      take: 5,
+      select: { role: true, content: true },
+    });
+
+    if (lastMessages.length > 0) {
+      parts.push(`Last conversation state: ${lastMessages.reverse().map((m) => `${m.role}: ${m.content.substring(0, 80)}`).join(' | ')}`);
+    }
+
+    const snapshot = parts.join('. ');
+
+    await this.prisma.renter_profile.update({
+      where: { id: profileId },
+      data: { previous_agreements: snapshot },
+    });
+
+    this.logger.log(`Snapshotted agreements for profile ${profileId}: ${snapshot.substring(0, 100)}...`);
+  }
 }

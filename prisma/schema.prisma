@@ -318,6 +318,10 @@ model renter_profile {
   verification_guided       Boolean              @default(false)
   verification_failure_guided Boolean            @default(false)
   total_rentals             Int                  @default(0)
+  items_interested          String[]             // Items this renter has asked about or booked
+  rental_progress           String?              @db.Text // Current request progress summary (e.g. "agreed on FX3+24-70, dates 5-7 Feb, pickup 10am")
+  previous_agreements       String?              @db.Text // What was agreed in prior rentals/cancelled requests — for re-request context
+  last_inquiry_summary      String?              @db.Text // What they last asked about
   first_seen_at             DateTime             @default(now())
   last_seen_at              DateTime             @default(now())
   renter_links              rental_renter_link[]

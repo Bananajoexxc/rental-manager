@@ -6,6 +6,7 @@ import { TelegramModule } from '../telegram/telegram.module';
 import { AiModule } from '../ai/ai.module';
 import { RulesModule } from '../rules/rules.module';
 import { MemoryModule } from '../memory/memory.module';
+import { RenterProfileModule } from '../renter-profile/renter-profile.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { MemoryModule } from '../memory/memory.module';
     AiModule,
     RulesModule,
     MemoryModule,
+    RenterProfileModule,
   ],
   providers: [CompletedScanService],
   exports: [CompletedScanService],

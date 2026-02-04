@@ -6,6 +6,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { AiService } from '../ai/ai.service';
 import { RulesService } from '../rules/rules.service';
 import { MemoryService } from '../memory/memory.service';
+import { RenterProfileService } from '../renter-profile/renter-profile.service';
 
 @Injectable()
 export class CompletedScanService {
@@ -18,6 +19,7 @@ export class CompletedScanService {
     private aiService: AiService,
     private rulesService: RulesService,
     private memoryService: MemoryService,
+    private renterProfileService: RenterProfileService,
   ) {}
 
   /**
@@ -61,6 +63,9 @@ export class CompletedScanService {
 
     for (const rental of rentals) {
       try {
+        // Snapshot agreements for the renter profile when rental reaches terminal state
+        await this.snapshotRenterAgreements(rental);
+
         const shouldProcess = await this.shouldProcessCompletedRental(rental);
         if (shouldProcess) {
           await this.processCompletedRentalMessage(rental, account);
@@ -72,6 +77,36 @@ export class CompletedScanService {
     }
 
     return actioned;
+  }
+
+  /**
+   * Snapshot renter agreements when a rental reaches completed/obsolete state.
+   * This preserves what was agreed so that re-requests skip re-negotiation.
+   */
+  private async snapshotRenterAgreements(rental: any): Promise<void> {
+    try {
+      const dbRental = await this.prisma.rental.findUnique({
+        where: { listing_id: rental.listingId },
+        select: { id: true },
+      });
+      if (!dbRental) return;
+
+      // Check if we already snapshotted (avoid duplicating on every hourly sweep)
+      const link = await this.prisma.rental_renter_link.findFirst({
+        where: { rental_id: dbRental.id },
+        include: { renter_profile: { select: { id: true, previous_agreements: true } } },
+      });
+      if (!link) return;
+
+      // Only snapshot once — if previous_agreements already mentions this rental, skip
+      const existingAgreements = link.renter_profile.previous_agreements || '';
+      if (existingAgreements.includes(dbRental.id)) return;
+
+      await this.renterProfileService.snapshotAgreements(link.renter_profile.id, dbRental.id);
+      this.logger.debug(`Snapshotted agreements for completed rental ${rental.listingId}`);
+    } catch (error) {
+      this.logger.debug(`Agreement snapshot failed for ${rental.listingId}: ${error.message}`);
+    }
   }
 
   /**

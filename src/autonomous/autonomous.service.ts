@@ -240,6 +240,16 @@ export class AutonomousService {
           recentMessages.map(m => `[${m.timestamp}] ${m.sender}: ${m.content}`).join('\n');
       }
 
+      // Build full renter context from profile, bookings, and history
+      let renterProfileContext = '';
+      if (renterProfileId) {
+        try {
+          renterProfileContext = await this.renterProfileService.buildRenterContext(renterProfileId, rental.id);
+        } catch (ctxErr) {
+          this.logger.debug(`Renter context build failed: ${ctxErr.message}`);
+        }
+      }
+
       const rentalContext =
         `New rental detected:\n` +
         `Title: ${rental.title}\n` +
@@ -249,15 +259,26 @@ export class AutonomousService {
         `Description: ${(rental.description || '').substring(0, 500)}\n` +
         `Photos: ${(rental.photos_urls || []).length} photos` +
         (blacklistCheck.blacklisted ? `\n\nWARNING: This renter is BLACKLISTED. Reason: ${blacklistCheck.entry.reason}` : '') +
-        chatContext;
+        chatContext +
+        (renterProfileContext ? `\n\n${renterProfileContext}` : '');
 
       // 2. Ask Claude to analyze and decide
-      const returningContext = isReturningRenter
-        ? `- RETURNING RENTER: This renter has rented from us before. Skip the generic welcome — ` +
-          `they already know who we are and how it works. Instead, acknowledge them warmly ("Welcome back!") ` +
-          `and get straight to confirming the items are available and dates work. ` +
-          `Re-verify all item availability proactively and consider accepting immediately if everything checks out.\n`
-        : '';
+      let returningContext = '';
+      if (isReturningRenter && renterProfileId) {
+        const profile = await this.renterProfileService.getProfile(renterProfileId);
+        const hasPreviousAgreements = profile?.previous_agreements;
+
+        returningContext = hasPreviousAgreements
+          ? `- RE-REQUEST FROM RETURNING RENTER: This renter has rented from us before AND has previous agreements on file. ` +
+            `This is likely a re-request after a cancellation. Do NOT ask questions that were already answered. ` +
+            `Instead: (1) warmly acknowledge them, (2) reconfirm all previously agreed items are still available, ` +
+            `(3) if everything checks out, proactively accept — no need to re-negotiate what was already settled. ` +
+            `Reference the RENTER PROFILE section above for their previous agreements and item history.\n`
+          : `- RETURNING RENTER: This renter has rented from us before. Skip the generic welcome — ` +
+            `they already know who we are and how it works. Instead, acknowledge them warmly ("Welcome back!") ` +
+            `and get straight to confirming the items are available and dates work. ` +
+            `Re-verify all item availability proactively and consider accepting immediately if everything checks out.\n`;
+      }
 
       const analysisPrompt =
         `A new rental request has appeared. Analyze it and decide what action to take.\n\n` +
@@ -815,6 +836,19 @@ export class AutonomousService {
         // CONVERSATION TREE: Get stage-specific guidance
         const stageGuidance = await this.conversationStageService.getStagePrompt(rental.id);
 
+        // RENTER PROFILE CONTEXT: Always provide full renter history and progress
+        let renterProfileContext = '';
+        let currentProfileId: string | undefined;
+        try {
+          const renterProfile = await this.renterProfileService.getProfileForRental(rental.id);
+          if (renterProfile) {
+            currentProfileId = renterProfile.id;
+            renterProfileContext = await this.renterProfileService.buildRenterContext(renterProfile.id, rental.id);
+          }
+        } catch (rpErr) {
+          this.logger.debug(`Renter profile context fetch failed: ${rpErr.message}`);
+        }
+
         const messagePrompt =
           `A renter sent a message on Hygglo. Draft a reply.\n\n` +
           `Renter: ${msg.sender}\n` +
@@ -825,6 +859,7 @@ export class AutonomousService {
           `${deliveryRecalc}` +
           `${upsellContext}` +
           `${stageGuidance}` +
+          (renterProfileContext ? `\n${renterProfileContext}\n` : '') +
           `\nReply following our communication tone rules. Keep it concise, clear, and well-formatted.\n` +
           `Start your response with the exact reply text (no preamble).`;
 
@@ -963,6 +998,18 @@ export class AutonomousService {
           await this.extractPickupReturnTimes(msg, rental);
         } catch (timeErr) {
           this.logger.debug(`Time extraction failed for message from ${msg.sender}: ${timeErr.message}`);
+        }
+
+        // Update renter profile progress so the bot always knows what this renter wants
+        if (currentProfileId) {
+          try {
+            await this.renterProfileService.updateProgress(currentProfileId, {
+              items_interested: mentionedItems.length > 0 ? mentionedItems : undefined,
+              last_inquiry_summary: msg.content.substring(0, 300),
+            });
+          } catch (progressErr) {
+            this.logger.debug(`Renter profile progress update failed: ${progressErr.message}`);
+          }
         }
       } catch (error) {
         this.logger.error(`Error processing message: ${error.message}`);
