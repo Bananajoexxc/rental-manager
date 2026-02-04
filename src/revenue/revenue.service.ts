@@ -140,17 +140,14 @@ export class RevenueService {
       period === 'week' ? this.getWeeklyTotals(4) : this.getWeeklyTotals(8),
     ]);
 
-    const lines: string[] = [`Revenue Summary (${period}):`];
+    const lines: string[] = [`Earnings Summary (${period}):`];
     lines.push(`Bookings: ${summary.bookings}`);
-    lines.push(`Revenue: £${summary.totalRevenue}`);
-    lines.push(`Fees: -£${summary.totalFees}`);
-    lines.push(`Delivery: -£${summary.totalDelivery}`);
-    lines.push(`Net Profit: £${summary.totalProfit}`);
+    lines.push(`Earnings: £${summary.totalRevenue}`);
 
     if (Object.keys(accounts).length > 0) {
       lines.push('\nBy Account:');
       for (const [acc, data] of Object.entries(accounts)) {
-        lines.push(`  ${acc}: £${Math.round(data.revenue * 100) / 100} revenue, ${data.count} bookings`);
+        lines.push(`  ${acc}: £${Math.round(data.revenue * 100) / 100} earnings, ${data.count} bookings`);
       }
     }
 

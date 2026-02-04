@@ -24,15 +24,15 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
   {
     bundle_name: 'Sony FX3 + 24-70mm GM Kit',
     items: ['Sony FX3', 'Sony GM 24-70mm f2.8'],
-    daily_price_min: 41, daily_price_max: 60,
+    daily_price_min: 41, daily_price_max: 55,
     use_cases: ['film', 'video', 'run-and-gun', 'wedding', 'event'],
     trigger_keywords: ['fx3', 'sony', 'camera and lens', 'video camera', 'cinema camera', 'filming'],
     savings_note: 'Save vs renting camera + lens separately (~£54-60 individual vs ~£50 bundle)',
   },
   {
-    bundle_name: 'Sony FX3 + 24-70mm GM + RS Gimbal Kit',
+    bundle_name: 'Sony FX3 + 24-70mm GM + RS3 Gimbal Kit',
     items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal'],
-    daily_price_min: 40, daily_price_max: 70,
+    daily_price_min: 50, daily_price_max: 70,
     use_cases: ['film', 'documentary', 'music video', 'commercial', 'run-and-gun'],
     trigger_keywords: ['stabilized', 'smooth', 'gimbal', 'handheld', 'music video', 'run and gun'],
     savings_note: 'Save vs renting all 3 separately (~£72-85 individual vs ~£55-70 bundle)',
@@ -43,12 +43,28 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
     daily_price_min: 100, daily_price_max: 120,
     use_cases: ['film production', 'documentary', 'commercial', 'short film', 'music video'],
     trigger_keywords: ['production', 'full kit', 'complete setup', 'everything', 'professional', 'shoot', 'short film', 'commercial shoot'],
-    savings_note: 'Save ~25% vs renting each item separately (~£150+ individual vs ~£110 bundle)',
+    savings_note: 'Save ~25% vs renting each item separately (~£150+ individual vs ~£110 bundle). NOTE: Does NOT include CF Express cards or suction cups.',
+  },
+  {
+    bundle_name: 'Sony FX3 Full Production Kit + V-Mount 95mAh',
+    items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter', 'V-mount 95mAh'],
+    daily_price_min: 108, daily_price_max: 130,
+    use_cases: ['film production', 'documentary', 'commercial', 'short film', 'music video'],
+    trigger_keywords: ['production kit v-mount', 'full kit v-mount', 'production kit battery', 'v-mount production'],
+    savings_note: 'Save ~27% vs renting production kit + V-mount separately. Better value than adding V-mount as standalone.',
+  },
+  {
+    bundle_name: 'Sony FX3 Full Production Kit + V-Mount 150mAh',
+    items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter', 'V-mount 150mAh'],
+    daily_price_min: 115, daily_price_max: 140,
+    use_cases: ['film production', 'documentary', 'commercial', 'short film', 'music video', 'long shoot'],
+    trigger_keywords: ['production kit v-mount 150', 'full kit big battery', 'production kit large battery'],
+    savings_note: 'Save ~28% vs renting production kit + V-mount 150mAh separately. Larger battery for longer shoots.',
   },
   {
     bundle_name: '2x Sony FX3 Set',
     items: ['Sony FX3', 'Sony FX3'],
-    daily_price_min: 57, daily_price_max: 90,
+    daily_price_min: 57, daily_price_max: 75,
     use_cases: ['multi-camera', 'interview', 'event', 'wedding', 'concert'],
     trigger_keywords: ['two cameras', '2 cameras', 'multicam', 'multi-cam', 'two angles', 'a cam b cam'],
     savings_note: 'Save vs renting 2 cameras individually (~£68-80 individual vs ~£57-90 bundle)',
@@ -58,7 +74,7 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
   {
     bundle_name: 'BMPCC 6K Pro Cinema Kit',
     items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'DJI RS3 Pro gimbal', 'Atomos Ninja V'],
-    daily_price_min: 79, daily_price_max: 140,
+    daily_price_min: 79, daily_price_max: 120,
     use_cases: ['cinema', 'film', 'narrative', 'short film', 'music video', 'commercial'],
     trigger_keywords: ['blackmagic', 'bmpcc', 'cinema camera', 'raw', 'prores', 'cinematic', 'film look'],
     savings_note: 'Save vs individual (~£88-115 individual vs ~£79-140 bundle)',
@@ -74,7 +90,7 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
 
   // ── Lens Bundles ──
   {
-    bundle_name: 'Sony GM Triple Lens Set',
+    bundle_name: 'Sony GM Triple Lens Set (16-35 + 24-70 + 70-200)',
     items: ['Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
     daily_price_min: 35, daily_price_max: 55,
     use_cases: ['event', 'wedding', 'documentary', 'versatile', 'travel'],
@@ -86,15 +102,15 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
   {
     bundle_name: 'Great Joy Anamorphic Set (35+50+85mm)',
     items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm'],
-    daily_price_min: 50, daily_price_max: 99,
+    daily_price_min: 50, daily_price_max: 90,
     use_cases: ['anamorphic', 'cinematic', 'film', 'music video', 'widescreen'],
     trigger_keywords: ['anamorphic', 'great joy', 'widescreen', 'cinemascope', 'film look', 'oval bokeh'],
     savings_note: 'Save vs renting 3 primes separately (~£60-99 individual vs ~£50-99 bundle)',
   },
   {
-    bundle_name: 'Blazar Remus 4-Lens Anamorphic Set',
+    bundle_name: 'Blazar Remus 4-Lens Anamorphic Set (33+45+65+100)',
     items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm'],
-    daily_price_min: 80, daily_price_max: 120,
+    daily_price_min: 80, daily_price_max: 110,
     use_cases: ['anamorphic', 'cinematic', 'film', 'music video', 'narrative'],
     trigger_keywords: ['blazar', 'remus', 'anamorphic set', '4 lens', 'full anamorphic'],
     savings_note: 'Save vs renting 4 primes separately (~£104-120 individual vs ~£80-120 bundle)',
@@ -113,7 +129,7 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
 
   // ── Lighting Bundles ──
   {
-    bundle_name: 'Interview Lighting Kit',
+    bundle_name: 'Interview Lighting Kit (2x LED + Softbox)',
     items: ['LED light panels RGB', 'LED light panels RGB', 'Softbox 85cm'],
     daily_price_min: 25, daily_price_max: 40,
     use_cases: ['interview', 'portrait', 'corporate', 'youtube', 'product'],
@@ -121,28 +137,28 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
     savings_note: 'Save vs renting 3 items individually (~£35-58 individual vs ~£25-40 bundle)',
   },
   {
-    bundle_name: 'Full Lighting Kit',
+    bundle_name: 'Full Lighting Kit (Forza + 2x Pavotube + C-stand)',
     items: ['Nanlite Forza 300', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'C-stand'],
     daily_price_min: 50, daily_price_max: 70,
     use_cases: ['film', 'commercial', 'music video', 'studio', 'professional lighting'],
     trigger_keywords: ['full lighting', 'professional lights', 'nanlite', 'studio setup', 'big lights', 'powerful light'],
-    savings_note: 'Save vs renting separately (~£49-74 individual vs ~£50-70 bundle)',
+    savings_note: 'Save vs renting separately (~£49-74 individual vs ~£50-70 bundle). Pavotubes are only available in sets of 2 or 4, never individually.',
   },
   {
     bundle_name: '2x Nanlite Pavotube 30x II Set',
     items: ['Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
     daily_price_min: 20, daily_price_max: 30,
     use_cases: ['accent lighting', 'rgb', 'music video', 'creative', 'background'],
-    trigger_keywords: ['pavotube', 'tube lights', 'rgb tubes', 'neon', 'accent light'],
-    savings_note: 'Save vs renting 2 individually (~£24-36 individual vs ~£20-30 bundle)',
+    trigger_keywords: ['pavotube', 'tube lights', 'rgb tubes', 'neon', 'accent light', 'pavotube 30', 'nanlite tube', 'tube light'],
+    savings_note: 'MINIMUM order: 2x set. Save vs renting 2 individually (~£24-36 individual vs ~£20-30 bundle). Pavotubes are only available in sets of 2 or 4, never individually.',
   },
   {
     bundle_name: '4x Nanlite Pavotube 30x II Set',
     items: ['Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
     daily_price_min: 35, daily_price_max: 50,
     use_cases: ['rgb', 'music video', 'creative', 'studio', 'event', 'stage'],
-    trigger_keywords: ['4 tubes', 'lots of tubes', 'full tube set', 'stage lighting'],
-    savings_note: 'Save vs renting 4 individually (~£48-72 individual vs ~£35-50 bundle)',
+    trigger_keywords: ['4 tubes', 'lots of tubes', 'full tube set', 'stage lighting', '4 pavotube', '4x pavotube'],
+    savings_note: 'Save vs renting 4 individually (~£48-72 individual vs ~£35-50 bundle). Pavotubes are only available in sets of 2 or 4, never individually.',
   },
 
   // ── Action Camera Bundle ──

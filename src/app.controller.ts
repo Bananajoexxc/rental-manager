@@ -80,8 +80,8 @@ export class AppController {
       },
     },
   })
-  getHealth() {
-    return this.appService.getHealthStatus();
+  async getHealth() {
+    return await this.appService.getHealthStatus();
   }
 
   @Get('scanner/status')
@@ -314,6 +314,15 @@ export class AppController {
       if (blacklist) {
         additionalParts.push(`\n\n${blacklist}`);
       }
+
+      // Always include upcoming bookings for availability awareness
+      try {
+        const upcomingBookings = await this.calendarService.getAllUpcomingBookings(14);
+        if (upcomingBookings) {
+          additionalParts.push(`\n\n${upcomingBookings}`);
+          additionalParts.push('\nIMPORTANT: When answering availability questions, use the UPCOMING BOOKINGS data above to check if items are already booked. Do not guess — only state availability based on this data and the inventory rules.');
+        }
+      } catch { /* availability lookup optional */ }
 
       const response = await this.aiService.processComplex(userMessage, {
         rules,

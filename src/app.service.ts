@@ -9,11 +9,19 @@ export class AppService {
     private prisma: PrismaService,
   ) {}
 
-  getHealthStatus() {
+  async getHealthStatus() {
+    let dbStatus: 'connected' | 'unreachable' = 'connected';
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      dbStatus = 'unreachable';
+    }
+
     return {
-      status: 'healthy',
+      status: dbStatus === 'connected' ? 'healthy' : 'degraded',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
+      db: dbStatus,
       scanner: this.rentalScannerService.getStatus(),
     };
   }

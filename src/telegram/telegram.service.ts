@@ -14,6 +14,9 @@ import { RevenueService } from '../revenue/revenue.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { MarketService } from '../market/market.service';
 import { HyggloService } from '../hygglo/hygglo.service';
+import { SentryService } from '../monitoring/sentry.service';
+import { DspyService } from '../dspy/dspy.service';
+import { ValidationService } from '../validation/validation.service';
 import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
 
 @Injectable()
@@ -40,12 +43,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private deliveryService: DeliveryService,
     @Inject(forwardRef(() => MarketService)) private marketService: MarketService,
     private hyggloService: HyggloService,
+    private sentryService: SentryService,
+    private dspyService: DspyService,
+    private validationService: ValidationService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
       throw new Error('TELEGRAM_BOT_TOKEN is not set in environment variables');
     }
-    this.bot = new TelegramBot(token);
+    this.bot = new TelegramBot(token, { polling: true });
     this.ownerChatId = this.configService.get<string>('OWNER_CHAT_ID') || '6634478551';
   }
 
@@ -56,16 +62,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     this.bot.on('polling_error', (err: any) => {
       this.logger.error('Telegram polling error: ' + err.message);
+      this.sentryService.captureError(new Error(`Telegram polling error: ${err.message}`), {
+        operation: 'telegram_polling',
+      });
     });
 
     this.bot.on('message', (msg: any) => {
       this.logger.log(`Incoming message: "${msg.text}" from chat ${msg.chat.id}`);
+      this.sentryService.addBreadcrumb(
+        `Message: ${(msg.text || '').substring(0, 50)}`,
+        'telegram',
+        { chat_id: String(msg.chat.id) },
+      );
     });
 
     this.registerCommands();
     this.registerConversationHandler();
 
-    this.bot.startPolling();
+    // Polling is already enabled in constructor via { polling: true }
     this.logger.log('Telegram bot is polling for updates');
   }
 
@@ -80,6 +94,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.bot.sendMessage(this.ownerChatId, text, { parse_mode: parseMode });
     } catch (error) {
       this.logger.error(`Failed to send proactive message: ${error.message}`);
+      this.sentryService.captureError(error, { operation: 'telegram_proactive_message' });
     }
   }
 
@@ -110,18 +125,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `└ ${rental.listing_url || rental.listingUrl || 'N/A'}`,
     );
 
-    // Revenue & pricing info
+    // Earnings info (shown at top of listing - fees already deducted)
     const rentalPrice = rental.rental_price || rental.rentalPrice;
     const pricePerDay = rental.price_per_day || rental.pricePerDay;
     if (rentalPrice) {
       const curr = rental.currency === 'SEK' ? 'kr' : '£';
-      let revenueText = `💰 *Revenue*\n├ Total: ${curr}${rentalPrice}`;
-      if (pricePerDay) revenueText += ` (${curr}${pricePerDay}/day)`;
-      const estFee = Math.round(rentalPrice * 0.15 * 100) / 100;
-      const estProfit = Math.round((rentalPrice - estFee) * 100) / 100;
-      revenueText += `\n├ Platform fee: -${curr}${estFee}`;
-      revenueText += `\n└ Net profit: ${curr}${estProfit}`;
-      sections.push(revenueText);
+      let earningsText = `💰 *Earnings*\n└ ${curr}${rentalPrice}`;
+      if (pricePerDay) earningsText += ` (${curr}${pricePerDay}/day)`;
+      sections.push(earningsText);
     }
 
     // Timing info (pickup/return from bookings)
@@ -228,7 +239,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'blacklisted', description: 'List blacklisted renters' },
       // Phase 2: Demand + Revenue
       { command: 'demand', description: 'Demand report' },
-      { command: 'revenue', description: 'Revenue summary: /revenue [week|month|all]' },
+      { command: 'revenue', description: 'Earnings summary: /revenue [week|month|all]' },
       { command: 'earnings', description: 'Monthly earnings (alias for /revenue month)' },
       // Phase 3: Reminders + Simulator
       { command: 'today', description: "Today's schedule" },
@@ -241,6 +252,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'inventory', description: 'Full inventory status + availability' },
       // Alpha: Auth cycle test
       { command: 'testauthcycle', description: 'Test multi-account auth cycle' },
+      // Monitoring & Optimization
+      { command: 'sentry', description: 'Sentry error monitoring status' },
+      { command: 'dspy', description: 'DSPy optimization status' },
+      { command: 'optimize', description: 'Run DSPy optimization: /optimize [rental|pricing|delivery]' },
     ]);
 
     // Existing commands
@@ -290,6 +305,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     // Alpha: Auth cycle test
     this.bot.onText(/\/testauthcycle/, (msg: any) => this.handleTestAuthCycle(msg));
+
+    // Monitoring & Optimization
+    this.bot.onText(/\/sentry/, (msg: any) => this.handleSentry(msg));
+    this.bot.onText(/\/dspy/, (msg: any) => this.handleDspy(msg));
+    this.bot.onText(/\/optimize(?:\s+(rental|pricing|delivery))?$/, (msg: any, match: any) => this.handleOptimize(msg, match));
   }
 
   // --- Conversation handler (non-command messages -> Claude) ---
@@ -372,7 +392,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         additionalParts.push(`\n\n${blacklist}`);
       }
       if (revenueSummary.bookings > 0) {
-        additionalParts.push(`\n\nWEEKLY REVENUE: £${revenueSummary.totalRevenue} revenue, £${revenueSummary.totalProfit} profit from ${revenueSummary.bookings} bookings`);
+        additionalParts.push(`\n\nWEEKLY EARNINGS: £${revenueSummary.totalRevenue} from ${revenueSummary.bookings} bookings`);
       }
 
       // Live availability check: detect item names and date references in the message
@@ -402,6 +422,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.bot.sendMessage(msg.chat.id, response.content);
     } catch (error) {
       this.logger.error(`Conversation error: ${error.message}`);
+      this.sentryService.captureError(error, {
+        operation: 'telegram_conversation',
+        chat_id: chatId,
+        message_preview: userText.substring(0, 100),
+      });
       await this.bot.sendMessage(msg.chat.id, 'Sorry, I encountered an error processing your message. Please try again.');
     }
   }
@@ -428,7 +453,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Fetch memories — include pricing/delivery data when relevant
       let memories: string;
       if (hasPricingIntent || hasDeliveryIntent) {
-        const deliveryKeywords = hasDeliveryIntent ? ['Delivery Pricing Zones', 'Delivery Courier Framework', 'Delivery Rules'] : [];
+        const deliveryKeywords = hasDeliveryIntent ? ['Delivery Pricing Zones', 'Delivery Courier Framework', 'Delivery Rules', 'Delivery Mandatory'] : [];
         const [generalMem, pricingMem, deliveryMem] = await Promise.all([
           this.memoryService.getRelevantMemories(words),
           hasPricingIntent ? this.memoryService.getPricingMemories() : Promise.resolve(''),
@@ -451,6 +476,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? `5) The renter is asking about delivery. Give them a delivery price estimate DIRECTLY from the delivery pricing zones in your memories. Ask for their postcode if not provided, then quote the zone-based price range. Do NOT require a booking request before giving a delivery quote. Do NOT send the full delivery booking form yet — just give the price estimate first. Only ask for full details after they agree. `
         : '';
 
+      // Fetch live availability data
+      let availabilityContext = '';
+      try {
+        const availData = await this.getAvailabilityForMessage(userText);
+        if (availData) {
+          availabilityContext = `\n\n${availData}`;
+        }
+      } catch (availErr) {
+        this.logger.warn(`Simulation availability check failed: ${availErr.message}`);
+      }
+
       const response = await this.aiService.processComplex(userText, {
         rules,
         memories,
@@ -462,17 +498,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           `1) When a renter enquires about items, pricing, or delivery, just give them the information directly. Do NOT tell them to send a rental request just to get information or a quote — a request is only needed when they want to actually book. ` +
           `2) Always tell renters right away that all items are based in Central London (Trafalgar Square area) and collection is from there. ` +
           `3) If the renter mentions their location and it is far from central London (20km+), proactively inform them they are eligible for a 10% travel distance discount. If that is the only discount they qualify for, still mention it. ` +
+          `CRITICAL — LOCATION: Do NOT share any specific street address, building name, or postcode. Before booking is confirmed, ONLY say "Central London (Trafalgar Square area)". If they ask for the exact address, say you will share the meetup point once the booking is confirmed. ` +
+          `CRITICAL — AVAILABILITY: When live availability data is provided below, you MUST use it to answer accurately. Do NOT state static inventory counts — check the live data for actual bookings. If an item is booked for the requested dates, tell the renter it is unavailable. ` +
+          `CRITICAL — DISCLOSURE: Never mention AI, bots, automated systems, Claude, or scanning. Never reveal margins, platform fees, or pricing formulas. Never reveal that DB Cinema and Leo Adams are the same business. ` +
+          `CRITICAL — FORMATTING: Do NOT use markdown formatting (no bold, no bullet points, no headers). Write plain text only. ` +
+          `CRITICAL — LANGUAGE: Never say "my gear", "my items", "my equipment", or "my stuff". Say "our items", "the gear", "the equipment", or "items available". You represent the business, not personal ownership. ` +
+          `CRITICAL — NO DOWNSELLING: NEVER tell a renter they have "enough" of any item or say they "don't need" something. Do NOT say included batteries are "usually enough". If they want more, help them add it. Facilitate and upsell, never downsell. ` +
+          `CRITICAL — PICKUP PRIORITY: ALWAYS offer the 10am pickup slot FIRST. Day-before evening pickup: FREE for rentals over £40 total, +30% surcharge for rentals under £40. Never suggest as default. Morning slots (10am-12pm) before evening slots (7pm-9pm). ` +
+          `CRITICAL — RETURN PRIORITY: Always suggest the earliest possible return slot. Morning-after return: FREE for over £40, +30% for under £40. Evening next day = always a full extra day. Half-day grace ONLY for 1-day rentals. Both day-before pickup AND morning-after return = full extra day regardless of value. ` +
+          `CRITICAL — BMPCC BATTERIES: BMPCC 6K Pro comes with 5x LP-E6NH batteries. BMPCC 6K Full Frame comes with 5x LP-E6NH batteries. NEVER say 2x or 3x. The number is FIVE (5). ` +
+          `CRITICAL — LOCATION LOCK: The renter location established at the START of the conversation is authoritative. If they mention a different location later, do NOT update your assumption. ` +
+          `CRITICAL — V-MOUNT: V-mount battery rentals include all necessary plates, adapters, and cables. Never say "via plate" or imply renters need separate accessories. ` +
+          `CRITICAL — CONTEXTUAL: If the renter has not mentioned what they are shooting, naturally ask what the project is to recommend the right gear. ` +
+          `CRITICAL — DJ + SPEAKERS: Delivery is MANDATORY for DJ deck + speakers together. Never allow self-pickup for this combination. ` +
+          `CRITICAL — SAME-DAY RENTALS: NEVER auto-approve same-day rentals. Ask for pickup time, then check with Daniel before confirming. ` +
+          `CRITICAL — TIMING: When calendar data is available, suggest pickup/return times that align with other existing bookings to minimize Daniel's trips. ` +
+          `CRITICAL — NO PRICE NEGOTIATION: NEVER offer custom discounts or negotiate prices. Only standard discount tiers apply. Escalate price requests to Daniel. ` +
+          `CRITICAL — ADDRESS: NEVER share a specific street address before booking is confirmed. Only say "Central London (Trafalgar Square area)". ` +
           pricingInstruction +
-          deliveryInstruction,
+          deliveryInstruction +
+          availabilityContext,
       });
+
+      // Validate response before sending
+      const validationResult = await this.validationService.validateResponse(
+        response.content,
+        { responseType: 'customer_message' },
+      );
+
+      let replyText = response.content;
+      if (validationResult.blocked) {
+        replyText = `[BLOCKED by validation: ${validationResult.violations.join(', ')}]\n\nOriginal: ${response.content}`;
+      }
 
       // Don't store simulation conversations to memory
       await this.bot.sendMessage(
         msg.chat.id,
-        `[SIM:${account}] ${response.content}`,
+        `[SIM:${account}] ${replyText}`,
       );
     } catch (error) {
       this.logger.error(`Simulation error: ${error.message}`);
+      this.sentryService.captureError(error, {
+        operation: 'telegram_simulation',
+        account: this.simulationMode.account,
+        message_preview: userText.substring(0, 100),
+      });
       await this.bot.sendMessage(msg.chat.id, 'Simulation error. Try /endsim and retry.');
     }
   }
@@ -657,8 +727,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/blacklist "<name>" <reason> - Blacklist renter\n' +
       '/unblacklist <name> - Remove from blacklist\n' +
       '/blacklisted - List all blacklisted\n\n' +
-      '*Revenue & Demand*\n' +
-      '/revenue [week|month|all] - Revenue summary\n' +
+      '*Earnings & Demand*\n' +
+      '/revenue [week|month|all] - Earnings summary\n' +
       '/earnings - Monthly earnings\n' +
       '/demand - Demand report\n\n' +
       '*Inventory*\n' +
@@ -669,6 +739,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '*Simulation*\n' +
       '/simulate <dbcinema|leo> - Enter sim mode\n' +
       '/endsim - Exit sim mode\n\n' +
+      '*Monitoring & Optimization*\n' +
+      '/sentry - Sentry error monitoring status\n' +
+      '/dspy - DSPy prompt optimization status\n' +
+      '/optimize [rental|pricing|delivery] - Run DSPy optimization\n\n' +
       '*Chat*\nJust send any message to chat with AI about your rentals.\n' +
       'I also learn from our conversations automatically.',
       { parse_mode: 'Markdown' },
@@ -1070,7 +1144,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         `- AI decisions today: ${todayDecisions.length}\n` +
         `- Total rentals in DB: ${totalRentals}\n` +
         `- Total memories: ${totalMemories}\n\n` +
-        `Decision details:\n${todayDecisions.map((d) => `- ${d.decision_type}: ${d.output_summary.substring(0, 100)}`).join('\n') || 'None'}\n\n` +
+        `Decision details:\n${todayDecisions.map((d) => `- ${d.decision_type}: ${(d.output_summary || '').substring(0, 100)}`).join('\n') || 'None'}\n\n` +
         `Provide a brief summary, any concerns, and recommendations.`;
 
       const response = await this.aiService.processRoutine(summaryPrompt, { rules });
@@ -1310,7 +1384,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const report = await this.revenueService.getFormattedRevenue(period);
-      await this.bot.sendMessage(msg.chat.id, `💰 *Revenue Report*\n\n${report}`, { parse_mode: 'Markdown' });
+      await this.bot.sendMessage(msg.chat.id, `💰 *Earnings Report*\n\n${report}`, { parse_mode: 'Markdown' });
     } catch (error) {
       await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
     }
@@ -1324,7 +1398,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const report = await this.revenueService.getFormattedRevenue('month');
-      await this.bot.sendMessage(msg.chat.id, `💰 *Monthly Earnings*\n\n${report}`, { parse_mode: 'Markdown' });
+      await this.bot.sendMessage(msg.chat.id, `💰 *Earnings This Month*\n\n${report}`, { parse_mode: 'Markdown' });
     } catch (error) {
       await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
     }
@@ -1360,8 +1434,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         orderBy: { start_date: 'asc' },
       });
 
-      const todayRevenue = todayBookings.reduce((sum, b) => sum + (b.revenue || 0), 0);
-      const todayProfit = todayBookings.reduce((sum, b) => sum + (b.net_profit || 0), 0);
+      const todayEarnings = todayBookings.reduce((sum, b) => sum + (b.revenue || 0), 0);
 
       // Build booking lines
       const bookingLines: string[] = [];
@@ -1371,7 +1444,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           b.return_time ? `return ${b.return_time}` : null,
         ].filter(Boolean).join(', ');
         const timeStr = timeParts ? ` | ${timeParts}` : '';
-        bookingLines.push(`  ${b.item_name} — ${b.renter_name}: £${b.revenue || 0}${timeStr}`);
+        bookingLines.push(`  ${b.item_name} — ${b.renter_name}: £${b.revenue || 0} earnings${timeStr}`);
       }
 
       let response = `📅 *Today's Schedule*\n\n${schedule}`;
@@ -1380,9 +1453,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         response += `\n\n📦 *Starting Today:*\n${bookingLines.join('\n')}`;
       }
 
-      response += `\n\n💰 *Revenue:*`;
-      response += `\n├ Today: £${Math.round(todayRevenue * 100) / 100} revenue, £${Math.round(todayProfit * 100) / 100} profit (${todayBookings.length} bookings)`;
-      response += `\n├ Week: £${weekRevenue.totalRevenue} revenue, £${weekRevenue.totalProfit} profit (${weekRevenue.bookings} bookings)`;
+      response += `\n\n💰 *Earnings:*`;
+      response += `\n├ Today: £${Math.round(todayEarnings * 100) / 100} (${todayBookings.length} bookings)`;
+      response += `\n├ Week: £${weekRevenue.totalRevenue} (${weekRevenue.bookings} bookings)`;
       response += `\n└ 📋 Active bookings: ${confirmedCount}`;
 
       await this.bot.sendMessage(msg.chat.id, response, { parse_mode: 'Markdown' });
@@ -1516,19 +1589,176 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         let chunk = '';
         for (const line of lines) {
           if (chunk.length + line.length + 1 > 4000) {
-            await this.bot.sendMessage(msg.chat.id, chunk);
+            await this.bot.sendMessage(msg.chat.id, chunk, { parse_mode: 'Markdown' });
             chunk = '';
           }
           chunk += line + '\n';
         }
         if (chunk.trim()) {
-          await this.bot.sendMessage(msg.chat.id, chunk);
+          await this.bot.sendMessage(msg.chat.id, chunk, { parse_mode: 'Markdown' });
         }
       } else {
         await this.bot.sendMessage(msg.chat.id, `📦 *Inventory*\n\n${inventoryStatus}`, { parse_mode: 'Markdown' });
       }
     } catch (error) {
       await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+    }
+  }
+
+  // --- Monitoring & Optimization commands ---
+
+  private async handleSentry(msg: any) {
+    if (!this.isOwner(msg.chat.id)) {
+      await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
+      return;
+    }
+
+    try {
+      const sentryDsn = process.env.SENTRY_DSN;
+      const sentryEnabled = !!sentryDsn;
+      const environment = process.env.NODE_ENV || 'production';
+
+      // Get recent error count from AI decisions (proxy for system health)
+      const oneDayAgo = new Date();
+      oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+
+      const [totalDecisions, recentErrors] = await Promise.all([
+        this.prisma.ai_decision.count({
+          where: { created_at: { gte: oneDayAgo } },
+        }),
+        this.prisma.ai_decision.count({
+          where: {
+            created_at: { gte: oneDayAgo },
+            action_taken: { contains: 'BLOCKED', mode: 'insensitive' },
+          },
+        }),
+      ]);
+
+      const errorRate = totalDecisions > 0 ? ((recentErrors / totalDecisions) * 100).toFixed(1) : '0';
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `*Sentry Monitoring*\n\n` +
+        `├ Status: ${sentryEnabled ? 'Active' : 'Not configured (set SENTRY\\_DSN)'}\n` +
+        `├ Environment: ${environment}\n` +
+        `├ Traces sample rate: 10%\n` +
+        `├ Profiles sample rate: 10%\n\n` +
+        `*Last 24h:*\n` +
+        `├ AI decisions: ${totalDecisions}\n` +
+        `├ Blocked responses: ${recentErrors}\n` +
+        `└ Error rate: ${errorRate}%\n\n` +
+        (sentryEnabled
+          ? '_Errors and performance data being sent to Sentry dashboard._'
+          : '_Set SENTRY\\_DSN in .env to enable error tracking._'),
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+    }
+  }
+
+  private async handleDspy(msg: any) {
+    if (!this.isOwner(msg.chat.id)) {
+      await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
+      return;
+    }
+
+    try {
+      const health = await this.dspyService.getHealth();
+
+      if (!this.dspyService.isEnabled()) {
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `*DSPy Prompt Optimizer*\n\n` +
+          `├ Status: Disabled\n` +
+          `└ Set DSPY\\_ENABLED=true in .env to enable\n\n` +
+          `_Start the Python service:_\n` +
+          '`cd python-services/dspy-optimizer && source venv/bin/activate && python app.py`',
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
+
+      const statusEmoji = health.healthy ? '🟢' : '🔴';
+      const lastOpt = health.lastOptimized
+        ? new Date(health.lastOptimized).toLocaleString()
+        : 'Never';
+
+      // Get additional status
+      const status = await this.dspyService.getStatus();
+      const modules = status.optimized_modules || {};
+      const moduleLines = Object.entries(modules).map(([name, data]: [string, any]) =>
+        `  ├ ${name}: quality ${(data.quality_score != null ? (data.quality_score * 100).toFixed(0) : 'N/A')}%, ${data.training_examples || 0} examples`,
+      );
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `*DSPy Prompt Optimizer*\n\n` +
+        `├ ${statusEmoji} Service: ${health.healthy ? 'Running' : 'Offline'}\n` +
+        `├ Optimization: ${health.status}\n` +
+        `├ Last optimized: ${lastOpt}\n` +
+        `├ Training examples: ${health.trainingExamples}\n` +
+        `└ Token savings: ${health.tokenSavingsPct}%\n` +
+        (moduleLines.length > 0 ? `\n*Optimized Modules:*\n${moduleLines.join('\n')}\n` : '') +
+        `\n_Use /optimize [rental|pricing|delivery] to run optimization._`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+    }
+  }
+
+  private async handleOptimize(msg: any, match: any) {
+    if (!this.isOwner(msg.chat.id)) {
+      await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
+      return;
+    }
+
+    if (!this.dspyService.isEnabled()) {
+      await this.bot.sendMessage(
+        msg.chat.id,
+        'DSPy is disabled. Set DSPY_ENABLED=true in .env and start the Python service.',
+      );
+      return;
+    }
+
+    const moduleType = (match[1] || 'rental') as 'rental' | 'pricing' | 'delivery';
+
+    await this.bot.sendMessage(
+      msg.chat.id,
+      `Starting DSPy optimization for *${moduleType}* module...\n_This may take a few moments._`,
+      { parse_mode: 'Markdown' },
+    );
+
+    try {
+      const result = await this.dspyService.runOptimization(moduleType);
+
+      if (!result.success) {
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `Optimization failed: ${result.error}`,
+        );
+        return;
+      }
+
+      const qualityEmoji = result.meetsTarget ? '✅' : '⚠️';
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `*DSPy Optimization Complete*\n\n` +
+        `├ Module: ${result.moduleType}\n` +
+        `├ Training examples: ${result.trainingExamples}\n` +
+        `├ ${qualityEmoji} Quality: ${(result.validationQuality * 100).toFixed(1)}%\n` +
+        `├ Token savings: ~${result.estimatedTokenSavingsPct}%\n` +
+        `└ Meets target: ${result.meetsTarget ? 'Yes' : 'No'}`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      this.sentryService.captureError(error, {
+        operation: 'dspy_optimization',
+        module_type: moduleType,
+      });
+      await this.bot.sendMessage(msg.chat.id, `Optimization error: ${error.message}`);
     }
   }
 

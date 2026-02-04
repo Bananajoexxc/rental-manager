@@ -13,6 +13,7 @@ import { DeliveryModule } from '../delivery/delivery.module';
 import { MarketModule } from '../market/market.module';
 import { RemindersModule } from '../reminders/reminders.module';
 import { HyggloModule } from '../hygglo/hygglo.module';
+import { ValidationModule } from '../validation/validation.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { HyggloModule } from '../hygglo/hygglo.module';
     forwardRef(() => MarketModule),
     forwardRef(() => RemindersModule),
     HyggloModule,
+    ValidationModule,
   ],
   providers: [TelegramService],
   exports: [TelegramService],

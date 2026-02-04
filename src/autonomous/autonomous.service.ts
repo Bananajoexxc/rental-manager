@@ -1380,6 +1380,32 @@ export class AutonomousService {
               }
               if (unavailableItems.length > 0) {
                 availabilityContext += 'UNAVAILABLE: ' + unavailableItems.map(a => a.itemName).join(', ') + '\n';
+
+                // Find substitutions with pricing for unavailable items
+                try {
+                  const substitutions = await this.bundleIntelligenceService.findItemSubstitutions(
+                    unavailableItems.map(a => a.itemName),
+                  );
+                  if (substitutions.length > 0) {
+                    availabilityContext += '\n--- SUBSTITUTION OPTIONS ---\n';
+                    for (const sub of substitutions) {
+                      availabilityContext += `• ${sub.original} → ${sub.substitute}\n`;
+                      availabilityContext += `  Difference: ${sub.difference}\n`;
+                      if (sub.offerPrice) {
+                        availabilityContext += `  PRICING: Offer at £${sub.offerPrice}/day (same as original). `;
+                        availabilityContext += `If renter asks about price, maximum £${sub.maxPrice}/day (15% above original). `;
+                        if (sub.substitutePrice && sub.substitutePrice > sub.offerPrice) {
+                          availabilityContext += `Normal list price is £${sub.substitutePrice}/day but we absorb the difference.\n`;
+                        } else {
+                          availabilityContext += '\n';
+                        }
+                      }
+                    }
+                    availabilityContext += 'RULE: When offering a substitute for an unavailable item, quote it at the SAME price as the original item. Only go up to 15% more if the renter specifically asks or negotiates on price. Never mention the substitute\'s normal price — just present the offer price.\n';
+                  }
+                } catch (subErr) {
+                  this.logger.debug(`Substitution lookup failed: ${subErr.message}`);
+                }
               }
               availabilityContext += 'Use this LIVE data to answer accurately. State specific quantities. Do NOT guess availability — only use these numbers.';
             }

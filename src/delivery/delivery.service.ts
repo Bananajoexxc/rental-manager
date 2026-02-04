@@ -41,12 +41,12 @@ export class DeliveryService implements OnModuleInit {
       greater: { min: 50, max: 68 },
     },
     small_car: {
-      core:    { min: 21, max: 27 },
-      central: { min: 27, max: 37 },
-      inner:   { min: 38, max: 52 },
-      mid:     { min: 48, max: 65 },
-      outer:   { min: 57, max: 75 },
-      greater: { min: 68, max: 93 },
+      core:    { min: 21, max: 28 },
+      central: { min: 28, max: 38 },
+      inner:   { min: 39, max: 53 },
+      mid:     { min: 49, max: 67 },
+      outer:   { min: 59, max: 77 },
+      greater: { min: 70, max: 95 },
     },
     large_van: {
       core:    { min: 45, max: 65 },
@@ -123,9 +123,9 @@ export class DeliveryService implements OnModuleInit {
       const car = this.pricing.small_car[zone];
       const minIncrease = ((car.min - moto.min) / moto.min) * 100;
       const maxIncrease = ((car.max - moto.max) / moto.max) * 100;
-      if (minIncrease < 35 || minIncrease > 45 || maxIncrease < 35 || maxIncrease > 45) {
+      if (minIncrease < 38 || minIncrease > 42 || maxIncrease < 38 || maxIncrease > 42) {
         this.logger.warn(
-          `Pricing consistency warning [${zone}]: moto->car min=${minIncrease.toFixed(1)}%, max=${maxIncrease.toFixed(1)}% (target: 35-45%)`,
+          `Pricing consistency warning [${zone}]: moto->car min=${minIncrease.toFixed(1)}%, max=${maxIncrease.toFixed(1)}% (target: ~40%)`,
         );
       }
     }
@@ -232,8 +232,9 @@ export class DeliveryService implements OnModuleInit {
       };
     }
 
-    // Motorcycle: totalScore <= 3, maxScore <= 2, totalWeight <= 4kg, itemCount <= 2
-    if (totalScore <= 3 && maxScore <= 2 && totalWeight <= 4.0 && itemCount <= 2) {
+    // Motorcycle: every item individually fits bike carrier (score <= 2), no heavy/large, total weight <= 8kg
+    const hasHeavyLarge = itemSpecs.some((i) => i.is_heavy_large);
+    if (maxScore <= 2 && !hasHeavyLarge && totalWeight <= 8.0) {
       return {
         vehicle: 'motorcycle',
         vehicle_display: 'Motorcycle courier',
@@ -246,8 +247,10 @@ export class DeliveryService implements OnModuleInit {
     let explanation = 'A small car courier is needed for these items.';
     if (heavyLargeItems.length > 0) {
       explanation = `Due to the size/weight of ${heavyNames}, a car courier is needed instead of a motorcycle.`;
-    } else if (itemCount > 2) {
-      explanation = `With ${itemCount} items totalling ${totalWeight.toFixed(1)}kg, a car courier is needed.`;
+    } else if (totalWeight > 8.0) {
+      explanation = `With ${totalWeight.toFixed(1)}kg total weight, a car courier is needed.`;
+    } else if (maxScore >= 3) {
+      explanation = `Some items are too large for a bike carrier, so a car courier is needed.`;
     }
 
     return {

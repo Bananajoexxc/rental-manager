@@ -12,6 +12,7 @@ export class MemoryService implements OnModuleInit {
 
   async onModuleInit() {
     await this.seedCriticalMemories();
+    await this.ensureUpdatedMemories();
   }
 
   private async seedCriticalMemories() {
@@ -250,7 +251,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 13 - Sets and Minimum Packages',
-        content: 'When items are rented in sets, remove them from availability as singular items and all other items associated with the order for that timeframe. Cameras always come with 3x batteries and 128GB card unless description mentions 256GB or 1TB card (for Blackmagic cameras). This stock needs to be blocked out for that rental timeframe.',
+        content: 'When items are rented in sets, remove them from availability as singular items and all other items associated with the order for that timeframe. Sony cameras come with 3x NP-FZ100 batteries and 128GB card. Blackmagic cameras (BMPCC 6K Pro, BMPCC 6K Full Frame) each come with 5x LP-E6NH batteries and 128GB card. Always check item compatibility data for exact included items per camera. This stock needs to be blocked out for that rental timeframe. Do NOT use included batteries as a reason to discourage additional battery or power accessory purchases.',
         importance: 10,
       },
       {
@@ -286,7 +287,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 19 - Extensions and Late Returns',
-        content: 'If renter is delayed (traffic etc) ask for ETA. If ETA is in same time slot (morning/evening are separate), say yes, inform Daniel, update calendar. If outside opening hours, inform Daniel before replying. If not responding and 30min past return, this might be a non-return - inform Daniel. If renter cant return in their slot and needs different slot, check if booking extends to that day. If yes and item available, accept new time. If item not available, inform Daniel. If booking doesnt extend to that day, tell them to send extension request (wait 2hrs to see if they book and pay, if not inform Daniel).',
+        content: 'If renter is delayed (traffic etc) ask for ETA. If ETA is in same time slot (morning/evening are separate), say yes, inform Daniel, update calendar. If outside opening hours, inform Daniel before replying. If not responding and 30min past return, this might be a non-return - inform Daniel. If renter cant return in their slot and needs different slot, check if booking extends to that day. If yes and item available, accept new time. If item not available, inform Daniel. If booking doesnt extend to that day, tell them to send extension request (wait 2hrs to see if they book and pay, if not inform Daniel). HALF-DAY RULE (1-DAY RENTALS ONLY): For 1-day rentals, anything more than a half-day past the booked return is an extension. For multi-day rentals, any return past the booked slot is an extension. Always suggest the earliest return slot first.',
         importance: 10,
       },
       {
@@ -298,7 +299,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE - General Exceptions',
-        content: 'Working hours: 10-12pm and 7-9pm every day unless vacation. Items may be picked up evening before or returned morning after at +50% fee. Both = extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
+        content: 'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for rentals over £40. For rentals under £40 total, +30% surcharge applies. Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
         importance: 10,
       },
       {
@@ -414,6 +415,42 @@ export class MemoryService implements OnModuleInit {
     }
 
     this.logger.log(`Seeded ${memories.length} critical memories`);
+  }
+
+  private async ensureUpdatedMemories() {
+    const patches: { subject: string; missingFragment: string; updatedContent: string }[] = [
+      {
+        subject: 'DANIEL RULE 13 - Sets and Minimum Packages',
+        missingFragment: '5x LP-E6NH',
+        updatedContent:
+          'When items are rented in sets, remove them from availability as singular items and all other items associated with the order for that timeframe. Sony cameras come with 3x NP-FZ100 batteries and 128GB card. Blackmagic cameras (BMPCC 6K Pro, BMPCC 6K Full Frame) each come with 5x LP-E6NH batteries and 128GB card. Always check item compatibility data for exact included items per camera. This stock needs to be blocked out for that rental timeframe. Do NOT use included batteries as a reason to discourage additional battery or power accessory purchases.',
+      },
+      {
+        subject: 'DANIEL RULE 19 - Extensions and Late Returns',
+        missingFragment: 'HALF-DAY RULE',
+        updatedContent:
+          'If renter is delayed (traffic etc) ask for ETA. If ETA is in same time slot (morning/evening are separate), say yes, inform Daniel, update calendar. If outside opening hours, inform Daniel before replying. If not responding and 30min past return, this might be a non-return - inform Daniel. If renter cant return in their slot and needs different slot, check if booking extends to that day. If yes and item available, accept new time. If item not available, inform Daniel. If booking doesnt extend to that day, tell them to send extension request (wait 2hrs to see if they book and pay, if not inform Daniel). HALF-DAY RULE (1-DAY RENTALS ONLY): For 1-day rentals, anything more than a half-day past the booked return is an extension. For multi-day rentals, any return past the booked slot is an extension. Always suggest the earliest return slot first.',
+      },
+      {
+        subject: 'DANIEL RULE - General Exceptions',
+        missingFragment: 'FREE for rentals over',
+        updatedContent:
+          'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for rentals over £40. For rentals under £40 total, +30% surcharge applies. Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
+      },
+    ];
+
+    for (const patch of patches) {
+      const existing = await this.prisma.memory.findFirst({
+        where: { subject: patch.subject },
+      });
+      if (existing && !existing.content.includes(patch.missingFragment)) {
+        await this.prisma.memory.update({
+          where: { id: existing.id },
+          data: { content: patch.updatedContent },
+        });
+        this.logger.log(`Patched stale memory: ${patch.subject}`);
+      }
+    }
   }
 
   async storeConversation(chatId: string, role: string, content: string, metadata?: any) {

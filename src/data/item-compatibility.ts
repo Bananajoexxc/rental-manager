@@ -50,7 +50,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
       'Motorized slider', 'PL to Sony E mount',
     ],
     included_with_rental: ['3x NP-FZ100 batteries', '128GB SD card'],
-    notes: 'Uses NP-FZ100 battery (NOT NP-FW50). Sony E-mount full frame. CFexpress Type A primary slot, SD secondary. V-mount for external power via plate. NPF 970 batteries power the Atomos Ninja V monitor, not the FX3 directly.',
+    notes: 'Uses NP-FZ100 battery (NOT NP-FW50). Sony E-mount full frame. CFexpress Type A primary slot, SD secondary. V-mount battery rental includes all necessary plates, adapters, and cables for external power. NPF 970 batteries power the Atomos Ninja V monitor, not the FX3 directly.',
   },
   {
     item_name: 'Sony A7 III',
@@ -133,8 +133,8 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
       'Small rig tripod', 'Sirui tripod', 'ND filter',
       'PL to EF mount', // Can use PL lenses with adapter
     ],
-    included_with_rental: ['2x LP-E6NH batteries', '128GB SD card'],
-    notes: 'Uses Canon LP-E6NH batteries (NOT Sony NP-FZ100). Canon EF mount -- Sony E-mount lenses do NOT fit. V-mount external power strongly recommended for long shoots as LP-E6NH drains fast. NPF 970 batteries work with the Atomos Ninja V monitor.',
+    included_with_rental: ['5x LP-E6NH batteries', '128GB SD card'],
+    notes: 'Uses Canon LP-E6NH batteries (NOT Sony NP-FZ100). Comes with 5x LP-E6NH batteries. Canon EF mount -- Sony E-mount lenses do NOT fit. V-mount external power strongly recommended for long shoots as LP-E6NH drains fast. V-mount battery rental includes all necessary plates, adapters, and cables. NPF 970 batteries work with the Atomos Ninja V monitor.',
   },
   {
     item_name: 'BMPCC 6K Full Frame',
@@ -153,8 +153,8 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
       'Small rig tripod', 'Sirui tripod', 'ND filter',
       'PL to L mount', // PL glass with adapter
     ],
-    included_with_rental: ['2x LP-E6NH batteries', '128GB SD card'],
-    notes: 'Native L-mount. Canon EF lenses work via adapter (included). Uses LP-E6NH like the 6K Pro. V-mount strongly recommended. Sony lenses do NOT fit.',
+    included_with_rental: ['5x LP-E6NH batteries', '128GB SD card'],
+    notes: 'Native L-mount. Canon EF lenses work via adapter (included). Uses LP-E6NH like the 6K Pro. Comes with 5x LP-E6NH batteries. V-mount strongly recommended. V-mount battery rental includes all necessary plates, adapters, and cables. Sony lenses do NOT fit.',
   },
 
   // ──────────────────────────────────────────

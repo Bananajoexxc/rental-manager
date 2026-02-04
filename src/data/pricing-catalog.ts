@@ -138,8 +138,8 @@ export const PRICING_CATALOG: PricingEntry[] = [
   { item_name: 'Monopod arm support', category: 'support', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: '256GB card', category: 'accessory', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'CF Express Type A card', category: 'accessory', daily_price_min: 8, daily_price_max: 12, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
-  { item_name: 'ND filter', category: 'accessory', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
-  { item_name: 'Cinebloom filter mist', category: 'accessory', daily_price_min: 5, daily_price_max: 7, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
+  { item_name: 'ND filter', category: 'accessory', daily_price_min: 8, daily_price_max: 12, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
+  { item_name: 'Cinebloom filter mist', category: 'accessory', daily_price_min: 7, daily_price_max: 10, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'Suction cups', category: 'accessory', daily_price_min: 5, daily_price_max: 10, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
 
   // ──────────────────────────────────────────
@@ -179,7 +179,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: '2x GoPro 12 Hero Set',
+    item_name: '2x GoPro Hero 12 Set',
     category: 'bundle', daily_price_min: 24, daily_price_max: 32, is_bundle: true,
     bundle_items: ['GoPro 12 Hero', 'GoPro 12 Hero'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
@@ -340,13 +340,13 @@ export const PRICING_CATALOG: PricingEntry[] = [
   // -- Accessory multi-quantity --
   {
     item_name: '2x ND Filter Set',
-    category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
+    category: 'bundle', daily_price_min: 14, daily_price_max: 20, is_bundle: true,
     bundle_items: ['ND filter', 'ND filter'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
     item_name: '3x ND Filter Set',
-    category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
+    category: 'bundle', daily_price_min: 18, daily_price_max: 28, is_bundle: true,
     bundle_items: ['ND filter', 'ND filter', 'ND filter'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
@@ -712,6 +712,18 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Sony FX3 Full Production Kit',
     category: 'bundle', daily_price_min: 100, daily_price_max: 120, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks. NOTE: Does NOT include CF Express cards or suction cups.',
+  },
+  {
+    item_name: 'Sony FX3 Full Production Kit + V-Mount 95mAh',
+    category: 'bundle', daily_price_min: 108, daily_price_max: 130, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter', 'V-mount 95mAh'],
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+  },
+  {
+    item_name: 'Sony FX3 Full Production Kit + V-Mount 150mAh',
+    category: 'bundle', daily_price_min: 115, daily_price_max: 140, is_bundle: true,
+    bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter', 'V-mount 150mAh'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
   },
   {
@@ -1293,7 +1305,7 @@ export function formatPricingCatalogForAI(): string {
   parts.push(
     '\nPRICING RULES: One-day price = highest listed price shown above. ' +
     'Multi-day discounts auto-applied: 3 days ~2.5x daily, 7 days ~5x daily, 1 month ~2.5 weeks. ' +
-    'Hygglo adds ~15% service fee at checkout. ' +
+    'Renter pays: listed price + Hygglo ~15% service fee (added at checkout). ' +
     'Always validate item availability against master inventory before confirming.',
   );
   return parts.join('\n');
