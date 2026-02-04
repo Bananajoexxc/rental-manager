@@ -200,6 +200,23 @@ export class AutonomousService {
         return; // Stop processing — do not engage further
       }
 
+      // Scam detection on initial chat messages
+      try {
+        const initialMessages = await this.hyggloService.readMessages(rental.listing_id);
+        for (const chatMsg of initialMessages) {
+          // Only check renter messages (skip Owner messages)
+          if (chatMsg.sender === 'Owner' || chatMsg.sender === 'owner') continue;
+          const scamCheck = this.detectScamPattern(chatMsg.content);
+          if (scamCheck.isScam) {
+            this.logger.warn(`Scam pattern detected in initial chat from ${chatMsg.sender}: ${scamCheck.matchedPattern}`);
+            await this.handleScamDetected(rental, chatMsg.content, renterName || chatMsg.sender, scamCheck.matchedPattern!);
+            return;
+          }
+        }
+      } catch (scamErr) {
+        this.logger.debug(`Scam check on initial messages failed: ${scamErr.message}`);
+      }
+
       // Record demand
       const items = rental.title ? [rental.title] : [];
       await this.demandService.recordDemand({
@@ -277,6 +294,22 @@ export class AutonomousService {
         }
       }
 
+      // Multi-item context enrichment
+      let multiItemContextStr = '';
+      if (rental._multiItemContext) {
+        const ctx = rental._multiItemContext;
+        const itemList = ctx.allItems
+          .map((item: { title: string; price: number }) => `  - ${item.title} (£${item.price})`)
+          .join('\n');
+        multiItemContextStr =
+          `\n\nMULTI-ITEM REQUEST: This renter sent ${ctx.allItems.length} separate rental requests that have been consolidated here.\n` +
+          `All items:\n${itemList}\n` +
+          `Total value: £${ctx.totalValue}\n` +
+          `The renter has been told all items will be handled in this chat. ` +
+          `Respond acknowledging ALL items, not just the one in this rental's title. ` +
+          `Consider bundle pricing if applicable.`;
+      }
+
       const rentalContext =
         `New rental detected:\n` +
         `Title: ${rental.title}\n` +
@@ -286,7 +319,8 @@ export class AutonomousService {
         `Description: ${(rental.description || '').substring(0, 500)}\n` +
         `Photos: ${(rental.photos_urls || []).length} photos` +
         chatContext +
-        (renterProfileContext ? `\n\n${renterProfileContext}` : '');
+        (renterProfileContext ? `\n\n${renterProfileContext}` : '') +
+        multiItemContextStr;
 
       // 2. Ask Claude to analyze and decide
       let returningContext = '';
@@ -661,6 +695,15 @@ export class AutonomousService {
             `└ Polite decline sent. Renter NOT informed of blacklisting.`,
           );
 
+          this.releaseProcessingSlot();
+          return;
+        }
+
+        // Scam detection on incoming message
+        const scamCheck = this.detectScamPattern(msg.content);
+        if (scamCheck.isScam) {
+          this.logger.warn(`Scam pattern detected in message from ${msg.sender}: ${scamCheck.matchedPattern}`);
+          await this.handleScamDetected(rental, msg.content, msg.sender, scamCheck.matchedPattern!);
           this.releaseProcessingSlot();
           return;
         }
@@ -1677,5 +1720,119 @@ export class AutonomousService {
       }),
       365, // Keep for 1 year for dispute resolution
     );
+  }
+
+  // --- Scam Detection ---
+
+  /**
+   * Detect scam patterns in a message.
+   * Returns whether the message matches known scam patterns.
+   */
+  detectScamPattern(message: string): { isScam: boolean; matchedPattern?: string } {
+    const text = message.toLowerCase();
+
+    // Payment request patterns
+    const paymentPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /send\s+payment/i, label: 'send payment' },
+      { pattern: /pay\s+via(?!\s+(hygglo|the\s+platform|the\s+app))/i, label: 'pay via (off-platform)' },
+      { pattern: /transfer\s+money/i, label: 'transfer money' },
+      { pattern: /bank\s+details\s+needed/i, label: 'bank details needed' },
+      { pattern: /wire\s+transfer/i, label: 'wire transfer' },
+      { pattern: /crypto\s+payment/i, label: 'crypto payment' },
+      { pattern: /gift\s+card/i, label: 'gift card' },
+      { pattern: /pay\s+in\s+advance/i, label: 'pay in advance' },
+      { pattern: /pay\s+(me|us)\s+directly/i, label: 'pay directly' },
+    ];
+
+    // Platform impersonation patterns
+    const impersonationPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /we\s+are\s+the\s+hygglo\s+security/i, label: 'hygglo security impersonation' },
+      { pattern: /security\s+team\s+requires/i, label: 'security team impersonation' },
+      { pattern: /verification\s+payment\s+required/i, label: 'verification payment scam' },
+      { pattern: /platform\s+requires\s+you\s+to\s+pay/i, label: 'platform payment scam' },
+      { pattern: /verify\s+identity\s+by\s+paying/i, label: 'identity verification scam' },
+    ];
+
+    // Suspicious link patterns
+    const suspiciousLinkPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /click\s+this\s+link\s+to\s+(pay|verify)/i, label: 'suspicious payment/verification link' },
+      { pattern: /https?:\/\/[^\s]*\b(pay|verify|secure|invoice)\b[^\s]*/i, label: 'suspicious URL' },
+    ];
+
+    const allPatterns = [...paymentPatterns, ...impersonationPatterns, ...suspiciousLinkPatterns];
+
+    for (const { pattern, label } of allPatterns) {
+      if (pattern.test(text)) {
+        return { isScam: true, matchedPattern: label };
+      }
+    }
+
+    return { isScam: false };
+  }
+
+  /**
+   * Handle a detected scam: decline, notify owner, blacklist, and audit.
+   */
+  async handleScamDetected(
+    rental: any,
+    message: string,
+    sender: string,
+    pattern: string,
+  ): Promise<void> {
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+
+    // Send terse decline
+    if (!readOnly) {
+      try {
+        await this.hyggloService.sendMessage(rental.listing_id, 'This rental will not proceed.');
+      } catch (sendErr) {
+        this.logger.warn(`Failed to send scam decline: ${sendErr.message}`);
+      }
+    }
+
+    // Notify owner via Telegram
+    await this.telegramService.sendProactiveMessage(
+      `🚨 *SCAM DETECTED*\n\n` +
+      `├ 📦 Rental: ${rental.title}\n` +
+      `├ 👤 Sender: ${sender}\n` +
+      `├ 🔍 Pattern: ${pattern}\n` +
+      `├ 💬 Message: "${message.substring(0, 200)}"\n` +
+      `└ Action: Declined + auto-blacklisted`,
+    );
+
+    // Auto-blacklist
+    try {
+      await this.blacklistService.addToBlacklist(
+        sender,
+        `Scam detected: ${pattern}`,
+        'system:scam_detection',
+      );
+    } catch (blErr) {
+      this.logger.warn(`Failed to auto-blacklist scammer ${sender}: ${blErr.message}`);
+    }
+
+    // Store ai_decision for audit trail
+    await this.prisma.ai_decision.create({
+      data: {
+        rental_id: rental.id,
+        decision_type: 'reject',
+        input_summary: `Scam detected from ${sender}: pattern="${pattern}", message="${message.substring(0, 200)}"`,
+        output_summary: 'Auto-declined and blacklisted due to scam pattern match.',
+        confidence: 1.0,
+        action_taken: readOnly
+          ? `BLOCKED (read-only). Scam pattern: ${pattern}`
+          : `Sent decline + auto-blacklisted. Pattern: ${pattern}`,
+        notified: true,
+      },
+    });
+
+    // Track in Sentry
+    this.sentryService.captureError(new Error(`Scam detected: ${pattern}`), {
+      operation: 'scam_detection',
+      rental_id: rental.id,
+      sender,
+      pattern,
+      message_preview: message.substring(0, 200),
+    });
   }
 }

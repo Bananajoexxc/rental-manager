@@ -152,11 +152,31 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.log(`📊 Total rentals found: ${allRentals.length}`);
 
-      // Process each rental
+      // Process each rental and collect new ones for grouping
+      const newRentalResults: Array<{ savedRental: any; rawRental: any }> = [];
       for (const rental of allRentals) {
-        const isNew = await this.processRental(rental);
-        if (isNew) {
+        const result = await this.processRental(rental);
+        if (result.isNew) {
+          newRentalResults.push({ savedRental: result.savedRental, rawRental: result.rawRental });
           newRentalsCount++;
+        }
+      }
+
+      // Group new rentals by renter, then dispatch
+      if (this.autonomousService && newRentalResults.length > 0) {
+        const renterGroups = this.groupNewRentalsByRenter(newRentalResults);
+        for (const [, group] of renterGroups.entries()) {
+          if (group.length === 1) {
+            // Single rental → normal pipeline
+            this.autonomousService.onNewRental(group[0].savedRental).catch((err) => {
+              this.logger.error(`Autonomous pipeline error for ${group[0].savedRental.title}: ${err.message}`);
+            });
+          } else {
+            // Multi-item → consolidate
+            this.handleMultiItemRequest(group).catch((err) => {
+              this.logger.error(`Multi-item consolidation error: ${err.message}`);
+            });
+          }
         }
       }
 
@@ -214,7 +234,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processRental(rental: any): Promise<boolean> {
+  private async processRental(rental: any): Promise<{ isNew: boolean; savedRental?: any; rawRental?: any }> {
     try {
       // Check if rental already exists
       const existingRental = await this.prisma.rental.findUnique({
@@ -285,7 +305,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         }
 
         this.logger.log(`🔄 Updated rental: ${rental.title}`);
-        return false; // Not a new rental
+        return { isNew: false }; // Not a new rental
       }
 
       // Fetch detailed information for new rental
@@ -475,21 +495,14 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Renter profile/follow-up init failed for ${savedRental.title}: ${profileErr.message}`);
       }
 
-      // Trigger autonomous pipeline for new rental
-      if (this.autonomousService) {
-        this.autonomousService.onNewRental(savedRental).catch((err) => {
-          this.logger.error(`Autonomous pipeline error for ${savedRental.title}: ${err.message}`);
-        });
-      }
-
-      return true; // This is a new rental
+      return { isNew: true, savedRental, rawRental: rental };
     } catch (error) {
       this.logger.error(`❌ Error processing rental: ${rental.title}`, error);
       this.loggingService.error('Error processing rental', {
         listingId: rental.listingId,
         error: error.message,
       });
-      return false;
+      return { isNew: false };
     }
   }
 
@@ -504,6 +517,144 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     return detail.items
       .filter((item: any) => item.name && item.type === 'PRODUCT')
       .map((item: any) => item.name.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+  }
+
+  /**
+   * Group new rentals by renter to detect multi-item requests.
+   * Uses renterUserId (Hygglo user ID) as primary key, falls back to renter_info.
+   */
+  private groupNewRentalsByRenter(
+    results: Array<{ savedRental: any; rawRental: any }>,
+  ): Map<string, Array<{ savedRental: any; rawRental: any }>> {
+    const groups = new Map<string, Array<{ savedRental: any; rawRental: any }>>();
+
+    for (const entry of results) {
+      // Prefer Hygglo user ID for grouping
+      let key = entry.rawRental.renterUserId;
+
+      if (!key) {
+        // Fallback to renter_info lowercased
+        const renterInfo = (entry.savedRental.renter_info || '').trim().toLowerCase();
+        key = renterInfo || `__rental_${entry.savedRental.id}`;
+      }
+
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key)!.push(entry);
+    }
+
+    return groups;
+  }
+
+  /**
+   * Handle multi-item rental requests from the same renter.
+   * Consolidates into the primary (highest-priced) chat and redirects secondaries.
+   */
+  private async handleMultiItemRequest(
+    group: Array<{ savedRental: any; rawRental: any }>,
+  ): Promise<void> {
+    // Sort by rental_price descending — first is primary
+    const sorted = [...group].sort((a, b) => {
+      const priceA = a.savedRental.rental_price || 0;
+      const priceB = b.savedRental.rental_price || 0;
+      return priceB - priceA;
+    });
+
+    const primary = sorted[0];
+    const secondaries = sorted.slice(1);
+    const renterName = primary.savedRental.renter_info || 'there';
+    const firstName = renterName.split(' ')[0];
+
+    // Build item list
+    const allItems = sorted.map((entry, i) => `${i + 1}. ${entry.savedRental.title}`);
+
+    // Send consolidation message in primary chat
+    const primaryMessage =
+      `Hi ${firstName}! I can see you've sent ${sorted.length} separate rental requests:\n` +
+      allItems.join('\n') + '\n\n' +
+      `We can handle all of these right here — easier to coordinate and we might be able to offer a bundle deal. ` +
+      `Shall I put everything together in this chat?`;
+
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    if (!readOnly) {
+      try {
+        await this.hyggloService.sendMessage(primary.savedRental.listing_id, primaryMessage);
+      } catch (err) {
+        this.logger.warn(`Failed to send consolidation message for ${primary.savedRental.title}: ${err.message}`);
+      }
+    }
+
+    // Send redirect message in each secondary chat
+    for (const secondary of secondaries) {
+      const redirectMessage =
+        `Hi! I've got this request. Since you also have a request for ${primary.savedRental.title}, ` +
+        `I'll handle everything together in that chat to keep things simple. ` +
+        `Head over there and we'll sort out all the items at once!`;
+
+      if (!readOnly) {
+        try {
+          await this.hyggloService.sendMessage(secondary.savedRental.listing_id, redirectMessage);
+        } catch (err) {
+          this.logger.warn(`Failed to send redirect message for ${secondary.savedRental.title}: ${err.message}`);
+        }
+      }
+
+      // Store ai_decision for audit trail on each secondary
+      try {
+        await this.prisma.ai_decision.create({
+          data: {
+            rental_id: secondary.savedRental.id,
+            decision_type: 'analyze',
+            input_summary: `Multi-item request: redirected to primary chat (${primary.savedRental.title})`,
+            output_summary: `Renter sent ${sorted.length} separate requests. Consolidated into primary rental.`,
+            confidence: 1.0,
+            action_taken: readOnly
+              ? `BLOCKED (read-only). Would redirect to ${primary.savedRental.title}`
+              : `Sent redirect to primary chat: ${primary.savedRental.title}`,
+            notified: true,
+          },
+        });
+      } catch (dbErr) {
+        this.logger.warn(`Failed to store multi-item decision: ${dbErr.message}`);
+      }
+    }
+
+    // Notify owner via Telegram
+    if (this.telegramService) {
+      const totalValue = sorted.reduce((sum, e) => sum + (e.savedRental.rental_price || 0), 0);
+      this.telegramService.sendProactiveMessage(
+        `📦 *Multi-Item Request Detected*\n\n` +
+        `├ 👤 ${renterName}\n` +
+        `├ 📋 ${sorted.length} separate requests:\n` +
+        sorted.map((e, i) => `│  ${i + 1}. ${e.savedRental.title} (£${e.savedRental.rental_price || 0})`).join('\n') + '\n' +
+        `├ 💰 Total value: £${totalValue}\n` +
+        `└ Consolidated into: ${primary.savedRental.title}`,
+      ).catch(() => {});
+    }
+
+    // Attach multi-item context to primary and trigger autonomous pipeline
+    const multiItemContext = {
+      allItems: sorted.map(e => ({
+        title: e.savedRental.title,
+        price: e.savedRental.rental_price || 0,
+        rentalId: e.savedRental.id,
+      })),
+      totalValue: sorted.reduce((sum, e) => sum + (e.savedRental.rental_price || 0), 0),
+      secondaryRentalIds: secondaries.map(e => e.savedRental.id),
+    };
+
+    primary.savedRental._multiItemContext = multiItemContext;
+
+    if (this.autonomousService) {
+      this.autonomousService.onNewRental(primary.savedRental).catch((err) => {
+        this.logger.error(`Autonomous pipeline error for multi-item primary ${primary.savedRental.title}: ${err.message}`);
+      });
+    }
+
+    this.logger.log(
+      `Multi-item request consolidated: ${sorted.length} rentals from ${renterName} → primary: ${primary.savedRental.title}`,
+    );
   }
 
   getStatus() {
