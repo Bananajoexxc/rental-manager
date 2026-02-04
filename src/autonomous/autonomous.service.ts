@@ -163,14 +163,41 @@ export class AutonomousService {
       const blacklistCheck = await this.blacklistService.isBlacklisted(renterName);
 
       if (blacklistCheck.blacklisted) {
+        // Notify owner (only Daniel sees the blacklist reason)
         await this.telegramService.sendProactiveMessage(
-          `🚫 *BLACKLIST ALERT*\n\n` +
+          `🚫 *BLACKLIST MATCH*\n\n` +
           `├ 📦 Rental: ${rental.title}\n` +
           `├ 👤 Renter: ${renterName}\n` +
           `├ ⚠️ Matched: ${blacklistCheck.entry.name}\n` +
           `└ Reason: ${blacklistCheck.entry.reason}\n\n` +
-          `_Auto-flagged for review._`,
+          `_Polite decline sent. Renter was NOT informed about blacklisting._`,
         );
+
+        // Send polite decline to renter — never mention blacklisting
+        const readOnly = process.env.READ_ONLY_MODE === 'true';
+        const declineMessage = this.blacklistService.getPoliteDecline();
+        if (!readOnly) {
+          try {
+            await this.hyggloService.sendMessage(rental.listing_id, declineMessage);
+          } catch (sendErr) {
+            this.logger.warn(`Failed to send blacklist decline: ${sendErr.message}`);
+          }
+        }
+
+        // Store decision and stop — no further processing for blacklisted renters
+        await this.prisma.ai_decision.create({
+          data: {
+            rental_id: rental.id,
+            decision_type: 'reject',
+            input_summary: `Blacklisted renter: ${renterName} (matched: ${blacklistCheck.entry.name})`,
+            output_summary: `Polite decline sent. Reason on file: ${blacklistCheck.entry.reason}`,
+            confidence: 1.0,
+            action_taken: readOnly ? `BLOCKED (read-only). Decline: "${declineMessage}"` : `Sent polite decline: "${declineMessage}"`,
+            notified: true,
+          },
+        });
+
+        return; // Stop processing — do not engage further
       }
 
       // Record demand
@@ -258,7 +285,6 @@ export class AutonomousService {
         `URL: ${rental.listing_url}\n` +
         `Description: ${(rental.description || '').substring(0, 500)}\n` +
         `Photos: ${(rental.photos_urls || []).length} photos` +
-        (blacklistCheck.blacklisted ? `\n\nWARNING: This renter is BLACKLISTED. Reason: ${blacklistCheck.entry.reason}` : '') +
         chatContext +
         (renterProfileContext ? `\n\n${renterProfileContext}` : '');
 
@@ -293,7 +319,6 @@ export class AutonomousService {
             `If nothing useful to add, recommend "no message needed".\n`
           : !isReturningRenter ? `- Should we send a welcome message to the renter?\n` : '') +
         `- Any concerns or flags?\n` +
-        (blacklistCheck.blacklisted ? `- CRITICAL: This renter is BLACKLISTED. DO NOT approve.\n` : '') +
         `\nRespond with:\n` +
         `1. Your analysis (2-3 sentences)\n` +
         `2. Recommended action (e.g., "send welcome message", "approve", "flag for review", "no message needed")\n` +
@@ -613,6 +638,32 @@ export class AutonomousService {
           sender: msg.sender,
           timestamp: msg.timestamp,
         });
+
+        // Blacklist check on every message — polite decline without revealing blacklisting
+        const blacklistCheck = await this.blacklistService.isBlacklistedByRental(rental.id);
+        if (blacklistCheck.blacklisted) {
+          const declineMessage = this.blacklistService.getPoliteDecline();
+          const readOnly = process.env.READ_ONLY_MODE === 'true';
+
+          if (!readOnly) {
+            try {
+              await this.hyggloService.sendMessage(msg.rentalId, declineMessage);
+            } catch {
+              // Best-effort
+            }
+          }
+
+          await this.telegramService.sendProactiveMessage(
+            `🚫 *Blacklisted renter messaged*\n\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 ${msg.sender} (matched: ${blacklistCheck.entry.name})\n` +
+            `├ 💬 "${msg.content.substring(0, 100)}"\n` +
+            `└ Polite decline sent. Renter NOT informed of blacklisting.`,
+          );
+
+          this.releaseProcessingSlot();
+          return;
+        }
 
         // Follow-up tracking: reset counters on renter message
         await this.followUpService.onRenterMessage(rental.id);
