@@ -6,9 +6,22 @@ import { AutonomousModule } from '../autonomous/autonomous.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { MemoryModule } from '../memory/memory.module';
 import { CalendarModule } from '../calendar/calendar.module';
+import { RenterProfileModule } from '../renter-profile/renter-profile.module';
+import { FollowUpModule } from '../follow-up/follow-up.module';
+import { VerificationModule } from '../verification/verification.module';
 
 @Module({
-  imports: [HyggloModule, ImageAnalysisModule, forwardRef(() => AutonomousModule), forwardRef(() => TelegramModule), MemoryModule, CalendarModule],
+  imports: [
+    HyggloModule,
+    ImageAnalysisModule,
+    forwardRef(() => AutonomousModule),
+    forwardRef(() => TelegramModule),
+    MemoryModule,
+    CalendarModule,
+    RenterProfileModule,
+    FollowUpModule,
+    VerificationModule,
+  ],
   providers: [RentalScannerService],
   exports: [RentalScannerService],
 })

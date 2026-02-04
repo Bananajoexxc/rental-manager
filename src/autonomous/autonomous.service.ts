@@ -10,7 +10,18 @@ import { BlacklistService } from '../blacklist/blacklist.service';
 import { DemandService } from '../demand/demand.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { DeliveryService } from '../delivery/delivery.service';
+import { ValidationService } from '../validation/validation.service';
+import { QualityScorerService } from '../evaluation/quality-scorer.service';
+import { BundleIntelligenceService } from '../bundles/bundle-intelligence.service';
+import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
+import { UpsellService } from '../upsell/upsell.service';
+import { SentryService } from '../monitoring/sentry.service';
+import { VisionService } from '../vision/vision.service';
 import { findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
+import { PRICING_CATALOG } from '../data/pricing-catalog';
+import { RenterProfileService } from '../renter-profile/renter-profile.service';
+import { FollowUpService } from '../follow-up/follow-up.service';
+import { VerificationService } from '../verification/verification.service';
 
 export interface HyggloMessage {
   rentalId: string;
@@ -24,6 +35,9 @@ export interface HyggloMessage {
 export class AutonomousService {
   private readonly logger = new Logger(AutonomousService.name);
   private lastHealthPing: Date = new Date();
+  private processingCount = 0;
+  private readonly maxConcurrentProcessing = 3;
+  private messageQueue: Array<{ resolve: () => void }> = [];
 
   constructor(
     private prisma: PrismaService,
@@ -36,7 +50,56 @@ export class AutonomousService {
     private demandService: DemandService,
     private calendarService: CalendarService,
     private deliveryService: DeliveryService,
+    private validationService: ValidationService,
+    private qualityScorerService: QualityScorerService,
+    private bundleIntelligenceService: BundleIntelligenceService,
+    private conversationStageService: ConversationStageService,
+    private upsellService: UpsellService,
+    private sentryService: SentryService,
+    private visionService: VisionService,
+    private renterProfileService: RenterProfileService,
+    private followUpService: FollowUpService,
+    private verificationService: VerificationService,
   ) {}
+
+  /**
+   * Determine context complexity level for optimization
+   * MINIMAL: Simple greetings, acknowledgments
+   * STANDARD: Normal queries, general questions
+   * COMPREHENSIVE: Pricing quotes, delivery calculations, complex requests
+   */
+  private determineContextLevel(message: string): 'minimal' | 'standard' | 'comprehensive' {
+    const lowerMessage = message.toLowerCase();
+
+    // Minimal context triggers (simple responses)
+    const minimalTriggers = [
+      /^(hi|hey|hello|thanks|thank you|ok|okay|sounds good|perfect|great|yes|no|sure)$/i,
+      /^(thanks?|thx|cheers|cool)\s*!*$/i,
+    ];
+
+    for (const trigger of minimalTriggers) {
+      if (trigger.test(message.trim())) {
+        return 'minimal';
+      }
+    }
+
+    // Comprehensive context triggers (need full pricing/delivery data)
+    const comprehensiveTriggers = [
+      /\b(price|cost|how much|pricing|quote|estimate)\b/i,
+      /\b(deliver|delivery|courier|postcode|address)\b/i,
+      /\b(bundle|package|together|combo)\b/i,
+      /\b(available|availability|dates|booking)\b/i,
+    ];
+
+    for (const trigger of comprehensiveTriggers) {
+      if (trigger.test(message)) {
+        return 'comprehensive';
+      }
+    }
+
+    // Default to standard
+    return 'standard';
+  }
 
   /**
    * Try regex-based time extraction before falling back to AI.
@@ -121,6 +184,33 @@ export class AutonomousService {
         source: 'hygglo',
       });
 
+      // Create/link renter profile (Rule 7 foundation)
+      let isReturningRenter = false;
+      let renterProfileId: string | undefined;
+      try {
+        if (renterName) {
+          const profile = await this.renterProfileService.findOrCreateProfile(renterName);
+          renterProfileId = profile.id;
+          await this.renterProfileService.linkRentalToProfile(rental.id, profile.id);
+
+          const returningCheck = await this.renterProfileService.isReturningRenter(renterName, rental.id);
+          isReturningRenter = returningCheck.isReturning;
+
+          if (isReturningRenter) {
+            this.logger.log(`Returning renter detected: ${renterName} (${returningCheck.previousRentalCount} previous rentals)`);
+          }
+        }
+      } catch (profileErr) {
+        this.logger.warn(`Renter profile linking failed: ${profileErr.message}`);
+      }
+
+      // Initialize follow-up state
+      try {
+        await this.followUpService.initializeFollowUpState(rental.id);
+      } catch (followUpErr) {
+        this.logger.warn(`Follow-up initialization failed: ${followUpErr.message}`);
+      }
+
       // 1. Gather context (include pricing data for rental evaluation)
       const rules = await this.rulesService.getFormattedRules();
       const [generalMemories, pricingMemories] = await Promise.all([
@@ -134,6 +224,22 @@ export class AutonomousService {
       ]);
       const memories = [generalMemories, pricingMemories].filter(Boolean).join('\n');
 
+      // Check if there's already a conversation with the renter
+      let existingChatMessages: { sender: string; content: string; timestamp: string }[] = [];
+      try {
+        existingChatMessages = await this.hyggloService.readMessages(rental.listing_id);
+      } catch (err) {
+        this.logger.debug(`Could not read existing messages for ${rental.listing_id}: ${err.message}`);
+      }
+
+      const hasExistingChat = existingChatMessages.length > 0;
+      let chatContext = '';
+      if (hasExistingChat) {
+        const recentMessages = existingChatMessages.slice(-10);
+        chatContext = `\n\nEXISTING CHAT HISTORY (${existingChatMessages.length} messages):\n` +
+          recentMessages.map(m => `[${m.timestamp}] ${m.sender}: ${m.content}`).join('\n');
+      }
+
       const rentalContext =
         `New rental detected:\n` +
         `Title: ${rental.title}\n` +
@@ -142,20 +248,34 @@ export class AutonomousService {
         `URL: ${rental.listing_url}\n` +
         `Description: ${(rental.description || '').substring(0, 500)}\n` +
         `Photos: ${(rental.photos_urls || []).length} photos` +
-        (blacklistCheck.blacklisted ? `\n\nWARNING: This renter is BLACKLISTED. Reason: ${blacklistCheck.entry.reason}` : '');
+        (blacklistCheck.blacklisted ? `\n\nWARNING: This renter is BLACKLISTED. Reason: ${blacklistCheck.entry.reason}` : '') +
+        chatContext;
 
       // 2. Ask Claude to analyze and decide
+      const returningContext = isReturningRenter
+        ? `- RETURNING RENTER: This renter has rented from us before. Skip the generic welcome — ` +
+          `they already know who we are and how it works. Instead, acknowledge them warmly ("Welcome back!") ` +
+          `and get straight to confirming the items are available and dates work. ` +
+          `Re-verify all item availability proactively and consider accepting immediately if everything checks out.\n`
+        : '';
+
       const analysisPrompt =
         `A new rental request has appeared. Analyze it and decide what action to take.\n\n` +
         `Consider:\n` +
         `- What items are being rented?\n` +
         `- Does the pricing seem right based on our inventory?\n` +
-        `- Should we send a welcome message to the renter?\n` +
+        returningContext +
+        (hasExistingChat
+          ? `- There is ALREADY an ongoing conversation with this renter (see chat history above). ` +
+            `Do NOT send a generic welcome message — it would be out of context and awkward. ` +
+            `Only send a message if it adds value to the existing conversation (e.g., confirming details, answering a pending question). ` +
+            `If nothing useful to add, recommend "no message needed".\n`
+          : !isReturningRenter ? `- Should we send a welcome message to the renter?\n` : '') +
         `- Any concerns or flags?\n` +
         (blacklistCheck.blacklisted ? `- CRITICAL: This renter is BLACKLISTED. DO NOT approve.\n` : '') +
         `\nRespond with:\n` +
         `1. Your analysis (2-3 sentences)\n` +
-        `2. Recommended action (e.g., "send welcome message", "approve", "flag for review")\n` +
+        `2. Recommended action (e.g., "send welcome message", "approve", "flag for review", "no message needed")\n` +
         `3. If sending a message, include the exact message text after "MESSAGE:"`;
 
       const response = await this.aiService.processRoutine(analysisPrompt, {
@@ -203,6 +323,15 @@ export class AutonomousService {
       this.logger.log(`Autonomous pipeline completed for: ${rental.title}`);
     } catch (error) {
       this.logger.error(`Autonomous pipeline error: ${error.message}`);
+
+      // SENTRY: Capture error with context
+      this.sentryService.captureError(error, {
+        operation: 'autonomous_pipeline',
+        rental_id: rental.id,
+        rental_title: rental.title,
+        renter: rental.renter_info,
+      });
+
       await this.telegramService.sendProactiveMessage(
         `❌ *Autonomous Pipeline Error*\n\n` +
         `├ 📦 ${rental.title}\n` +
@@ -215,17 +344,71 @@ export class AutonomousService {
 
   /**
    * Detect if a message is asking about pricing, costs, or quotes.
+   * Uses regex fast-path with optional AI fallback for ambiguous cases.
    */
-  private isPricingQuery(text: string): boolean {
+  private async isPricingQuery(text: string, useAIFallback = false): Promise<boolean> {
+    // Fast path: Clear pricing terms (95% of cases)
     const pricingTerms = /\b(price|pricing|cost|costs|how much|rate|rates|quote|charge|charges|fee|fees|per day|daily|weekly|monthly|budget|afford|expensive|cheap|discount|deal|£|pound|pounds|rental price|rental rate|what would|total|estimate)\b/i;
+    const hasDeliveryTerms = /\b(deliver|delivery|courier|ship|shipping|transport)\b/i;
+
+    if (pricingTerms.test(text) && !hasDeliveryTerms.test(text)) {
+      return true; // Clearly about pricing
+    }
+
+    if (!pricingTerms.test(text)) {
+      return false; // Clearly not about pricing
+    }
+
+    // Ambiguous case: Use AI fallback if enabled
+    if (useAIFallback) {
+      try {
+        const classification = await this.aiService.processExtraction(
+          `Classify this renter message intent. Is it primarily asking about PRICING (costs, rates, quotes)?\n\nMessage: "${text}"\n\nRespond with JSON only: {"intent":"pricing" or "other", "confidence":0-1}`,
+        );
+
+        const parsed = JSON.parse(classification.content);
+        return parsed.intent === 'pricing' && parsed.confidence > 0.7;
+      } catch (error) {
+        this.logger.debug(`AI intent classification failed: ${error.message}`);
+        return pricingTerms.test(text); // Fall back to regex
+      }
+    }
+
     return pricingTerms.test(text);
   }
 
   /**
    * Detect if a message is asking about delivery, courier, or shipping.
+   * Uses regex fast-path with optional AI fallback for ambiguous cases.
    */
-  private isDeliveryQuery(text: string): boolean {
+  private async isDeliveryQuery(text: string, useAIFallback = false): Promise<boolean> {
+    // Fast path: Clear delivery terms (95% of cases)
     const deliveryTerms = /\b(deliver|delivery|courier|ship|shipping|post|postcode|send it|drop off|dropoff|bring it|transport|how far|distance|collect from|too far|can you bring|come to me)\b/i;
+    const hasPricingTerms = /\b(price|pricing|cost|how much)\b/i;
+
+    if (deliveryTerms.test(text) && !hasPricingTerms.test(text)) {
+      return true; // Clearly about delivery
+    }
+
+    if (!deliveryTerms.test(text)) {
+      return false; // Clearly not about delivery
+    }
+
+    // Ambiguous case: Use AI fallback if enabled
+    if (useAIFallback) {
+      try {
+        const classification = await this.aiService.processExtraction(
+          `Classify this renter message intent. Is it primarily asking about DELIVERY (shipping, courier, bringing items)?\n\nMessage: "${text}"\n\nRespond with JSON only: {"intent":"delivery" or "other", "confidence":0-1}`,
+        );
+
+        const parsed = JSON.parse(classification.content);
+        return parsed.intent === 'delivery' && parsed.confidence > 0.7;
+      } catch (error) {
+        this.logger.debug(`AI intent classification failed: ${error.message}`);
+        return deliveryTerms.test(text); // Fall back to regex
+      }
+    }
+
     return deliveryTerms.test(text);
   }
 
@@ -284,6 +467,44 @@ export class AutonomousService {
   }
 
   /**
+   * Estimate the current rental total for upselling logic
+   * Uses rental.total_price if available, otherwise estimates from mentioned items
+   */
+  private async estimateRentalTotal(rental: any, mentionedItems: string[]): Promise<number> {
+    // If rental has a total price, use that
+    if (rental.total_price && rental.total_price > 0) {
+      return rental.total_price;
+    }
+
+    // Try to extract price from rental title (e.g., "Sony FX3 - £60/day")
+    const priceMatch = rental.title?.match(/£(\d+)/);
+    if (priceMatch) {
+      return parseInt(priceMatch[1], 10);
+    }
+
+    // Look up actual prices from PRICING_CATALOG for mentioned items
+    if (mentionedItems.length > 0) {
+      let total = 0;
+      for (const item of mentionedItems) {
+        const catalogEntry = PRICING_CATALOG.find(
+          (p) => p.item_name.toLowerCase() === item.toLowerCase(),
+        );
+        if (catalogEntry) {
+          // Use highest listed daily price (as per pricing rules)
+          total += catalogEntry.daily_price_max;
+        } else {
+          // Fall back to £25 median for unmatched items
+          total += 25;
+        }
+      }
+      return total;
+    }
+
+    // Default: single unmatched item
+    return 25;
+  }
+
+  /**
    * Check if delivery was previously discussed and items are being added.
    * Returns AI context instruction for recalculation if needed.
    */
@@ -324,22 +545,103 @@ export class AutonomousService {
     );
   }
 
-  async onNewMessages(messages: HyggloMessage[]) {
-    for (const msg of messages) {
-      if (!msg.isNew) continue;
+  private async acquireProcessingSlot(): Promise<void> {
+    if (this.processingCount < this.maxConcurrentProcessing) {
+      this.processingCount++;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.messageQueue.push({ resolve });
+    });
+  }
 
+  private releaseProcessingSlot(): void {
+    const next = this.messageQueue.shift();
+    if (next) {
+      next.resolve();
+    } else {
+      this.processingCount--;
+    }
+  }
+
+  async onNewMessages(messages: HyggloMessage[]) {
+    const tasks = messages.filter(m => m.isNew).map(msg => this.processMessage(msg));
+    await Promise.all(tasks);
+  }
+
+  private async processMessage(msg: HyggloMessage) {
       this.logger.log(`New message from ${msg.sender} on rental ${msg.rentalId}`);
+
+      await this.acquireProcessingSlot();
+      let rental: any = null; // Declare outside try block for catch/finally access
 
       try {
         // Find the rental
-        const rental = await this.prisma.rental.findFirst({
+        rental = await this.prisma.rental.findFirst({
           where: { listing_id: msg.rentalId },
         });
 
         if (!rental) {
           this.logger.warn(`Rental not found for message: ${msg.rentalId}`);
-          continue;
+          return;
         }
+
+        // Store incoming message in conversation history
+        const chatId = `rental:${rental.id}`;
+        await this.memoryService.storeConversation(chatId, 'user', msg.content, {
+          sender: msg.sender,
+          timestamp: msg.timestamp,
+        });
+
+        // Follow-up tracking: reset counters on renter message
+        await this.followUpService.onRenterMessage(rental.id);
+
+        // Parse custom timeframe (e.g., "I'll get back tomorrow")
+        try {
+          const customTimeframe = await this.followUpService.parseCustomTimeframe(msg.content, rental);
+          if (customTimeframe) {
+            await this.followUpService.setCustomReminder(rental.id, customTimeframe.reminderAt, customTimeframe.reason);
+          }
+        } catch (tfErr) {
+          this.logger.debug(`Custom timeframe parsing failed: ${tfErr.message}`);
+        }
+
+        // Rule 8: Detect "on my way" during verification
+        if (this.verificationService.detectOnMyWayMessage(msg.content)) {
+          try {
+            // Find renter profile for this rental
+            const renterLink = await this.prisma.rental_renter_link.findFirst({
+              where: { rental_id: rental.id },
+              select: { renter_profile_id: true },
+            });
+
+            if (renterLink) {
+              const warningMessage = await this.verificationService.handleOnMyWayDuringVerification(
+                rental,
+                renterLink.renter_profile_id,
+              );
+              if (warningMessage) {
+                // Send the warning immediately (before the normal AI response)
+                const readOnly = process.env.READ_ONLY_MODE === 'true';
+                if (!readOnly) {
+                  try {
+                    await this.hyggloService.sendMessage(msg.rentalId, warningMessage);
+                  } catch {
+                    // Warning is best-effort
+                  }
+                }
+              }
+            }
+          } catch (omwErr) {
+            this.logger.debug(`On-my-way detection failed: ${omwErr.message}`);
+          }
+        }
+
+        // Retrieve conversation history for context (last 10 messages)
+        const conversationHistory = await this.memoryService.getConversationHistory(chatId, 10);
+
+        // CONTEXT OPTIMIZATION: Determine context level needed
+        const contextLevel = this.determineContextLevel(msg.content);
 
         // Extract meaningful keywords from the message
         const keywords = this.extractSearchKeywords(msg.content, [msg.sender, rental.title]);
@@ -347,13 +649,24 @@ export class AutonomousService {
         // Detect items mentioned in the message for compatibility/bundle context
         const mentionedItems = this.extractMentionedItems(msg.content);
 
+        // Load business rules for all non-minimal contexts
+        const rules = contextLevel !== 'minimal'
+          ? await this.rulesService.getFormattedRules()
+          : undefined;
+
         // Detect pricing and delivery intent and fetch appropriate memories
-        const hasPricingIntent = this.isPricingQuery(msg.content);
-        const hasDeliveryIntent = this.isDeliveryQuery(msg.content);
+        // Use AI fallback for hybrid intent detection in complex cases
+        const useAIFallback = contextLevel === 'comprehensive';
+        const hasPricingIntent = await this.isPricingQuery(msg.content, useAIFallback);
+        const hasDeliveryIntent = await this.isDeliveryQuery(msg.content, useAIFallback);
         let memories: string;
 
-        if (hasPricingIntent || hasDeliveryIntent) {
-          // Fetch pricing catalog + delivery memories + general keyword memories
+        if (contextLevel === 'minimal') {
+          // Minimal context: Just basic templates, no memory lookup
+          memories = '';
+          this.logger.debug(`Using minimal context for simple message: "${msg.content}"`);
+        } else if (contextLevel === 'comprehensive' || hasPricingIntent || hasDeliveryIntent) {
+          // Comprehensive context: Full pricing catalog + delivery + keyword memories
           const deliveryKeywords = hasDeliveryIntent ? ['Delivery Pricing Zones', 'Delivery Courier Framework', 'Delivery Rules', 'Delivery Mandatory'] : [];
           const [pricingCatalog, keywordMem, deliveryMem] = await Promise.all([
             hasPricingIntent ? Promise.resolve(this.memoryService.getPricingCatalogContext()) : Promise.resolve(''),
@@ -362,7 +675,8 @@ export class AutonomousService {
           ]);
           memories = [pricingCatalog, deliveryMem, keywordMem].filter(Boolean).join('\n');
         } else {
-          memories = await this.memoryService.getMinimalMemories(keywords, 8);
+          // Standard context: Just keyword-based memories (lighter weight)
+          memories = await this.memoryService.getMinimalMemories(keywords, 5);
         }
 
         // Add compatibility context if items are mentioned
@@ -373,14 +687,113 @@ export class AutonomousService {
           }
         }
 
-        // Add bundle suggestion context
-        const bundleContext = this.memoryService.getBundleSuggestionContext(msg.content, mentionedItems);
+        // BUNDLE INTELLIGENCE: Smart bundle recommendations
+        const bundleContext = await this.bundleIntelligenceService.generateBundleContext(
+          msg.content,
+          mentionedItems
+        );
         if (bundleContext) {
           memories = [memories, bundleContext].filter(Boolean).join('\n');
         }
 
+        // INVENTORY QUANTITY ENFORCEMENT: Add max quantity context for mentioned items
+        if (mentionedItems.length > 0) {
+          const { MASTER_INVENTORY } = await import('../utils/item-matcher.js');
+          const quantityContext = mentionedItems
+            .map(item => {
+              const maxQty = MASTER_INVENTORY[item];
+              return maxQty !== undefined ? `${item}: MAX ${maxQty} units in stock` : null;
+            })
+            .filter(Boolean)
+            .join(', ');
+          if (quantityContext) {
+            memories = [memories, `\n--- INVENTORY LIMITS ---\n${quantityContext}\nNEVER confirm more than these maximums. If a renter asks for more, correct them politely.`].filter(Boolean).join('\n');
+          }
+        }
+
+        // MINIMUM QUANTITY ENFORCEMENT: Items that must be rented in sets
+        const minQuantityItems: Record<string, { min: number; sets: number[] }> = {
+          'Nanlite Pavotube 30x II': { min: 2, sets: [2, 4] },
+        };
+        const minQtyContext = mentionedItems
+          .map(item => {
+            const rule = minQuantityItems[item];
+            return rule ? `${item}: minimum ${rule.min} units. Only available in sets of ${rule.sets.join(' or ')}. NEVER offer a single unit.` : null;
+          })
+          .filter(Boolean)
+          .join('\n');
+        if (minQtyContext) {
+          memories = [memories, `\n--- MINIMUM QUANTITY RULES ---\n${minQtyContext}`].filter(Boolean).join('\n');
+        }
+
+        // SMART UPSELLING: Calculate revenue and generate recommendations
+        const estimatedTotal = await this.estimateRentalTotal(rental, mentionedItems);
+        const shouldUpsell = this.upsellService.shouldUpsell(estimatedTotal, mentionedItems.length);
+
+        let upsellContext = '';
+        if (shouldUpsell || hasPricingIntent) {
+          // Get full conversation text for use case detection
+          const conversationText = conversationHistory
+            .map(m => `${m.role}: ${m.content}`)
+            .join('\n') + `\nuser: ${msg.content}`;
+
+          const upsellMessage = await this.upsellService.generateUpsellMessage(
+            mentionedItems,
+            conversationText,
+            estimatedTotal
+          );
+
+          if (upsellMessage) {
+            upsellContext = `\n\n--- UPSELLING GUIDANCE ---\n${upsellMessage}\n\nIncorporate these recommendations naturally into your response. Be helpful, not pushy.`;
+          }
+        }
+
         // Check if delivery needs recalculation (items being added after prior delivery discussion)
         const deliveryRecalc = await this.checkDeliveryRecalculation(rental, msg.content, mentionedItems);
+
+        // REAL-TIME INVENTORY: Always include upcoming bookings as baseline context
+        let availabilityContext = '';
+        try {
+          const upcomingBookings = await this.calendarService.getAllUpcomingBookings(14);
+          if (upcomingBookings) {
+            availabilityContext = `\n\n${upcomingBookings}`;
+          }
+        } catch (upcomingErr) {
+          this.logger.debug(`Upcoming bookings fetch failed: ${upcomingErr.message}`);
+        }
+
+        // Add specific item availability check if items are mentioned and rental has dates
+        if (mentionedItems.length > 0 && rental.start_date && rental.end_date) {
+          try {
+            const availabilityChecks = await Promise.all(
+              mentionedItems.map(async (itemName) => {
+                const availability = await this.calendarService.checkAvailability(
+                  itemName,
+                  rental.start_date!,
+                  rental.end_date!,
+                );
+                const availableQty = availability.maxQuantity - availability.booked;
+                return { itemName, available: availability.available, quantity: availableQty };
+              })
+            );
+
+            const availableItems = availabilityChecks.filter(a => a.available);
+            const unavailableItems = availabilityChecks.filter(a => !a.available);
+
+            if (availableItems.length > 0 || unavailableItems.length > 0) {
+              availabilityContext += '\n\n--- LIVE AVAILABILITY CHECK ---\n';
+              if (availableItems.length > 0) {
+                availabilityContext += 'AVAILABLE: ' + availableItems.map(a => `${a.itemName} (${a.quantity} available)`).join(', ') + '\n';
+              }
+              if (unavailableItems.length > 0) {
+                availabilityContext += 'UNAVAILABLE: ' + unavailableItems.map(a => a.itemName).join(', ') + '\n';
+              }
+              availabilityContext += 'Use this LIVE data to answer accurately. State specific quantities. Do NOT guess availability — only use these numbers.';
+            }
+          } catch (availError) {
+            this.logger.debug(`Availability check failed: ${availError.message}`);
+          }
+        }
 
         const pricingInstruction = hasPricingIntent
           ? `The renter is asking about pricing. Reference the pricing catalog to give an accurate estimate. ` +
@@ -399,6 +812,9 @@ export class AutonomousService {
             `Do NOT send the delivery booking form yet -- just the price estimate first.\n`
           : '';
 
+        // CONVERSATION TREE: Get stage-specific guidance
+        const stageGuidance = await this.conversationStageService.getStagePrompt(rental.id);
+
         const messagePrompt =
           `A renter sent a message on Hygglo. Draft a reply.\n\n` +
           `Renter: ${msg.sender}\n` +
@@ -407,18 +823,60 @@ export class AutonomousService {
           `${pricingInstruction}` +
           `${deliveryInstruction}` +
           `${deliveryRecalc}` +
-          `Reply following our communication tone rules. Keep it concise, clear, and well-formatted.\n` +
+          `${upsellContext}` +
+          `${stageGuidance}` +
+          `\nReply following our communication tone rules. Keep it concise, clear, and well-formatted.\n` +
           `Start your response with the exact reply text (no preamble).`;
 
         const response = await this.aiService.processRoutine(messagePrompt, {
+          rules,
           memories,
+          conversationHistory, // Pass conversation history for multi-turn awareness
           rentalContext: `Current rental: ${rental.title}, status: ${rental.status}, renter: ${rental.renter_info}`,
+          additionalContext: availabilityContext, // Pass live availability data
         });
 
-        // Send the reply on Hygglo (gated by READ_ONLY_MODE)
+        // VALIDATION: Check response before sending
+        const validationResult = await this.validationService.validateResponse(
+          response.content,
+          {
+            responseType: 'customer_message',
+            context: { rental, message: msg },
+          },
+        );
+
+        // QUALITY SCORING: Compute quality metrics
+        const qualityScore = await this.qualityScorerService.scoreResponse(
+          response.content,
+          {
+            account: rental.account || 'dbcinema',
+            messageType: hasPricingIntent ? 'pricing' : hasDeliveryIntent ? 'delivery' : 'message',
+            hasPricing: hasPricingIntent,
+            validationResult,
+          },
+          validationResult,
+        );
+
+        // Send the reply on Hygglo (gated by READ_ONLY_MODE and VALIDATION)
         const readOnly = process.env.READ_ONLY_MODE === 'true';
         let actionTaken: string;
-        if (readOnly) {
+
+        if (validationResult.blocked && validationResult.severity === 'critical') {
+          // CRITICAL: Block sending, escalate to owner
+          this.logger.error(`BLOCKED [VALIDATION] Critical violations: ${validationResult.violations.join(', ')}`);
+          actionTaken = `BLOCKED - validation failed (${validationResult.severity}): ${validationResult.violations.join(', ')}`;
+
+          // Escalate to Daniel via Telegram
+          await this.telegramService.sendProactiveMessage(
+            `🚫 *CRITICAL: AI Response Blocked*\n\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 From: ${msg.sender}\n` +
+            `├ 💬 Their message: "${msg.content}"\n` +
+            `├ ⛔ Violations: ${validationResult.violations.join(', ')}\n` +
+            `├ 🤖 Blocked response: "${response.content.substring(0, 200)}..."\n` +
+            `└ Action: Response NOT sent - please reply manually`,
+          );
+        } else if (readOnly) {
           this.logger.warn(`BLOCKED [READ_ONLY_MODE] Draft reply for rental ${msg.rentalId}: "${response.content.substring(0, 100)}..."`);
           actionTaken = `BLOCKED - read-only mode. Draft: "${response.content.substring(0, 100)}..."`;
         } else {
@@ -432,18 +890,59 @@ export class AutonomousService {
           }
         }
 
-        // Store decision
-        await this.prisma.ai_decision.create({
+        // Store outgoing message in conversation history (only if not blocked)
+        if (!validationResult.blocked) {
+          await this.memoryService.storeConversation(chatId, 'assistant', response.content, {
+            model: response.model,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+          });
+
+          // Follow-up tracking: mark bot message sent
+          await this.followUpService.onBotMessage(rental.id);
+        }
+
+        // Store decision with computed confidence
+        const aiDecision = await this.prisma.ai_decision.create({
           data: {
             rental_id: rental.id,
             decision_type: 'message',
             input_summary: `Message from ${msg.sender}: "${msg.content.substring(0, 200)}"`,
             output_summary: response.content.substring(0, 500),
-            confidence: 0.75,
+            confidence: qualityScore.computedConfidence, // Use computed confidence
             action_taken: actionTaken,
             notified: true,
           },
         });
+
+        // Store quality score
+        await this.qualityScorerService.storeQualityScore(aiDecision.id, qualityScore);
+
+        // SENTRY: Monitor quality scores (alerts if < 0.7)
+        this.sentryService.monitorQualityScore(
+          qualityScore.overallQuality,
+          rental.id,
+          {
+            pricing_accuracy: qualityScore.pricingAccuracy,
+            rule_compliance: qualityScore.ruleCompliance,
+            conciseness: qualityScore.conciseness,
+            tone_match: qualityScore.toneMatch,
+            message_type: hasPricingIntent ? 'pricing' : hasDeliveryIntent ? 'delivery' : 'general',
+          },
+        );
+
+        // SENTRY: Track validation failures
+        if (validationResult.blocked) {
+          this.sentryService.monitorValidationFailure(
+            'MessageValidation',
+            validationResult.violations.join(', '),
+            {
+              rental_id: rental.id,
+              severity: validationResult.severity,
+              response_preview: response.content.substring(0, 200),
+            },
+          );
+        }
 
         // Notify owner
         await this.telegramService.sendProactiveMessage(
@@ -467,8 +966,17 @@ export class AutonomousService {
         }
       } catch (error) {
         this.logger.error(`Error processing message: ${error.message}`);
+
+        // SENTRY: Capture message processing errors
+        this.sentryService.captureError(error, {
+          operation: 'process_message',
+          rental_id: rental?.id,
+          sender: msg.sender,
+          message_preview: msg.content.substring(0, 100),
+        });
+      } finally {
+        this.releaseProcessingSlot();
       }
-    }
   }
 
   // --- Extract pickup/return times from chat messages ---
@@ -723,6 +1231,29 @@ export class AutonomousService {
     return 'Analysis completed, no automated action taken.';
   }
 
+  /**
+   * Process a message on a completed rental.
+   * Used by CompletedScanService (Rule 6) for post-rental follow-up.
+   */
+  async processCompletedRentalMessage(rental: any, message: string, sender: string): Promise<string> {
+    try {
+      const rules = await this.rulesService.getFormattedRules();
+
+      const prompt =
+        `A renter sent a message on a COMPLETED rental. Draft a brief reply.\n\n` +
+        `Rental: ${rental.title}\n` +
+        `Renter: ${sender}\n` +
+        `Their message: "${message}"\n\n` +
+        `This rental is already completed. Be helpful, brief, and natural.`;
+
+      const response = await this.aiService.processRoutine(prompt, { rules });
+      return response.content;
+    } catch (error) {
+      this.logger.error(`processCompletedRentalMessage error: ${error.message}`);
+      return '';
+    }
+  }
+
   // --- Scheduled tasks ---
 
   // Daily summary at 21:00
@@ -823,5 +1354,230 @@ export class AutonomousService {
 
       this.lastHealthPing = new Date();
     }
+  }
+
+  // --- VISION API: Equipment Photo Analysis ---
+
+  /**
+   * Analyze equipment photos when renter uploads checkout/return photos
+   * This provides automated damage detection and equipment verification
+   *
+   * Call this method when photos are uploaded to Hygglo
+   */
+  async analyzeEquipmentPhoto(
+    rental: any,
+    photoUrl: string,
+    photoType: 'checkout' | 'return' | 'listing',
+  ): Promise<void> {
+    if (!this.visionService.isEnabled()) {
+      this.logger.debug('Vision API not enabled, skipping photo analysis');
+      return;
+    }
+
+    try {
+      this.logger.log(`Analyzing ${photoType} photo for rental: ${rental.title}`);
+
+      // Analyze the photo
+      const analysis = await this.visionService.analyzeEquipmentPhoto(photoUrl, photoType);
+
+      // Store the analysis result
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: rental.id,
+          decision_type: 'analyze',
+          input_summary: `${photoType} photo analysis for ${rental.title}`,
+          output_summary: JSON.stringify({
+            damage_score: analysis.damage_score,
+            detected_issues: analysis.detected_issues,
+            labels: analysis.labels.slice(0, 5),
+            confidence: analysis.confidence,
+          }),
+          confidence: analysis.confidence,
+          action_taken: `Photo analyzed - damage score: ${analysis.damage_score.toFixed(2)}`,
+        },
+      });
+
+      // If this is a checkout photo, store it for later comparison
+      if (photoType === 'checkout') {
+        await this.storeCheckoutPhotoAnalysis(rental.id, photoUrl, analysis);
+
+        // Alert if equipment already shows damage
+        if (analysis.damage_score > 0.3) {
+          await this.telegramService.sendProactiveMessage(
+            `⚠️ *Pre-existing Damage Detected*\n\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 ${rental.renter_info || 'Unknown renter'}\n` +
+            `├ 🎯 Damage Score: ${(analysis.damage_score * 100).toFixed(0)}%\n` +
+            `├ 🔍 Issues: ${analysis.detected_issues.join(', ') || 'General wear'}\n` +
+            `└ 📸 Photo URL: ${photoUrl.substring(0, 50)}...\n\n` +
+            `_Document this condition before rental starts_`,
+          );
+        }
+      }
+
+      // If this is a return photo, compare with checkout
+      if (photoType === 'return') {
+        await this.handleReturnPhotoAnalysis(rental, photoUrl, analysis);
+      }
+
+      this.logger.log(
+        `Photo analysis complete: damage_score=${analysis.damage_score.toFixed(2)}, ` +
+        `issues=${analysis.detected_issues.length}`,
+      );
+    } catch (error) {
+      this.logger.error(`Vision API error: ${error.message}`);
+      this.sentryService.captureError(error, {
+        operation: 'analyze_equipment_photo',
+        rental_id: rental.id,
+        photo_type: photoType,
+        photo_url: photoUrl,
+      });
+    }
+  }
+
+  /**
+   * Handle return photo analysis and compare with checkout
+   */
+  private async handleReturnPhotoAnalysis(
+    rental: any,
+    returnPhotoUrl: string,
+    returnAnalysis: any,
+  ): Promise<void> {
+    try {
+      // Get checkout photo analysis
+      const checkoutData = await this.getCheckoutPhotoAnalysis(rental.id);
+
+      if (!checkoutData) {
+        this.logger.warn(`No checkout photo found for comparison - rental ${rental.id}`);
+        return;
+      }
+
+      // Compare checkout vs return
+      const comparison = await this.visionService.compareDamage(
+        checkoutData.photo_url,
+        returnPhotoUrl,
+      );
+
+      const damageIncrease = comparison.damage_increase;
+
+      // Calculate damage charge based on damage increase
+      let damageCharge = 0;
+      let severity = 'none';
+
+      if (damageIncrease > 0.5) {
+        damageCharge = 500; // Major damage - consider replacement
+        severity = 'major';
+      } else if (damageIncrease > 0.25) {
+        damageCharge = 150; // Significant damage - repair needed
+        severity = 'significant';
+      } else if (damageIncrease > 0.10) {
+        damageCharge = 50; // Minor damage - cleaning/minor repair
+        severity = 'minor';
+      }
+
+      // Send comprehensive damage report
+      if (damageCharge > 0) {
+        await this.telegramService.sendProactiveMessage(
+          `🚨 *Equipment Damage Detected*\n\n` +
+          `📦 *Rental*: ${rental.title}\n` +
+          `👤 *Renter*: ${rental.renter_info || 'Unknown'}\n\n` +
+          `📊 *Damage Analysis*:\n` +
+          `├ Checkout condition: ${(comparison.checkout.damage_score * 100).toFixed(0)}%\n` +
+          `├ Return condition: ${(comparison.return.damage_score * 100).toFixed(0)}%\n` +
+          `├ Damage increase: ${(damageIncrease * 100).toFixed(0)}%\n` +
+          `└ Severity: ${severity.toUpperCase()}\n\n` +
+          `🔍 *Detected Issues*:\n` +
+          `${comparison.return.detected_issues.map(issue => `├ ${issue}`).join('\n')}\n\n` +
+          `💰 *Recommended Charge*: £${damageCharge}\n\n` +
+          `📝 *AI Recommendation*:\n` +
+          `${comparison.recommendation}`,
+        );
+
+        // Store damage record
+        await this.storeDamageReport(rental.id, {
+          checkout_photo: checkoutData.photo_url,
+          return_photo: returnPhotoUrl,
+          damage_increase: damageIncrease,
+          damage_charge: damageCharge,
+          severity,
+          detected_issues: comparison.return.detected_issues,
+          recommendation: comparison.recommendation,
+        });
+      } else {
+        // No significant damage
+        await this.telegramService.sendProactiveMessage(
+          `✅ *Equipment Returned in Good Condition*\n\n` +
+          `├ 📦 ${rental.title}\n` +
+          `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+          `├ 🎯 Damage increase: ${(damageIncrease * 100).toFixed(0)}%\n` +
+          `└ Status: No damage charge required`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Return photo comparison error: ${error.message}`);
+      this.sentryService.captureError(error, {
+        operation: 'handle_return_photo',
+        rental_id: rental.id,
+      });
+    }
+  }
+
+  /**
+   * Store checkout photo analysis for later comparison
+   */
+  private async storeCheckoutPhotoAnalysis(
+    rentalId: string,
+    photoUrl: string,
+    analysis: any,
+  ): Promise<void> {
+    await this.memoryService.storeMemory(
+      'fact',
+      `Checkout photo: ${rentalId}`,
+      JSON.stringify({
+        rental_id: rentalId,
+        photo_url: photoUrl,
+        damage_score: analysis.damage_score,
+        detected_issues: analysis.detected_issues,
+        timestamp: new Date().toISOString(),
+      }),
+      90, // Keep for 90 days
+    );
+  }
+
+  /**
+   * Retrieve checkout photo analysis
+   */
+  private async getCheckoutPhotoAnalysis(rentalId: string): Promise<any> {
+    const memory = await this.prisma.memory.findFirst({
+      where: {
+        subject: `Checkout photo: ${rentalId}`,
+        memory_type: 'fact',
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    if (!memory) return null;
+
+    try {
+      return JSON.parse(memory.content);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Store damage report in database
+   */
+  private async storeDamageReport(rentalId: string, damageData: any): Promise<void> {
+    await this.memoryService.storeMemory(
+      'fact',
+      `Damage report: ${rentalId}`,
+      JSON.stringify({
+        rental_id: rentalId,
+        ...damageData,
+        timestamp: new Date().toISOString(),
+      }),
+      365, // Keep for 1 year for dispute resolution
+    );
   }
 }

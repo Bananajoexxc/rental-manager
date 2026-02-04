@@ -20,6 +20,7 @@ export interface RentalListing {
   startDate?: Date;
   endDate?: Date;
   renterInfo?: string;
+  renterUserId?: string;
   listingUrl: string;
   description?: string;
   photosUrls: string[];
@@ -78,6 +79,7 @@ export class HyggloService implements OnModuleInit {
   private client: AxiosInstance;
   private hasLoggedOrderSample = false;
   private lastMessageCheckTime = new Map<string, number>();
+  private authInFlight = new Map<HyggloAccount, Promise<boolean>>();
 
   constructor(private loggingService: LoggingService) {
     this.client = axios.create({
@@ -276,12 +278,24 @@ export class HyggloService implements OnModuleInit {
     if (token && token.expiresAt > Date.now() + 60000) {
       return true;
     }
+
+    // If an auth request is already in-flight for this account, await it
+    const existing = this.authInFlight.get(accountName);
+    if (existing) {
+      return existing;
+    }
+
     const config = this.accounts.find(a => a.name === accountName);
     if (!config) {
       this.logger.error(`Account not found: ${accountName}`);
       return false;
     }
-    return await this.authenticate(config);
+
+    const authPromise = this.authenticate(config).finally(() => {
+      this.authInFlight.delete(accountName);
+    });
+    this.authInFlight.set(accountName, authPromise);
+    return authPromise;
   }
 
   // --- Scanning Methods ---
@@ -327,8 +341,23 @@ export class HyggloService implements OnModuleInit {
     const results = await Promise.all(accountScanners);
     const allRentals = results.flat();
 
+    this.pruneLastMessageCheckTimes();
+
     this.logger.log(`Total rentals across all accounts: ${allRentals.length}`);
     return allRentals;
+  }
+
+  /**
+   * Remove entries from lastMessageCheckTime older than 24 hours to prevent unbounded growth.
+   */
+  private pruneLastMessageCheckTimes() {
+    const maxAge = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const [key, timestamp] of this.lastMessageCheckTime) {
+      if (now - timestamp > maxAge) {
+        this.lastMessageCheckTime.delete(key);
+      }
+    }
   }
 
   /**
@@ -454,6 +483,11 @@ export class HyggloService implements OnModuleInit {
         || labels.otherPart
         || '';
 
+      // Renter user ID for profile linking
+      const renterUserId = detail.users?.otherPart?.id
+        ? String(detail.users.otherPart.id)
+        : undefined;
+
       // Photos from detail items
       const photosUrls: string[] = [];
       if (detail.items && Array.isArray(detail.items)) {
@@ -518,6 +552,7 @@ export class HyggloService implements OnModuleInit {
         startDate,
         endDate,
         renterInfo: renter,
+        renterUserId,
         listingUrl,
         description,
         photosUrls,
@@ -884,6 +919,62 @@ export class HyggloService implements OnModuleInit {
     }
 
     return allNewMessages;
+  }
+
+  // --- Completed/Obsolete Rental Scanning ---
+
+  /**
+   * Scan completed and obsolete rentals for a specific account.
+   * Used by CompletedScanService (Rule 6) to sweep finished rentals.
+   */
+  async scanCompletedRentals(
+    accountName: HyggloAccount,
+    limit: number = 5,
+  ): Promise<RentalListing[]> {
+    try {
+      const authenticated = await this.ensureAuthenticated(accountName);
+      if (!authenticated) {
+        this.logger.warn(`Cannot scan completed rentals for ${accountName} - not authenticated`);
+        return [];
+      }
+
+      const token = this.tokens.get(accountName)!;
+      const allRentals: RentalListing[] = [];
+
+      for (const filter of ['completed', 'obsolete'] as const) {
+        try {
+          const response = await this.client.get('/v4/my/orders', {
+            params: {
+              role: 'owner',
+              filter,
+              sort: 'order-start-date',
+              offset: 0,
+              limit,
+            },
+            headers: {
+              'Authorization': `Bearer ${token.accessToken}`,
+            },
+            __account: accountName,
+          } as any);
+
+          const data = response.data;
+          const orders: any[] = Array.isArray(data) ? data : (data.items || data.results || data.data || []);
+
+          // Enrich with details
+          const enriched = await this.enrichOrdersWithDetails(orders.slice(0, limit), accountName);
+          const mapped = this.mapOrdersToRentalListings(enriched, 'ongoing', accountName);
+          allRentals.push(...mapped);
+        } catch (error) {
+          this.logger.debug(`scanCompletedRentals: ${filter} scan failed for ${accountName}: ${error.message}`);
+        }
+      }
+
+      this.logger.log(`scanCompletedRentals(${accountName}): found ${allRentals.length} completed/obsolete rentals`);
+      return allRentals.slice(0, limit);
+    } catch (error) {
+      this.logger.error(`scanCompletedRentals error for ${accountName}: ${error.message}`);
+      return [];
+    }
   }
 
   // --- Utility ---

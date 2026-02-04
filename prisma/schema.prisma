@@ -30,6 +30,8 @@ model rental {
   catalog_items   itemcatalog[]
   ai_decisions    ai_decision[]
   bookings        booking[]
+  follow_up_state follow_up_state?
+  renter_links    rental_renter_link[]
 
   @@index([status])
   @@index([listing_id])
@@ -71,6 +73,7 @@ model conversation {
 
   @@index([chat_id])
   @@index([created_at])
+  @@index([chat_id, created_at])
 }
 
 model ai_decision {
@@ -88,6 +91,7 @@ model ai_decision {
   @@index([rental_id])
   @@index([decision_type])
   @@index([created_at])
+  @@index([created_at, confidence])
 }
 
 model rule {
@@ -159,6 +163,7 @@ model booking {
   @@index([renter_name])
   @@index([status])
   @@index([account])
+  @@index([item_name, status, start_date, end_date])
 }
 
 // === Phase 1B: Renter Blacklist ===
@@ -234,4 +239,127 @@ model market_report {
 
   @@index([report_type])
   @@index([created_at])
+}
+
+// === Intelligence & Safety Improvements ===
+
+model validation_log {
+  id             String   @id @default(uuid())
+  ai_decision_id String?
+  response_text  String   @db.Text
+  violations     String[]
+  severity       String   // 'critical', 'high', 'medium', 'low'
+  blocked        Boolean
+  created_at     DateTime @default(now())
+
+  @@index([severity])
+  @@index([blocked])
+  @@index([created_at])
+  @@index([ai_decision_id])
+}
+
+model response_quality {
+  id                  String   @id @default(uuid())
+  ai_decision_id      String   @unique
+  pricing_accuracy    Float?
+  rule_compliance     Float
+  conciseness         Float
+  tone_match          Float
+  overall_quality     Float
+  computed_confidence Float
+  created_at          DateTime @default(now())
+
+  @@index([overall_quality])
+  @@index([created_at])
+}
+
+model prompt_component {
+  id           String   @id @default(uuid())
+  name         String
+  version      String
+  content      String   @db.Text
+  category     String   // 'core', 'rules', 'context', 'instructions'
+  active       Boolean  @default(true)
+  ab_group     String?  // 'A', 'B', null
+  usage_count  Int      @default(0)
+  pass_rate    Float?   // validation pass rate
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@unique([name, version])
+  @@index([category])
+  @@index([active])
+  @@index([ab_group])
+}
+
+model prompt_version_log {
+  id              String   @id @default(uuid())
+  component_name  String
+  version         String
+  ai_decision_id  String
+  validation_pass Boolean
+  quality_score   Float?
+  created_at      DateTime @default(now())
+
+  @@index([component_name])
+  @@index([version])
+  @@index([created_at])
+}
+
+// === Rental Acceptance Rules ===
+
+model renter_profile {
+  id                        String               @id @default(uuid())
+  hygglo_user_id            String?              @unique
+  name                      String
+  name_variants             String[]
+  verification_status       String               @default("unknown") // 'unknown', 'pending', 'verified', 'failed'
+  verification_attempts     Int                  @default(0)
+  verification_guided       Boolean              @default(false)
+  verification_failure_guided Boolean            @default(false)
+  total_rentals             Int                  @default(0)
+  first_seen_at             DateTime             @default(now())
+  last_seen_at              DateTime             @default(now())
+  renter_links              rental_renter_link[]
+
+  @@index([name])
+  @@index([hygglo_user_id])
+}
+
+model rental_renter_link {
+  id                String         @id @default(uuid())
+  rental_id         String
+  renter_profile_id String
+  created_at        DateTime       @default(now())
+  rental            rental         @relation(fields: [rental_id], references: [id], onDelete: Cascade)
+  renter_profile    renter_profile @relation(fields: [renter_profile_id], references: [id], onDelete: Cascade)
+
+  @@unique([rental_id, renter_profile_id])
+  @@index([rental_id])
+  @@index([renter_profile_id])
+}
+
+model follow_up_state {
+  id                    String    @id @default(uuid())
+  rental_id             String    @unique
+  rental                rental    @relation(fields: [rental_id], references: [id], onDelete: Cascade)
+  last_renter_message_at DateTime?
+  last_bot_message_at   DateTime?
+  last_bot_followup_at  DateTime?
+  followup_count        Int       @default(0)
+  custom_reminder_at    DateTime?
+  custom_reminder_reason String?
+  paused_until          DateTime?
+  auto_accept_eligible  Boolean   @default(false)
+  auto_accepted         Boolean   @default(false)
+  items_confirmed       Boolean   @default(false)
+  availability_verified Boolean   @default(false)
+  discount_eligible     Boolean   @default(false)
+  discount_applied      Boolean   @default(false)
+  status                String    @default("active") // 'active', 'completed', 'paused', 'auto_accepted'
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([rental_id])
 }

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, Inject, Optional, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, Optional, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyggloService } from '../hygglo/hygglo.service';
 import { ImageAnalysisService } from '../image-analysis/image-analysis.service';
@@ -7,16 +7,19 @@ import { AutonomousService } from '../autonomous/autonomous.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { MemoryService } from '../memory/memory.service';
 import { CalendarService } from '../calendar/calendar.service';
+import { RenterProfileService } from '../renter-profile/renter-profile.service';
+import { FollowUpService } from '../follow-up/follow-up.service';
+import { VerificationService } from '../verification/verification.service';
 
 @Injectable()
-export class RentalScannerService implements OnModuleInit {
+export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RentalScannerService.name);
   private isScanning = false;
   private lastActivityTime: number = Date.now();
   private currentScanInterval: number;
   private scannerTimeout: NodeJS.Timeout | null = null;
   private scanCount = 0;
-  private lastScanNotificationTime = 0;
+  private shuttingDown = false;
 
   private readonly INITIAL_SCAN_INTERVAL: number;
   private readonly REDUCED_SCAN_INTERVAL: number;
@@ -31,24 +34,42 @@ export class RentalScannerService implements OnModuleInit {
     @Optional() @Inject(forwardRef(() => TelegramService)) private telegramService: TelegramService,
     private memoryService: MemoryService,
     private calendarService: CalendarService,
+    private renterProfileService: RenterProfileService,
+    private followUpService: FollowUpService,
+    private verificationService: VerificationService,
   ) {
     // Load configuration from environment variables
-    this.INITIAL_SCAN_INTERVAL = parseInt(process.env.INITIAL_SCAN_INTERVAL_MS || '60000', 10);
-    this.REDUCED_SCAN_INTERVAL = parseInt(process.env.REDUCED_SCAN_INTERVAL_MS || '300000', 10);
-    this.INACTIVITY_THRESHOLD = parseInt(process.env.INACTIVITY_THRESHOLD_MS || '1800000', 10);
+    this.INITIAL_SCAN_INTERVAL = this.parseIntOrDefault(process.env.INITIAL_SCAN_INTERVAL_MS, 60000);
+    this.REDUCED_SCAN_INTERVAL = this.parseIntOrDefault(process.env.REDUCED_SCAN_INTERVAL_MS, 300000);
+    this.INACTIVITY_THRESHOLD = this.parseIntOrDefault(process.env.INACTIVITY_THRESHOLD_MS, 1800000);
     this.currentScanInterval = this.INITIAL_SCAN_INTERVAL;
+  }
+
+  private parseIntOrDefault(val: string | undefined, defaultValue: number): number {
+    const parsed = parseInt(val || '', 10);
+    return isNaN(parsed) || parsed <= 0 ? defaultValue : parsed;
   }
 
   async onModuleInit() {
     // Wait a bit before starting the scanner to allow other services to initialize
     setTimeout(() => {
-      this.startScanner();
+      if (!this.shuttingDown) {
+        this.startScanner();
+      }
     }, 5000);
+  }
+
+  onModuleDestroy() {
+    this.shuttingDown = true;
+    if (this.scannerTimeout) {
+      clearTimeout(this.scannerTimeout);
+      this.scannerTimeout = null;
+    }
+    this.logger.log('Scanner shutdown: cleared timeout and prevented further scheduling');
   }
 
   private startScanner() {
     this.logger.log('Starting rental scanner service...');
-    this.logger.log(`TelegramService injected: ${!!this.telegramService}`);
     this.loggingService.info('Rental scanner service started', {
       initialInterval: this.INITIAL_SCAN_INTERVAL,
       reducedInterval: this.REDUCED_SCAN_INTERVAL,
@@ -72,15 +93,43 @@ export class RentalScannerService implements OnModuleInit {
   }
 
   private scheduleNextScan() {
+    if (this.shuttingDown) {
+      this.logger.log('Shutdown in progress, not scheduling next scan');
+      return;
+    }
+
     if (this.scannerTimeout) {
       clearTimeout(this.scannerTimeout);
     }
 
+    let delay = this.currentScanInterval;
+
+    // Quiet hours: 2am-7am — scanner pauses and resumes at 7am
+    const now = new Date();
+    const hour = now.getHours();
+    if (hour >= 2 && hour < 7) {
+      // Currently in quiet hours — schedule for 7am today
+      const sevenAm = new Date(now);
+      sevenAm.setHours(7, 0, 0, 0);
+      delay = sevenAm.getTime() - now.getTime();
+      this.logger.log('🌙 Quiet hours (2am-7am) — scanner paused until 7:00 AM');
+    } else {
+      // Check if the next scan would land in quiet hours
+      const nextScanTime = new Date(now.getTime() + delay);
+      const nextHour = nextScanTime.getHours();
+      if (nextHour >= 2 && nextHour < 7) {
+        const sevenAm = new Date(nextScanTime);
+        sevenAm.setHours(7, 0, 0, 0);
+        delay = sevenAm.getTime() - now.getTime();
+        this.logger.log('🌙 Next scan would fall in quiet hours — scheduling for 7:00 AM');
+      }
+    }
+
     this.scannerTimeout = setTimeout(() => {
       this.performScan();
-    }, this.currentScanInterval);
+    }, delay);
 
-    this.logger.log(`⏰ Next scan scheduled in ${this.currentScanInterval / 1000} seconds`);
+    this.logger.log(`⏰ Next scan scheduled in ${Math.round(delay / 1000)} seconds`);
   }
 
   private async performScan() {
@@ -155,78 +204,10 @@ export class RentalScannerService implements OnModuleInit {
       this.logger.log(`Scan #${this.scanCount} completed in ${scanDuration}ms`);
       this.loggingService.info('Scan completed', { duration: scanDuration, newRentals: newRentalsCount });
 
-      // Send Telegram scan summary on first scan, when new rentals found,
-      // or every 30 minutes as a heartbeat
-      const timeSinceLastNotification = Date.now() - this.lastScanNotificationTime;
-      const shouldNotify = this.scanCount === 1 || newRentalsCount > 0 || timeSinceLastNotification > 30 * 60 * 1000;
-
-      if (shouldNotify && this.telegramService) {
-        this.lastScanNotificationTime = Date.now();
-
-        // Group rentals by account
-        const byAccount: Record<string, { ongoing: number; upcoming: number }> = {};
-        for (const r of allRentals) {
-          const acct = r.account || 'unknown';
-          if (!byAccount[acct]) byAccount[acct] = { ongoing: 0, upcoming: 0 };
-          if (r.status === 'ongoing') byAccount[acct].ongoing++;
-          else if (r.status === 'upcoming') byAccount[acct].upcoming++;
-        }
-
-        const totalInDb = await this.prisma.rental.count();
-        const accountLines = Object.entries(byAccount).map(([acct, counts]) => {
-          const label = acct === 'dbcinema' ? 'DB Cinema' : acct === 'leo' ? 'Leo Adams' : acct;
-          return `  ${label}: ${counts.ongoing} ongoing, ${counts.upcoming} upcoming`;
-        });
-
-        const authenticated = this.hyggloService.getAuthenticationStatus();
-        const configuredAccounts = this.hyggloService.getAccounts();
-
-        let msg = `📡 *Scan #${this.scanCount}*\n\n`;
-        msg += `├ ⏱ ${scanDuration}ms`;
-        msg += ` | ${authenticated ? '✅ Auth' : '❌ Auth'}`;
-        msg += ` | ${configuredAccounts.map(a => a.label).join(', ') || 'None'}\n`;
-
-        if (allRentals.length > 0) {
-          msg += `├ 📦 ${allRentals.length} rental(s)\n`;
-          for (const line of accountLines) {
-            msg += `│  ${line}\n`;
-          }
-          if (newRentalsCount > 0) {
-            msg += `├ ✨ ${newRentalsCount} new rental(s) saved\n`;
-
-            // Include price info for rentals that have it
-            const pricedRentals = allRentals.filter(r => r.rentalPrice);
-            if (pricedRentals.length > 0) {
-              const priceLines = pricedRentals.slice(0, 5).map(r => {
-                const curr = r.currency === 'GBP' || !r.currency ? '£' : r.currency === 'SEK' ? 'kr' : r.currency;
-                return `│  💰 ${r.title}: ${curr}${r.rentalPrice}${r.pricePerDay ? ` (${curr}${r.pricePerDay}/day)` : ''}`;
-              });
-              msg += `${priceLines.join('\n')}\n`;
-            }
-          }
-        } else {
-          msg += `├ No rentals found\n`;
-          if (!authenticated) {
-            msg += `├ ⚠️ _Auth failed — check credentials_\n`;
-          }
-        }
-
-        msg += `└ DB total: ${totalInDb}`;
-
-        this.telegramService.sendProactiveMessage(msg).catch((err) => {
-          this.logger.warn(`Failed to send scan summary: ${err.message}`);
-        });
-      }
     } catch (error) {
       this.logger.error('Error during scan: ' + error.message);
       this.loggingService.error('Scan failed', { error: error.message, stack: error.stack });
 
-      // Notify on scan failure too
-      if (this.telegramService) {
-        this.telegramService.sendProactiveMessage(
-          `❌ *Scan #${this.scanCount + 1} Failed*\n\n└ Error: ${error.message}`,
-        ).catch(() => { /* ignore */ });
-      }
     } finally {
       this.isScanning = false;
       this.scheduleNextScan();
@@ -467,6 +448,31 @@ export class RentalScannerService implements OnModuleInit {
         }
       } catch (bookingErr) {
         this.logger.warn(`Auto-booking failed for rental ${savedRental.title}: ${bookingErr.message}`);
+      }
+
+      // Link renter profile and initialize follow-up state
+      try {
+        const renterName = savedRental.renter_info || '';
+        const renterUserId = rental.renterUserId;
+        if (renterName) {
+          const profile = await this.renterProfileService.findOrCreateProfile(renterName, renterUserId);
+          await this.renterProfileService.linkRentalToProfile(savedRental.id, profile.id);
+
+          // Check verification status from order detail
+          if (rental._detail) {
+            await this.verificationService.onOrderDetailReceived(
+              rental.listingId,
+              rental._detail,
+              (rental.account || 'dbcinema') as 'dbcinema' | 'leo',
+              profile.id,
+            );
+          }
+        }
+
+        // Initialize follow-up state for timer tracking
+        await this.followUpService.initializeFollowUpState(savedRental.id);
+      } catch (profileErr) {
+        this.logger.warn(`Renter profile/follow-up init failed for ${savedRental.title}: ${profileErr.message}`);
       }
 
       // Trigger autonomous pipeline for new rental

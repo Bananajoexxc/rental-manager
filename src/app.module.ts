@@ -20,6 +20,20 @@ import { RevenueModule } from './revenue/revenue.module';
 import { RemindersModule } from './reminders/reminders.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { MarketModule } from './market/market.module';
+import { ValidationModule } from './validation/validation.module';
+import { QualityScorerModule } from './evaluation/quality-scorer.module';
+import { PromptManagerModule } from './prompts/prompt-manager.module';
+import { BundleIntelligenceModule } from './bundles/bundle-intelligence.module';
+import { ConversationStageModule } from './conversation-tree/conversation-stage.module';
+import { UpsellModule } from './upsell/upsell.module';
+import { MonitoringModule } from './monitoring/monitoring.module';
+import { VisionModule } from './vision/vision.module';
+import { DspyModule } from './dspy/dspy.module';
+import { PlaywrightModule } from './playwright/playwright.module';
+import { RenterProfileModule } from './renter-profile/renter-profile.module';
+import { FollowUpModule } from './follow-up/follow-up.module';
+import { VerificationModule } from './verification/verification.module';
+import { CompletedScanModule } from './completed-scan/completed-scan.module';
 
 @Module({
   imports: [
@@ -27,6 +41,8 @@ import { MarketModule } from './market/market.module';
       isGlobal: true,
     }),
     ScheduleModule.forRoot(),
+    MonitoringModule,
+    VisionModule,
     PrismaModule,
     HyggloModule,
     RentalScannerModule,
@@ -44,6 +60,18 @@ import { MarketModule } from './market/market.module';
     RemindersModule,
     DeliveryModule,
     MarketModule,
+    ValidationModule,
+    QualityScorerModule,
+    PromptManagerModule,
+    BundleIntelligenceModule,
+    ConversationStageModule,
+    UpsellModule,
+    DspyModule,
+    PlaywrightModule,
+    RenterProfileModule,
+    FollowUpModule,
+    VerificationModule,
+    CompletedScanModule,
   ],
   controllers: [AppController],
   providers: [AppService],
