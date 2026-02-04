@@ -585,7 +585,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Send redirect message in each secondary chat
+    // Send redirect message in each secondary chat and mark as consolidated
     for (const secondary of secondaries) {
       const redirectMessage =
         `Hi! I've got this request. Since you also have a request for ${primary.savedRental.title}, ` +
@@ -606,8 +606,8 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           data: {
             rental_id: secondary.savedRental.id,
             decision_type: 'analyze',
-            input_summary: `Multi-item request: redirected to primary chat (${primary.savedRental.title})`,
-            output_summary: `Renter sent ${sorted.length} separate requests. Consolidated into primary rental.`,
+            input_summary: `multi_item_secondary_closed: redirected to primary chat (${primary.savedRental.title})`,
+            output_summary: `Renter sent ${sorted.length} separate requests. Consolidated into primary rental. Secondary closed.`,
             confidence: 1.0,
             action_taken: readOnly
               ? `BLOCKED (read-only). Would redirect to ${primary.savedRental.title}`
@@ -617,6 +617,26 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         });
       } catch (dbErr) {
         this.logger.warn(`Failed to store multi-item decision: ${dbErr.message}`);
+      }
+
+      // Mark secondary rental as consolidated (prevents further processing)
+      try {
+        await this.prisma.rental.update({
+          where: { id: secondary.savedRental.id },
+          data: { status: 'consolidated' },
+        });
+      } catch (statusErr) {
+        this.logger.debug(`Failed to mark secondary as consolidated: ${statusErr.message}`);
+      }
+
+      // Mark any follow-up state as completed for secondary
+      try {
+        await this.prisma.follow_up_state.updateMany({
+          where: { rental_id: secondary.savedRental.id },
+          data: { status: 'completed' },
+        });
+      } catch {
+        // Follow-up state may not exist
       }
     }
 

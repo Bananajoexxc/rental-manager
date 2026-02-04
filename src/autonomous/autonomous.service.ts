@@ -102,6 +102,225 @@ export class AutonomousService {
   }
 
   /**
+   * Detect if a renter is accepting/confirming a bundle offer.
+   * Returns the detected intent or null.
+   */
+  private detectBundleAcceptance(message: string, aiResponse: string): {
+    accepted: boolean;
+    bundleMentioned?: string;
+  } | null {
+    const lowerMsg = message.toLowerCase();
+    const lowerResp = aiResponse.toLowerCase();
+
+    // Check if AI response mentioned a bundle/kit/package
+    const bundleInResponse = /\b(bundle|kit|package|set)\b/i.test(lowerResp);
+    if (!bundleInResponse) return null;
+
+    // Check if renter is confirming/accepting
+    const acceptPatterns = /\b(yes|yeah|yep|sounds good|perfect|go for it|let'?s? do|i'?ll take|book it|go ahead|that works|deal|great|want the (bundle|kit|package|set))\b/i;
+    if (acceptPatterns.test(lowerMsg)) {
+      // Extract bundle name from AI response
+      const bundleNameMatch = aiResponse.match(/(?:the\s+)?(\w[\w\s]+?(?:Kit|Bundle|Package|Set))/i);
+      return {
+        accepted: true,
+        bundleMentioned: bundleNameMatch ? bundleNameMatch[1].trim() : 'unknown bundle',
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Extract noteworthy renter info from a message (e.g., project type, special requests).
+   * Returns a short note string or null if nothing noteworthy.
+   */
+  private async extractRenterNotes(message: string): Promise<string | null> {
+    // Pre-filter: skip short messages or messages without note indicators
+    if (message.length < 15) return null;
+
+    const noteIndicators = /\b(need|extra|batteries|first\s+time|shooting|wedding|event|film|commercial|music\s+video|special|request|careful|fragile|heavy|tripod|case|bag|project|production|corporate|interview|documentary|short\s+film|feature|studio|location|outdoor|indoor|rain|weather|travel|abroad|overseas|flight)\b/i;
+    if (!noteIndicators.test(message)) return null;
+
+    try {
+      const prompt =
+        `Extract ONE short noteworthy sentence from this renter message that would be useful for the equipment owner to know ` +
+        `(e.g., project type, special requirements, care concerns, accessory needs, timing preferences). ` +
+        `If nothing noteworthy, respond with exactly "NONE".\n\n` +
+        `Message: "${message}"\n\n` +
+        `Respond with just the note (max 200 chars) or "NONE".`;
+
+      const response = await this.aiService.processExtraction(prompt);
+      const note = response.content.trim();
+
+      if (note === 'NONE' || note.toLowerCase() === 'none' || note.length < 5) {
+        return null;
+      }
+
+      return note.substring(0, 200);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Build rental stage context string for AI prompt enrichment.
+   * Summarises the current state of the rental pipeline.
+   */
+  private async buildRentalStageContext(rental: any): Promise<string> {
+    const parts: string[] = ['--- RENTAL STAGE ---'];
+
+    // 1. Hygglo status
+    parts.push(`Hygglo status: ${rental.status || 'unknown'}`);
+
+    // 2. Follow-up state flags
+    try {
+      const followUpState = await this.prisma.follow_up_state.findUnique({
+        where: { rental_id: rental.id },
+      });
+      if (followUpState) {
+        const flags: string[] = [];
+        if (followUpState.items_confirmed) flags.push('items_confirmed');
+        if (followUpState.availability_verified) flags.push('availability_verified');
+        if (followUpState.discount_eligible) flags.push('discount_eligible');
+        if ((followUpState as any).discount_applied) flags.push('discount_applied');
+        if (followUpState.auto_accepted) flags.push('auto_accepted');
+        parts.push(`Follow-up: status=${followUpState.status || 'unknown'}${flags.length > 0 ? ', ' + flags.join(', ') : ''}`);
+      }
+    } catch {
+      // Follow-up state may not exist
+    }
+
+    // 3. Verification status via rental_renter_link
+    try {
+      const renterLink = await this.prisma.rental_renter_link.findFirst({
+        where: { rental_id: rental.id },
+        select: { renter_profile_id: true },
+      });
+      if (renterLink) {
+        const profile = await this.renterProfileService.getProfile(renterLink.renter_profile_id);
+        if (profile) {
+          parts.push(`Verification: ${profile.verification_status || 'unknown'}`);
+        }
+      }
+    } catch {
+      // Profile may not exist
+    }
+
+    // 4. Booking times
+    try {
+      const bookings = await this.prisma.booking.findMany({
+        where: { rental_id: rental.id },
+        select: { pickup_time: true, return_time: true },
+        take: 1,
+      });
+      if (bookings.length > 0) {
+        const b = bookings[0];
+        parts.push(`Times: pickup=${b.pickup_time ? 'confirmed' : 'pending'}, return=${b.return_time ? 'confirmed' : 'pending'}`);
+      }
+    } catch {
+      // Bookings may not exist
+    }
+
+    return parts.join('\n');
+  }
+
+  /**
+   * Check if a rental is a same-day rental (start_date is today).
+   */
+  private isSameDayRental(rental: any): boolean {
+    if (!rental.start_date) return false;
+    const startDate = new Date(rental.start_date);
+    const today = new Date();
+    return (
+      startDate.getFullYear() === today.getFullYear() &&
+      startDate.getMonth() === today.getMonth() &&
+      startDate.getDate() === today.getDate()
+    );
+  }
+
+  /**
+   * Detect cancel or reschedule intent in a renter message.
+   * Returns 'cancel', 'reschedule', or null.
+   */
+  private detectCancelReschedule(message: string): 'cancel' | 'reschedule' | null {
+    const text = message.toLowerCase();
+
+    // Negative lookahead: skip false positives like "cancel my other plans"
+    const cancelPatterns = [
+      /\bcancel\s+(the\s+)?(rental|booking|order|reservation|request)\b/i,
+      /\bcancel\s+it\b/i,
+      /\bdon'?t\s+need\s+(it|the|this)\b/i,
+      /\bno\s+longer\s+need\b/i,
+      /\bchanged\s+my\s+mind\b/i,
+      /\bcall\s+(it\s+)?off\b/i,
+      /\bwant\s+to\s+cancel\b/i,
+      /\bneed\s+to\s+cancel\b/i,
+      /\bplease\s+cancel\b/i,
+    ];
+
+    const reschedulePatterns = [
+      /\breschedule\b/i,
+      /\bchange\s+the\s+dates?\b/i,
+      /\bmove\s+the\s+booking\b/i,
+      /\bpush\s+(it\s+)?back\b/i,
+      /\bpostpone\b/i,
+      /\bdifferent\s+day\b/i,
+      /\bdifferent\s+dates?\b/i,
+      /\bchange\s+the\s+time\b/i,
+      /\bmove\s+(it\s+)?to\s+(a\s+)?(different|another|next|later)\b/i,
+    ];
+
+    // Check cancel patterns (but guard against "cancel my other plans to make this work" etc.)
+    const cancelFalsePositives = /cancel\s+(my\s+)?(other|previous)\s+(plans?|booking|meeting)/i;
+    if (!cancelFalsePositives.test(text)) {
+      for (const pattern of cancelPatterns) {
+        if (pattern.test(text)) return 'cancel';
+      }
+    }
+
+    for (const pattern of reschedulePatterns) {
+      if (pattern.test(text)) return 'reschedule';
+    }
+
+    return null;
+  }
+
+  /**
+   * Detect time ranges (e.g., "9-10am", "between 9 and 10") that are not exact times.
+   * Returns the matched range string if found, null otherwise.
+   */
+  private detectTimeRange(content: string): string | null {
+    const rangePatterns = [
+      // "9-10am", "9am-10am", "9-10 am"
+      /\b(\d{1,2})\s*(?:am|pm)?\s*[-–]\s*(\d{1,2})\s*(?:am|pm)\b/i,
+      // "between 9 and 10", "between 9am and 10am"
+      /\bbetween\s+(\d{1,2})\s*(?:am|pm)?\s+and\s+(\d{1,2})\s*(?:am|pm)?\b/i,
+      // "9 to 10am", "9am to 10am" (but not dates like "2025-01-15")
+      /\b(\d{1,2})\s*(?:am|pm)?\s+to\s+(\d{1,2})\s*(?:am|pm)\b/i,
+      // "around 9-10", "around 9-10am"
+      /\baround\s+(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:am|pm)?\b/i,
+    ];
+
+    for (const pattern of rangePatterns) {
+      const match = content.match(pattern);
+      if (match) {
+        // Exclude date-like patterns (e.g., "2025-01-15", "15 to 20 January")
+        const fullMatch = match[0];
+        if (/\d{4}-\d{2}-\d{2}/.test(content.substring(Math.max(0, content.indexOf(fullMatch) - 10), content.indexOf(fullMatch) + fullMatch.length + 10))) {
+          continue;
+        }
+        // Exclude if both numbers are > 31 (unlikely to be times)
+        const num1 = parseInt(match[1]);
+        const num2 = parseInt(match[2]);
+        if (num1 > 12 && num2 > 12) continue;
+        return fullMatch;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Try regex-based time extraction before falling back to AI.
    * Returns extracted times if confidence is high, null otherwise.
    */
@@ -111,6 +330,11 @@ export class AutonomousService {
     confidence: 'high' | 'low';
   } | null {
     const result: { pickupTime?: string; returnTime?: string; pickupDate?: string; returnDate?: string; confidence: 'high' | 'low' } = { confidence: 'low' };
+
+    // Reject time ranges — we need exact times
+    if (this.detectTimeRange(content)) {
+      return null;
+    }
 
     // Match patterns like "pickup at 10am", "collect at 7pm", "pick up at 11:00"
     const pickupPattern = /(?:pickup|pick\s*up|collect)\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
@@ -208,9 +432,12 @@ export class AutonomousService {
           if (chatMsg.sender === 'Owner' || chatMsg.sender === 'owner') continue;
           const scamCheck = this.detectScamPattern(chatMsg.content);
           if (scamCheck.isScam) {
-            this.logger.warn(`Scam pattern detected in initial chat from ${chatMsg.sender}: ${scamCheck.matchedPattern}`);
-            await this.handleScamDetected(rental, chatMsg.content, renterName || chatMsg.sender, scamCheck.matchedPattern!);
+            this.logger.warn(`Scam pattern detected in initial chat from ${chatMsg.sender}: ${scamCheck.matchedPattern} (${scamCheck.severity})`);
+            await this.handleScamDetected(rental, chatMsg.content, renterName || chatMsg.sender, scamCheck.matchedPattern!, scamCheck.severity, scamCheck.score);
             return;
+          } else if (scamCheck.severity === 'suspicious') {
+            // Log suspicious near-miss but don't block
+            await this.handleScamDetected(rental, chatMsg.content, renterName || chatMsg.sender, scamCheck.matchedPattern!, 'suspicious', scamCheck.score);
           }
         }
       } catch (scamErr) {
@@ -310,6 +537,14 @@ export class AutonomousService {
           `Consider bundle pricing if applicable.`;
       }
 
+      // Build rental stage context for pipeline awareness
+      let rentalStageCtx = '';
+      try {
+        rentalStageCtx = await this.buildRentalStageContext(rental);
+      } catch (stageErr) {
+        this.logger.debug(`Rental stage context build failed in onNewRental: ${stageErr.message}`);
+      }
+
       const rentalContext =
         `New rental detected:\n` +
         `Title: ${rental.title}\n` +
@@ -320,6 +555,7 @@ export class AutonomousService {
         `Photos: ${(rental.photos_urls || []).length} photos` +
         chatContext +
         (renterProfileContext ? `\n\n${renterProfileContext}` : '') +
+        (rentalStageCtx ? `\n\n${rentalStageCtx}` : '') +
         multiItemContextStr;
 
       // 2. Ask Claude to analyze and decide
@@ -398,6 +634,101 @@ export class AutonomousService {
       // 7. Store any memories
       if (response.memories.length > 0) {
         await this.memoryService.processAiMemories(response.memories);
+      }
+
+      // 8. Check item availability and update acceptance readiness
+      try {
+        let itemsConfirmed = false;
+        let availabilityVerified = false;
+
+        if (rental.start_date && rental.end_date) {
+          const extractedItems = await this.prisma.extracteditem.findMany({
+            where: { rental_id: rental.id },
+            select: { item_name: true },
+          });
+
+          if (extractedItems.length > 0) {
+            itemsConfirmed = true;
+            let allAvailable = true;
+
+            for (const item of extractedItems) {
+              const avail = await this.calendarService.checkAvailability(
+                item.item_name,
+                rental.start_date,
+                rental.end_date,
+              );
+              if (!avail.available) {
+                allAvailable = false;
+                break;
+              }
+            }
+
+            availabilityVerified = allAvailable;
+          }
+        }
+
+        // Same-day rental check — never auto-accept, always needs Daniel's approval
+        const isSameDay = this.isSameDayRental(rental);
+
+        // Determine auto-accept eligibility:
+        // items confirmed + availability verified + NOT same-day
+        const autoAcceptEligible = itemsConfirmed && availabilityVerified && !isSameDay;
+
+        // Check discount eligibility
+        const discountEligible = this.followUpService.checkDiscountEligibility(rental).eligible;
+
+        await this.followUpService.updateAcceptanceReadiness(rental.id, {
+          items_confirmed: itemsConfirmed,
+          availability_verified: availabilityVerified,
+          auto_accept_eligible: autoAcceptEligible,
+          discount_eligible: discountEligible,
+        });
+
+        // If same-day: send comprehensive summary to Daniel for manual approval
+        if (isSameDay) {
+          const startDate = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Today';
+          const endDate = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'TBC';
+          const extractedItemNames = (await this.prisma.extracteditem.findMany({
+            where: { rental_id: rental.id },
+            select: { item_name: true },
+          })).map(i => i.item_name);
+
+          await this.telegramService.sendProactiveMessage(
+            `⏰ *SAME-DAY RENTAL — Manual Approval Required*\n\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+            `├ 📅 ${startDate} to ${endDate}\n` +
+            `├ 🎯 Items: ${extractedItemNames.length > 0 ? extractedItemNames.join(', ') : 'Pending extraction'}\n` +
+            `├ ✅ Available: ${availabilityVerified ? 'Yes' : 'Not yet verified'}\n` +
+            `├ 💰 Price: £${rental.rental_price || '?'}\n` +
+            `└ 🚫 Auto-accept BLOCKED — reply to approve or decline`,
+          );
+
+          await this.prisma.ai_decision.create({
+            data: {
+              rental_id: rental.id,
+              decision_type: 'escalate',
+              input_summary: `same_day_manual_approval: ${rental.title} by ${rental.renter_info || 'Unknown'}`,
+              output_summary: `Same-day rental detected. Auto-accept blocked. Awaiting Daniel's manual approval.`,
+              confidence: 1.0,
+              action_taken: 'Escalated to Daniel for same-day approval',
+              notified: true,
+            },
+          });
+
+          this.logger.log(`Same-day rental detected for ${rental.title} — auto-accept blocked, escalated to Daniel`);
+        }
+
+        this.logger.debug(`Acceptance readiness updated for ${rental.title}: items=${itemsConfirmed}, avail=${availabilityVerified}, autoAccept=${autoAcceptEligible}, sameDay=${isSameDay}, discount=${discountEligible}`);
+      } catch (readinessErr) {
+        this.logger.debug(`Acceptance readiness update failed: ${readinessErr.message}`);
+      }
+
+      // 9. Check and apply discount if eligible
+      try {
+        await this.followUpService.checkAndApplyDiscount(rental);
+      } catch (discountErr) {
+        this.logger.debug(`Discount check failed: ${discountErr.message}`);
       }
 
       this.logger.log(`Autonomous pipeline completed for: ${rental.title}`);
@@ -625,6 +956,81 @@ export class AutonomousService {
     );
   }
 
+  /**
+   * Update acceptance readiness flags based on conversation state.
+   * Detects item confirmation and availability from both the renter message and AI response.
+   */
+  private async updateAcceptanceReadinessFromConversation(
+    rental: any,
+    msg: HyggloMessage,
+    mentionedItems: string[],
+    aiResponse: string,
+  ): Promise<void> {
+    const updates: {
+      items_confirmed?: boolean;
+      availability_verified?: boolean;
+      auto_accept_eligible?: boolean;
+      discount_eligible?: boolean;
+    } = {};
+
+    // Detect item confirmation patterns in the conversation
+    const confirmationPatterns = /\b(yes|yeah|yep|sounds good|perfect|that'?s? (right|correct|great)|confirmed?|let'?s? go|book it|proceed|go ahead|i'?ll take|want to book)\b/i;
+    const renterConfirms = confirmationPatterns.test(msg.content);
+
+    // Check if items are extracted for this rental
+    const extractedItems = await this.prisma.extracteditem.findMany({
+      where: { rental_id: rental.id },
+      select: { item_name: true },
+    });
+
+    if (extractedItems.length > 0 || mentionedItems.length > 0) {
+      updates.items_confirmed = true;
+    }
+
+    // Verify availability if we have dates and items
+    if (updates.items_confirmed && rental.start_date && rental.end_date) {
+      const itemsToCheck = extractedItems.length > 0
+        ? extractedItems.map(i => i.item_name)
+        : mentionedItems;
+
+      let allAvailable = true;
+      for (const itemName of itemsToCheck) {
+        try {
+          const avail = await this.calendarService.checkAvailability(
+            itemName,
+            rental.start_date,
+            rental.end_date,
+          );
+          if (!avail.available) {
+            allAvailable = false;
+            break;
+          }
+        } catch {
+          // If availability check fails, don't mark as verified
+          allAvailable = false;
+          break;
+        }
+      }
+      updates.availability_verified = allAvailable;
+    }
+
+    // Auto-accept eligibility: items confirmed + availability verified + renter confirmation + NOT same-day
+    if (updates.items_confirmed && updates.availability_verified && renterConfirms && !this.isSameDayRental(rental)) {
+      updates.auto_accept_eligible = true;
+    }
+
+    // Discount eligibility
+    const discountCheck = this.followUpService.checkDiscountEligibility(rental);
+    if (discountCheck.eligible) {
+      updates.discount_eligible = true;
+    }
+
+    // Only update if we have something to set
+    if (Object.keys(updates).length > 0) {
+      await this.followUpService.updateAcceptanceReadiness(rental.id, updates);
+    }
+  }
+
   private async acquireProcessingSlot(): Promise<void> {
     if (this.processingCount < this.maxConcurrentProcessing) {
       this.processingCount++;
@@ -666,6 +1072,31 @@ export class AutonomousService {
           return;
         }
 
+        // Skip consolidated secondary rentals — redirect to primary chat
+        if (rental.status === 'consolidated') {
+          this.logger.debug(`Skipping message on consolidated rental ${rental.title} — redirected to primary`);
+          // Find the primary rental redirect
+          const redirectDecision = await this.prisma.ai_decision.findFirst({
+            where: {
+              rental_id: rental.id,
+              input_summary: { contains: 'multi_item_secondary_closed' },
+            },
+          });
+          if (redirectDecision) {
+            const readOnly = process.env.READ_ONLY_MODE === 'true';
+            if (!readOnly) {
+              try {
+                await this.hyggloService.sendMessage(msg.rentalId,
+                  `This request has been consolidated into another chat where we're handling all your items together. Please send your messages there instead!`);
+              } catch {
+                // Best-effort
+              }
+            }
+          }
+          this.releaseProcessingSlot();
+          return;
+        }
+
         // Store incoming message in conversation history
         const chatId = `rental:${rental.id}`;
         await this.memoryService.storeConversation(chatId, 'user', msg.content, {
@@ -699,11 +1130,58 @@ export class AutonomousService {
           return;
         }
 
-        // Scam detection on incoming message
+        // Scam detection on incoming message (with scoring)
         const scamCheck = this.detectScamPattern(msg.content);
         if (scamCheck.isScam) {
-          this.logger.warn(`Scam pattern detected in message from ${msg.sender}: ${scamCheck.matchedPattern}`);
-          await this.handleScamDetected(rental, msg.content, msg.sender, scamCheck.matchedPattern!);
+          this.logger.warn(`Scam pattern detected in message from ${msg.sender}: ${scamCheck.matchedPattern} (${scamCheck.severity}, score ${scamCheck.score})`);
+          await this.handleScamDetected(rental, msg.content, msg.sender, scamCheck.matchedPattern!, scamCheck.severity, scamCheck.score);
+          this.releaseProcessingSlot();
+          return;
+        } else if (scamCheck.severity === 'suspicious') {
+          // Log suspicious near-miss but continue processing
+          await this.handleScamDetected(rental, msg.content, msg.sender, scamCheck.matchedPattern!, 'suspicious', scamCheck.score);
+          // Don't return — continue processing the message normally
+        }
+
+        // Cancel/Reschedule detection — escalate to Daniel, skip AI response
+        const cancelReschedule = this.detectCancelReschedule(msg.content);
+        if (cancelReschedule) {
+          const label = cancelReschedule === 'cancel' ? 'CANCELLATION' : 'RESCHEDULE';
+          this.logger.log(`${label} REQUEST detected from ${msg.sender} on ${rental.title}`);
+
+          // Send holding response
+          const readOnly = process.env.READ_ONLY_MODE === 'true';
+          if (!readOnly) {
+            try {
+              await this.hyggloService.sendMessage(msg.rentalId,
+                `Let me check on that for you - I'll get back to you shortly.`);
+            } catch {
+              // Best-effort
+            }
+          }
+
+          // Escalate to Daniel
+          await this.telegramService.sendProactiveMessage(
+            `🚨 *${label} REQUEST*\n\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 ${msg.sender}\n` +
+            `├ 💬 "${msg.content.substring(0, 200)}"\n` +
+            `└ ⚠️ Holding response sent - please handle manually`,
+          );
+
+          // Store decision
+          await this.prisma.ai_decision.create({
+            data: {
+              rental_id: rental.id,
+              decision_type: 'escalate',
+              input_summary: `${label} request from ${msg.sender}: "${msg.content.substring(0, 200)}"`,
+              output_summary: `Detected ${cancelReschedule} intent. Holding response sent, escalated to Daniel.`,
+              confidence: 0.9,
+              action_taken: `Holding response sent, escalated via Telegram`,
+              notified: true,
+            },
+          });
+
           this.releaseProcessingSlot();
           return;
         }
@@ -943,6 +1421,34 @@ export class AutonomousService {
           this.logger.debug(`Renter profile context fetch failed: ${rpErr.message}`);
         }
 
+        // Build rental stage context for pipeline awareness
+        let rentalStageContext = '';
+        try {
+          rentalStageContext = await this.buildRentalStageContext(rental);
+        } catch (stageErr) {
+          this.logger.debug(`Rental stage context build failed: ${stageErr.message}`);
+        }
+
+        // Check discount eligibility and build context for AI
+        let discountContext = '';
+        try {
+          const discountResult = await this.followUpService.checkAndApplyDiscount(rental);
+          discountContext = this.followUpService.buildDiscountContext(rental, discountResult);
+        } catch (discErr) {
+          this.logger.debug(`Discount check in processMessage failed: ${discErr.message}`);
+        }
+
+        // Same-day rental instruction for AI
+        let sameDayInstruction = '';
+        if (this.isSameDayRental(rental)) {
+          sameDayInstruction =
+            `\n--- SAME-DAY RENTAL ---\n` +
+            `This is a SAME-DAY rental. Do NOT confirm or accept the booking. ` +
+            `Gather all info (items, times, requirements) and let the renter know you are checking final availability. ` +
+            `Say something like: "Let me just confirm availability for today and I'll get right back to you." ` +
+            `Daniel must manually approve all same-day rentals before acceptance.\n`;
+        }
+
         const messagePrompt =
           `A renter sent a message on Hygglo. Draft a reply.\n\n` +
           `Renter: ${msg.sender}\n` +
@@ -954,6 +1460,9 @@ export class AutonomousService {
           `${upsellContext}` +
           `${stageGuidance}` +
           (renterProfileContext ? `\n${renterProfileContext}\n` : '') +
+          (rentalStageContext ? `\n${rentalStageContext}\n` : '') +
+          `${discountContext}` +
+          `${sameDayInstruction}` +
           `\nReply following our communication tone rules. Keep it concise, clear, and well-formatted.\n` +
           `Start your response with the exact reply text (no preamble).`;
 
@@ -1094,6 +1603,41 @@ export class AutonomousService {
           this.logger.debug(`Time extraction failed for message from ${msg.sender}: ${timeErr.message}`);
         }
 
+        // Update acceptance readiness based on conversation state
+        try {
+          await this.updateAcceptanceReadinessFromConversation(rental, msg, mentionedItems, response.content);
+        } catch (readinessErr) {
+          this.logger.debug(`Acceptance readiness update failed: ${readinessErr.message}`);
+        }
+
+        // Track bundle acceptance if renter confirms a bundle offer
+        try {
+          const bundleAcceptance = this.detectBundleAcceptance(msg.content, response.content);
+          if (bundleAcceptance?.accepted) {
+            await this.prisma.ai_decision.create({
+              data: {
+                rental_id: rental.id,
+                decision_type: 'analyze',
+                input_summary: `bundle_accepted: ${bundleAcceptance.bundleMentioned} by ${msg.sender}`,
+                output_summary: `Renter confirmed bundle: ${bundleAcceptance.bundleMentioned}. Update rental listing items accordingly.`,
+                confidence: 0.85,
+                action_taken: `Bundle acceptance tracked: ${bundleAcceptance.bundleMentioned}`,
+                notified: true,
+              },
+            });
+
+            await this.telegramService.sendProactiveMessage(
+              `📦 *Bundle Accepted*\n\n` +
+              `├ 📦 ${rental.title}\n` +
+              `├ 👤 ${msg.sender}\n` +
+              `├ 🎯 Bundle: ${bundleAcceptance.bundleMentioned}\n` +
+              `└ ⚡ Update rental listing to match bundle items`,
+            );
+          }
+        } catch (bundleErr) {
+          this.logger.debug(`Bundle acceptance detection failed: ${bundleErr.message}`);
+        }
+
         // Update renter profile progress so the bot always knows what this renter wants
         if (currentProfileId) {
           try {
@@ -1103,6 +1647,21 @@ export class AutonomousService {
             });
           } catch (progressErr) {
             this.logger.debug(`Renter profile progress update failed: ${progressErr.message}`);
+          }
+
+          // Extract and append noteworthy renter info
+          try {
+            const renterNote = await this.extractRenterNotes(msg.content);
+            if (renterNote) {
+              const profile = await this.renterProfileService.getProfile(currentProfileId);
+              const existing = profile?.rental_progress || '';
+              const combined = existing ? `${existing} | ${renterNote}` : renterNote;
+              await this.renterProfileService.updateProgress(currentProfileId, {
+                rental_progress: combined.substring(0, 1000),
+              });
+            }
+          } catch (noteErr) {
+            this.logger.debug(`Renter note extraction failed: ${noteErr.message}`);
           }
         }
       } catch (error) {
@@ -1131,6 +1690,22 @@ export class AutonomousService {
     // Quick pre-filter: skip if the message doesn't seem to mention times
     const timePatterns = /\b(\d{1,2}\s*(am|pm|:\d{2})|\bpickup\b|\breturn\b|\bcollect\b|\bdrop\s*off\b|\bmorning\b|\bevening\b|\bafternoon\b)/i;
     if (!timePatterns.test(content)) return;
+
+    // Reject time ranges — ask renter for an exact time instead
+    const detectedRange = this.detectTimeRange(content);
+    if (detectedRange) {
+      this.logger.log(`Time range detected ("${detectedRange}") from ${msg.sender}, asking for exact time`);
+      const readOnly = process.env.READ_ONLY_MODE === 'true';
+      if (!readOnly) {
+        try {
+          await this.hyggloService.sendMessage(msg.rentalId,
+            `I just need an exact time rather than a range - could you confirm a specific time? For example, 'pickup at 10am' works great.`);
+        } catch {
+          // Best-effort
+        }
+      }
+      return;
+    }
 
     // Try regex extraction first to avoid AI call
     const regexResult = this.tryRegexTimeExtraction(content);
@@ -1725,61 +2300,146 @@ export class AutonomousService {
   // --- Scam Detection ---
 
   /**
-   * Detect scam patterns in a message.
-   * Returns whether the message matches known scam patterns.
+   * Detect scam patterns in a message with severity scoring.
+   * Returns severity tier: 'confirmed_scam' (auto-block), 'likely_scam' (block + notify),
+   * 'suspicious' (notify only), or null (clean).
    */
-  detectScamPattern(message: string): { isScam: boolean; matchedPattern?: string } {
+  detectScamPattern(message: string): {
+    isScam: boolean;
+    matchedPattern?: string;
+    severity?: 'confirmed_scam' | 'likely_scam' | 'suspicious';
+    score?: number;
+  } {
     const text = message.toLowerCase();
+    let totalScore = 0;
+    const matchedPatterns: string[] = [];
 
-    // Payment request patterns
-    const paymentPatterns: { pattern: RegExp; label: string }[] = [
-      { pattern: /send\s+payment/i, label: 'send payment' },
-      { pattern: /pay\s+via(?!\s+(hygglo|the\s+platform|the\s+app))/i, label: 'pay via (off-platform)' },
-      { pattern: /transfer\s+money/i, label: 'transfer money' },
-      { pattern: /bank\s+details\s+needed/i, label: 'bank details needed' },
-      { pattern: /wire\s+transfer/i, label: 'wire transfer' },
-      { pattern: /crypto\s+payment/i, label: 'crypto payment' },
-      { pattern: /gift\s+card/i, label: 'gift card' },
-      { pattern: /pay\s+in\s+advance/i, label: 'pay in advance' },
-      { pattern: /pay\s+(me|us)\s+directly/i, label: 'pay directly' },
-    ];
-
-    // Platform impersonation patterns
-    const impersonationPatterns: { pattern: RegExp; label: string }[] = [
+    // TIER 1: Confirmed scam patterns (score 10 each — any single match = block)
+    const confirmedScamPatterns: { pattern: RegExp; label: string }[] = [
       { pattern: /we\s+are\s+the\s+hygglo\s+security/i, label: 'hygglo security impersonation' },
       { pattern: /security\s+team\s+requires/i, label: 'security team impersonation' },
       { pattern: /verification\s+payment\s+required/i, label: 'verification payment scam' },
       { pattern: /platform\s+requires\s+you\s+to\s+pay/i, label: 'platform payment scam' },
       { pattern: /verify\s+identity\s+by\s+paying/i, label: 'identity verification scam' },
-    ];
-
-    // Suspicious link patterns
-    const suspiciousLinkPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /crypto\s+payment/i, label: 'crypto payment' },
+      { pattern: /gift\s+card/i, label: 'gift card scam' },
+      { pattern: /wire\s+transfer/i, label: 'wire transfer' },
       { pattern: /click\s+this\s+link\s+to\s+(pay|verify)/i, label: 'suspicious payment/verification link' },
-      { pattern: /https?:\/\/[^\s]*\b(pay|verify|secure|invoice)\b[^\s]*/i, label: 'suspicious URL' },
     ];
 
-    const allPatterns = [...paymentPatterns, ...impersonationPatterns, ...suspiciousLinkPatterns];
-
-    for (const { pattern, label } of allPatterns) {
+    for (const { pattern, label } of confirmedScamPatterns) {
       if (pattern.test(text)) {
-        return { isScam: true, matchedPattern: label };
+        totalScore += 10;
+        matchedPatterns.push(label);
       }
     }
 
-    return { isScam: false };
+    // TIER 2: Likely scam patterns (score 5 each — 2+ matches = block)
+    const likelyScamPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /send\s+payment/i, label: 'send payment' },
+      { pattern: /pay\s+via(?!\s+(hygglo|the\s+platform|the\s+app|fat\s+llama))/i, label: 'pay via (off-platform)' },
+      { pattern: /transfer\s+money/i, label: 'transfer money' },
+      { pattern: /bank\s+details\s+needed/i, label: 'bank details needed' },
+      { pattern: /pay\s+in\s+advance/i, label: 'pay in advance' },
+      { pattern: /pay\s+(me|us)\s+directly/i, label: 'pay directly' },
+      { pattern: /https?:\/\/[^\s]*\b(pay|verify|secure|invoice)\b[^\s]*/i, label: 'suspicious URL' },
+    ];
+
+    for (const { pattern, label } of likelyScamPatterns) {
+      if (pattern.test(text)) {
+        totalScore += 5;
+        matchedPatterns.push(label);
+      }
+    }
+
+    // TIER 3: Suspicious behavioral patterns (score 3 each — context-dependent)
+    const suspiciousPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /\b(urgent|immediately|right\s+now|act\s+fast|limited\s+time|hurry)\b/i, label: 'urgency pressure' },
+      { pattern: /\b(whatsapp|telegram|signal|text\s+me|call\s+me\s+at|my\s+number)\b/i, label: 'off-platform contact' },
+      { pattern: /\b(western\s+union|money\s*gram|paypal\.me|venmo|cash\s*app|zelle)\b/i, label: 'off-platform payment service' },
+      { pattern: /\b(send\s+(to\s+)?my\s+(account|email|phone))\b/i, label: 'personal account request' },
+      { pattern: /\b(i\s+am\s+(a\s+)?(hygglo|platform)\s+(admin|support|staff|team))\b/i, label: 'platform staff impersonation' },
+    ];
+
+    for (const { pattern, label } of suspiciousPatterns) {
+      if (pattern.test(text)) {
+        totalScore += 3;
+        matchedPatterns.push(label);
+      }
+    }
+
+    // No matches at all
+    if (totalScore === 0) {
+      return { isScam: false };
+    }
+
+    // Determine severity tier
+    let severity: 'confirmed_scam' | 'likely_scam' | 'suspicious';
+    if (totalScore >= 10) {
+      severity = 'confirmed_scam';
+    } else if (totalScore >= 5) {
+      severity = 'likely_scam';
+    } else {
+      severity = 'suspicious';
+    }
+
+    // Log near-misses (suspicious but not blocked)
+    if (severity === 'suspicious') {
+      this.logger.log(`Scam near-miss (score ${totalScore}): patterns=[${matchedPatterns.join(', ')}], message="${message.substring(0, 100)}"`);
+    }
+
+    return {
+      isScam: severity !== 'suspicious', // Only block confirmed + likely
+      matchedPattern: matchedPatterns.join(', '),
+      severity,
+      score: totalScore,
+    };
   }
 
   /**
-   * Handle a detected scam: decline, notify owner, blacklist, and audit.
+   * Handle a detected scam with tiered escalation.
+   * confirmed_scam: auto-block + blacklist + decline
+   * likely_scam: auto-block + blacklist + decline (same as confirmed but logged differently)
+   * suspicious: notify Daniel only, do NOT block (handled inline before this is called)
    */
   async handleScamDetected(
     rental: any,
     message: string,
     sender: string,
     pattern: string,
+    severity: 'confirmed_scam' | 'likely_scam' | 'suspicious' = 'confirmed_scam',
+    score?: number,
   ): Promise<void> {
     const readOnly = process.env.READ_ONLY_MODE === 'true';
+
+    // For suspicious tier: notify only, don't block or blacklist
+    if (severity === 'suspicious') {
+      await this.telegramService.sendProactiveMessage(
+        `⚠️ *Suspicious Message (Score: ${score || '?'})*\n\n` +
+        `├ 📦 Rental: ${rental.title}\n` +
+        `├ 👤 Sender: ${sender}\n` +
+        `├ 🔍 Patterns: ${pattern}\n` +
+        `├ 💬 Message: "${message.substring(0, 200)}"\n` +
+        `└ ℹ️ Not blocked - flagged for review`,
+      );
+
+      // Store for audit without blocking
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: rental.id,
+          decision_type: 'analyze',
+          input_summary: `Suspicious message (score ${score || '?'}) from ${sender}: patterns="${pattern}"`,
+          output_summary: `Near-miss scam detection. Not blocked. Message: "${message.substring(0, 200)}"`,
+          confidence: 0.5,
+          action_taken: 'Flagged for review - not blocked',
+          notified: true,
+        },
+      });
+
+      return; // Don't block or blacklist
+    }
+
+    const tierLabel = severity === 'confirmed_scam' ? 'CONFIRMED SCAM' : 'LIKELY SCAM';
 
     // Send terse decline
     if (!readOnly) {
@@ -1792,10 +2452,10 @@ export class AutonomousService {
 
     // Notify owner via Telegram
     await this.telegramService.sendProactiveMessage(
-      `🚨 *SCAM DETECTED*\n\n` +
+      `🚨 *${tierLabel} (Score: ${score || '?'})*\n\n` +
       `├ 📦 Rental: ${rental.title}\n` +
       `├ 👤 Sender: ${sender}\n` +
-      `├ 🔍 Pattern: ${pattern}\n` +
+      `├ 🔍 Patterns: ${pattern}\n` +
       `├ 💬 Message: "${message.substring(0, 200)}"\n` +
       `└ Action: Declined + auto-blacklisted`,
     );
@@ -1804,7 +2464,7 @@ export class AutonomousService {
     try {
       await this.blacklistService.addToBlacklist(
         sender,
-        `Scam detected: ${pattern}`,
+        `${tierLabel}: ${pattern}`,
         'system:scam_detection',
       );
     } catch (blErr) {
@@ -1816,22 +2476,24 @@ export class AutonomousService {
       data: {
         rental_id: rental.id,
         decision_type: 'reject',
-        input_summary: `Scam detected from ${sender}: pattern="${pattern}", message="${message.substring(0, 200)}"`,
-        output_summary: 'Auto-declined and blacklisted due to scam pattern match.',
-        confidence: 1.0,
+        input_summary: `${tierLabel} from ${sender} (score ${score || '?'}): patterns="${pattern}", message="${message.substring(0, 200)}"`,
+        output_summary: `Auto-declined and blacklisted. Severity: ${severity}`,
+        confidence: severity === 'confirmed_scam' ? 1.0 : 0.85,
         action_taken: readOnly
-          ? `BLOCKED (read-only). Scam pattern: ${pattern}`
-          : `Sent decline + auto-blacklisted. Pattern: ${pattern}`,
+          ? `BLOCKED (read-only). ${tierLabel}: ${pattern}`
+          : `Sent decline + auto-blacklisted. ${tierLabel}: ${pattern}`,
         notified: true,
       },
     });
 
     // Track in Sentry
-    this.sentryService.captureError(new Error(`Scam detected: ${pattern}`), {
+    this.sentryService.captureError(new Error(`${tierLabel}: ${pattern}`), {
       operation: 'scam_detection',
       rental_id: rental.id,
       sender,
       pattern,
+      severity,
+      score: score?.toString(),
       message_preview: message.substring(0, 200),
     });
   }

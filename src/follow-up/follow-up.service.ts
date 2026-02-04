@@ -105,6 +105,13 @@ export class FollowUpService {
       return;
     }
 
+    // 1b. Check if delivery T&Cs should be sent
+    try {
+      await this.checkDeliveryTCs(state, state.rental);
+    } catch (tcErr) {
+      this.logger.debug(`Delivery T&Cs check failed: ${tcErr.message}`);
+    }
+
     // 2. Paused until: if set and future -> skip
     if (state.paused_until) {
       const pauseEnd = new Date(state.paused_until);
@@ -246,6 +253,79 @@ export class FollowUpService {
     const account = (rental?.account || 'dbcinema') as HyggloAccount;
 
     this.logger.log(`Triggering auto-accept for rental ${rental?.title}`);
+
+    // Pre-acceptance validation: same-day rental block
+    if (rental?.start_date) {
+      const startDate = new Date(rental.start_date);
+      const today = new Date();
+      if (
+        startDate.getFullYear() === today.getFullYear() &&
+        startDate.getMonth() === today.getMonth() &&
+        startDate.getDate() === today.getDate()
+      ) {
+        this.logger.warn(`Auto-accept blocked: same-day rental ${rental.title} requires Daniel's manual approval`);
+        await this.telegramService.sendProactiveMessage(
+          `⏰ *Auto-Accept Blocked (Same-Day Rental)*\n\n` +
+          `├ 📦 ${rental.title}\n` +
+          `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+          `├ 📅 Start: ${startDate.toLocaleDateString('en-GB')}\n` +
+          `└ 🚫 Same-day rentals need your manual approval`,
+        );
+        return;
+      }
+    }
+
+    // Pre-acceptance validation: blacklist check
+    try {
+      const renterLink = await this.prisma.rental_renter_link.findFirst({
+        where: { rental_id: rental.id },
+        select: { renter_profile_id: true },
+      });
+      if (renterLink) {
+        const profile = await this.prisma.renter_profile.findUnique({
+          where: { id: renterLink.renter_profile_id },
+          select: { verification_status: true, name: true },
+        });
+
+        // Block if verification is not complete
+        if (profile && profile.verification_status !== 'verified' && profile.verification_status !== 'unknown') {
+          this.logger.warn(`Auto-accept blocked: verification not complete for ${rental.title} (${profile.verification_status})`);
+          await this.telegramService.sendProactiveMessage(
+            `⛔ *Auto-Accept Blocked (Verification)*\n\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 ${profile.name || rental.renter_info || 'Unknown'}\n` +
+            `├ 🔐 Status: ${profile.verification_status}\n` +
+            `└ Verification must complete before acceptance`,
+          );
+          return;
+        }
+      }
+    } catch (preErr) {
+      this.logger.debug(`Pre-acceptance validation failed: ${preErr.message}`);
+    }
+
+    // Pre-acceptance validation: reviews check
+    try {
+      const reviewDecisions = await this.prisma.ai_decision.findFirst({
+        where: {
+          rental_id: rental.id,
+          input_summary: { contains: 'review' },
+          decision_type: 'escalate',
+        },
+      });
+      if (reviewDecisions) {
+        this.logger.warn(`Auto-accept blocked: review escalation exists for ${rental.title}`);
+        await this.telegramService.sendProactiveMessage(
+          `⛔ *Auto-Accept Blocked (Reviews)*\n\n` +
+          `├ 📦 ${rental.title}\n` +
+          `├ ⚠️ Review-related escalation exists\n` +
+          `└ Manual review required`,
+        );
+        return;
+      }
+    } catch (reviewErr) {
+      this.logger.debug(`Review check in auto-accept failed: ${reviewErr.message}`);
+    }
 
     // Double-check item availability
     try {
@@ -448,13 +528,14 @@ export class FollowUpService {
   } {
     if (!rental) return { eligible: false };
 
-    const price = rental.rental_price || 0;
+    // Use multi-item total if available, otherwise individual rental price
+    const price = rental._multiItemContext?.totalValue || rental.rental_price || 0;
     const startDate = rental.start_date ? new Date(rental.start_date) : null;
     const endDate = rental.end_date ? new Date(rental.end_date) : null;
 
-    // >350 profit
+    // >350 profit (uses combined value for multi-item requests)
     if (price > 350) {
-      return { eligible: true, reason: 'High value order (>£350)' };
+      return { eligible: true, reason: `High value order (>£350${rental._multiItemContext ? ' combined' : ''})` };
     }
 
     // 7+ day rental
@@ -466,6 +547,100 @@ export class FollowUpService {
     }
 
     return { eligible: false };
+  }
+
+  /**
+   * Check discount eligibility, enforce one-discount-only rule, and apply if eligible.
+   * Returns the discount info if applied, null otherwise.
+   */
+  async checkAndApplyDiscount(rental: any): Promise<{
+    applied: boolean;
+    reason?: string;
+    percentage?: number;
+  }> {
+    if (!rental) return { applied: false };
+
+    // Check if a discount was already applied (one-discount-only rule)
+    const alreadyApplied = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        input_summary: { contains: 'discount_applied' },
+      },
+    });
+    if (alreadyApplied) {
+      return { applied: false, reason: 'Discount already applied (one per booking)' };
+    }
+
+    // Check eligibility
+    const eligibility = this.checkDiscountEligibility(rental);
+    if (!eligibility.eligible) {
+      return { applied: false };
+    }
+
+    const discountPercentage = 10;
+    const originalPrice = rental.rental_price || 0;
+    const discountedPrice = Math.round(originalPrice * (1 - discountPercentage / 100));
+
+    // Store discount application record (idempotency + tracking)
+    await this.prisma.ai_decision.create({
+      data: {
+        rental_id: rental.id,
+        decision_type: 'analyze',
+        input_summary: `discount_applied: ${eligibility.reason} (${discountPercentage}% off £${originalPrice} = £${discountedPrice})`,
+        output_summary: `Discount applied: ${eligibility.reason}. Original: £${originalPrice}, Discounted: £${discountedPrice}`,
+        confidence: 1.0,
+        action_taken: `10% discount flagged for application. Reason: ${eligibility.reason}`,
+        notified: true,
+      },
+    });
+
+    // Update follow-up state discount flags
+    await this.prisma.follow_up_state.updateMany({
+      where: { rental_id: rental.id },
+      data: {
+        discount_eligible: true,
+      },
+    });
+
+    // Notify Daniel with instructions to apply in Hygglo UI
+    await this.telegramService.sendProactiveMessage(
+      `💰 *Discount Triggered*\n\n` +
+      `├ 📦 ${rental.title}\n` +
+      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+      `├ 📊 Reason: ${eligibility.reason}\n` +
+      `├ 💵 Original: £${originalPrice}\n` +
+      `├ 🏷️ Discounted: £${discountedPrice} (${discountPercentage}% off)\n` +
+      `└ ⚡ Apply via Hygglo Earnings field`,
+    );
+
+    this.logger.log(`Discount triggered for ${rental.title}: ${eligibility.reason} (£${originalPrice} → £${discountedPrice})`);
+
+    return {
+      applied: true,
+      reason: eligibility.reason,
+      percentage: discountPercentage,
+    };
+  }
+
+  /**
+   * Build discount context string for AI prompt enrichment.
+   * Tells the AI whether a discount is eligible/applied so it can inform the renter.
+   */
+  buildDiscountContext(rental: any, discountResult: { applied: boolean; reason?: string; percentage?: number }): string {
+    if (!discountResult.applied) return '';
+
+    const originalPrice = rental.rental_price || 0;
+    const discountedPrice = Math.round(originalPrice * (1 - (discountResult.percentage || 10) / 100));
+
+    return (
+      `\n--- DISCOUNT APPLIED ---\n` +
+      `Reason: ${discountResult.reason}\n` +
+      `Discount: ${discountResult.percentage}% off\n` +
+      `Original price: £${originalPrice}\n` +
+      `Discounted price: £${discountedPrice}\n` +
+      `IMPORTANT: Inform the renter they qualify for a ${discountResult.percentage}% discount (${discountResult.reason}). ` +
+      `Only ONE discount per booking. Do not stack.\n`
+    );
   }
 
   /**
@@ -484,6 +659,91 @@ export class FollowUpService {
       where: { rental_id: rentalId },
       data: updates,
     });
+  }
+
+  /**
+   * Check if delivery T&Cs should be sent for this rental.
+   * Only sends if: this is a delivery order, T&Cs not already sent, renter not yet verified.
+   */
+  async checkDeliveryTCs(state: any, rental: any): Promise<void> {
+    if (!rental) return;
+
+    // Check if this is a delivery order (look for delivery-related ai_decision records)
+    const deliveryDecisions = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        OR: [
+          { input_summary: { contains: 'delivery', mode: 'insensitive' } },
+          { output_summary: { contains: 'delivery', mode: 'insensitive' } },
+          { input_summary: { contains: 'courier', mode: 'insensitive' } },
+        ],
+      },
+    });
+    if (!deliveryDecisions) return; // Not a delivery order
+
+    // Check if T&Cs already sent (idempotency)
+    const alreadySent = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        input_summary: { contains: 'delivery_tcs_sent' },
+      },
+    });
+    if (alreadySent) return;
+
+    // Check verification status — only send if not yet verified
+    const renterLink = await this.prisma.rental_renter_link.findFirst({
+      where: { rental_id: rental.id },
+      select: { renter_profile_id: true },
+    });
+    if (renterLink) {
+      const profile = await this.prisma.renter_profile.findUnique({
+        where: { id: renterLink.renter_profile_id },
+        select: { verification_status: true },
+      });
+      if (profile?.verification_status === 'verified') return; // Already verified, no need
+    }
+
+    // Send delivery T&Cs
+    const tcsMessage =
+      `Just a heads up on how delivery works:\n\n` +
+      `- We use a courier service for deliveries\n` +
+      `- An exact delivery time can't be guaranteed, but we'll give you a window\n` +
+      `- Someone must be available to receive, check, and sign for the equipment\n` +
+      `- Please inspect everything on arrival and let us know of any issues\n` +
+      `- Return delivery is charged separately\n\n` +
+      `Any questions, just ask!`;
+
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    if (!readOnly) {
+      try {
+        await this.hyggloService.sendMessage(rental.listing_id, tcsMessage);
+      } catch (sendErr) {
+        this.logger.warn(`Failed to send delivery T&Cs: ${sendErr.message}`);
+      }
+    }
+
+    // Store marker
+    await this.prisma.ai_decision.create({
+      data: {
+        rental_id: rental.id,
+        decision_type: 'message',
+        input_summary: `delivery_tcs_sent for ${rental.title}`,
+        output_summary: `Delivery T&Cs sent before verification`,
+        confidence: 1.0,
+        action_taken: readOnly ? 'BLOCKED (read-only)' : 'Delivery T&Cs sent',
+        notified: true,
+      },
+    });
+
+    // Notify Daniel
+    await this.telegramService.sendProactiveMessage(
+      `📦 *Delivery T&Cs Sent*\n\n` +
+      `├ 📦 ${rental.title}\n` +
+      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+      `└ Mode: ${readOnly ? 'READ-ONLY (not sent)' : 'SENT'}`,
+    );
+
+    this.logger.log(`Delivery T&Cs sent for ${rental.title}`);
   }
 
   /**

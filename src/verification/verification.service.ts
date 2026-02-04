@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { PlaywrightService } from '../playwright/playwright.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { HyggloService } from '../hygglo/hygglo.service';
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
@@ -21,6 +22,7 @@ export class VerificationService {
     private renterProfileService: RenterProfileService,
     private playwrightService: PlaywrightService,
     @Inject(forwardRef(() => TelegramService)) private telegramService: TelegramService,
+    private hyggloService: HyggloService,
   ) {}
 
   /**
@@ -161,8 +163,26 @@ export class VerificationService {
     const status = await this.checkVerificationStatus(orderId, account, detail);
 
     if (profileId) {
+      // Read previous verification status before updating
+      let previousStatus: string | undefined;
+      try {
+        const profile = await this.renterProfileService.getProfile(profileId);
+        previousStatus = profile?.verification_status;
+      } catch {
+        // Profile may not exist
+      }
+
       if (status.verificationComplete) {
         await this.renterProfileService.updateVerificationStatus(profileId, 'verified');
+
+        // Trigger post-verification auto-send if this is a new transition
+        if (previousStatus && previousStatus !== 'verified') {
+          try {
+            await this.onVerificationTransition(orderId, profileId, account);
+          } catch (transErr) {
+            this.logger.warn(`Post-verification transition failed: ${transErr.message}`);
+          }
+        }
       } else if (status.needsVerification) {
         await this.renterProfileService.updateVerificationStatus(profileId, 'pending');
       }
@@ -320,5 +340,153 @@ export class VerificationService {
 
     this.logger.warn(`On-my-way during verification: ${rental.title} (status: ${profile.verification_status})`);
     return warningMessage;
+  }
+
+  /**
+   * Called when a renter transitions from non-verified to verified.
+   * Sends booking info message and notifies Daniel with final summary.
+   */
+  async onVerificationTransition(
+    orderId: string,
+    profileId: string,
+    account: HyggloAccount,
+  ): Promise<void> {
+    // Find rental by listing_id
+    const rental = await this.prisma.rental.findFirst({
+      where: { listing_id: orderId },
+    });
+    if (!rental) {
+      this.logger.debug(`onVerificationTransition: no rental found for order ${orderId}`);
+      return;
+    }
+
+    // Check if already sent (idempotency via ai_decision marker)
+    const alreadySent = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        input_summary: { contains: 'post_verification_auto_send' },
+      },
+    });
+    if (alreadySent) {
+      this.logger.debug(`Post-verification message already sent for rental ${rental.id}`);
+      return;
+    }
+
+    // Get booking times
+    const bookings = await this.prisma.booking.findMany({
+      where: { rental_id: rental.id },
+      take: 1,
+    });
+    const booking = bookings.length > 0 ? bookings[0] : null;
+
+    const startDate = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'TBC';
+    const endDate = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'TBC';
+    const pickupTime = booking?.pickup_time || 'TBC';
+    const returnTime = booking?.return_time || 'TBC';
+
+    // Build info message
+    const infoMessage =
+      `Great news - your verification is complete and the booking is confirmed!\n\n` +
+      `Here are the details:\n` +
+      `- Dates: ${startDate} to ${endDate}\n` +
+      `- Pickup time: ${pickupTime}\n` +
+      `- Return time: ${returnTime}\n` +
+      `- Location: Trafalgar Square area (exact address sent on the day)\n\n` +
+      `A few things to note:\n` +
+      `- Please bring a valid photo ID for the handover\n` +
+      `- Equipment should be returned in the same condition\n` +
+      `- Please handle all gear with care\n\n` +
+      `Let me know if you have any questions!`;
+
+    // Send via Hygglo
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    if (!readOnly) {
+      try {
+        await this.hyggloService.sendMessage(orderId, infoMessage);
+      } catch (sendErr) {
+        this.logger.warn(`Failed to send post-verification message: ${sendErr.message}`);
+      }
+    }
+
+    // Store ai_decision as idempotency marker
+    await this.prisma.ai_decision.create({
+      data: {
+        rental_id: rental.id,
+        decision_type: 'message',
+        input_summary: `post_verification_auto_send for ${rental.title}`,
+        output_summary: `Sent booking info after verification: ${infoMessage.substring(0, 300)}`,
+        confidence: 1.0,
+        action_taken: readOnly ? 'BLOCKED (read-only)' : 'Post-verification info message sent',
+        notified: true,
+      },
+    });
+
+    // Notify Daniel
+    await this.telegramService.sendProactiveMessage(
+      `✅ *Post-Verification Info Sent*\n\n` +
+      `├ 📦 ${rental.title}\n` +
+      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+      `├ 📅 ${startDate} to ${endDate}\n` +
+      `├ ⏰ Pickup: ${pickupTime}, Return: ${returnTime}\n` +
+      `└ Mode: ${readOnly ? 'READ-ONLY (not sent)' : 'SENT'}`,
+    );
+
+    // Feature 6: If booking times are already confirmed, send final summary to Daniel
+    if (booking?.pickup_time && booking?.return_time) {
+      // Extract renter notes from chat
+      let renterNotes = '';
+      try {
+        const chatMessages = await this.hyggloService.readMessages(orderId);
+        const chatText = chatMessages.map(m => `${m.sender}: ${m.content}`).join('\n');
+        renterNotes = this.extractRenterNotesFromChat(chatText);
+
+        // Store notes in renter profile
+        if (renterNotes && profileId) {
+          await this.renterProfileService.updateProgress(profileId, {
+            rental_progress: renterNotes.substring(0, 1000),
+          });
+        }
+      } catch (notesErr) {
+        this.logger.debug(`Renter notes extraction failed: ${notesErr.message}`);
+      }
+
+      await this.telegramService.sendProactiveMessage(
+        `📋 *Final Booking Summary*\n\n` +
+        `├ 📦 ${rental.title}\n` +
+        `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
+        `├ 📅 ${startDate} to ${endDate}\n` +
+        `├ ⏰ Pickup: ${booking.pickup_time}\n` +
+        `├ ⏰ Drop-off: ${booking.return_time}\n` +
+        (renterNotes ? `├ 📝 Notes: ${renterNotes}\n` : '') +
+        `└ ✅ Verified & times confirmed`,
+      );
+    }
+
+    this.logger.log(`Post-verification transition handled for ${rental.title}`);
+  }
+
+  /**
+   * Extract renter notes from chat text using regex pattern matching.
+   * Looks for project types, accessory requests, timing preferences, care requests.
+   */
+  private extractRenterNotesFromChat(chatText: string): string {
+    const notes: string[] = [];
+
+    const patterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /\b(wedding|music\s+video|short\s+film|feature\s+film|documentary|corporate|commercial|interview|event|production|photo\s*shoot)\b/i, label: 'project' },
+      { pattern: /\b(tripod|case|bag|batteries|memory\s+card|sd\s+card|charger|adapter|lens|filter|monitor|mic|microphone|light|lighting)\b/i, label: 'accessory' },
+      { pattern: /\b(careful|fragile|heavy|delicate|rain|weather|outdoor|travel|abroad|overseas|flight)\b/i, label: 'care' },
+      { pattern: /\b(first\s+time|never\s+used|new\s+to|beginner)\b/i, label: 'experience' },
+      { pattern: /\b(early\s+morning|late\s+evening|overnight|next\s+day|rush|urgent|asap)\b/i, label: 'timing' },
+    ];
+
+    for (const { pattern, label } of patterns) {
+      const match = chatText.match(pattern);
+      if (match) {
+        notes.push(`${label}: ${match[0].trim()}`);
+      }
+    }
+
+    return notes.join(' | ');
   }
 }
