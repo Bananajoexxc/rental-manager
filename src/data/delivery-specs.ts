@@ -316,10 +316,19 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   { item_name: 'PL Mount Adapter Set (E + EF + RF + L)', weight_kg: 0.8, packed_length_cm: 18, packed_width_cm: 16, packed_height_cm: 10, size_score: 1, is_heavy_large: false, courier_note: '4 adapters in pouch, fits in backpack', category: 'bundle' },
 ];
 
-/** Get delivery spec for a specific item */
+/** Get delivery spec for a specific item (exact match, then fuzzy containment) */
 export function getDeliverySpec(itemName: string): DeliverySpec | undefined {
   const lower = itemName.toLowerCase();
-  return DELIVERY_SPECS.find((s) => s.item_name.toLowerCase() === lower);
+  // 1. Exact match
+  const exact = DELIVERY_SPECS.find((s) => s.item_name.toLowerCase() === lower);
+  if (exact) return exact;
+  // 2. Fuzzy: spec name contains item name or vice versa
+  return DELIVERY_SPECS.find(
+    (s) =>
+      s.category !== 'bundle' &&
+      (s.item_name.toLowerCase().includes(lower) ||
+        lower.includes(s.item_name.toLowerCase())),
+  );
 }
 
 /** Format all delivery specs as text for AI context */

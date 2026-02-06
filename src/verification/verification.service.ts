@@ -215,14 +215,6 @@ export class VerificationService {
       `through the app. Once verified, I can accept the booking right away. ` +
       `Let me know if you need any help with it!`;
 
-    // Notify Daniel
-    await this.telegramService.sendProactiveMessage(
-      `🔐 *Verification Guidance Sent*\n\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-      `└ First-time guidance message queued`,
-    );
-
     this.logger.log(`Verification guidance prepared for rental ${rental.title}`);
     return guidanceMessage;
   }
@@ -235,16 +227,24 @@ export class VerificationService {
     rental: any,
     renterProfileId: string,
   ): Promise<string | null> {
-    const attemptCount = await this.renterProfileService.incrementVerificationAttempts(renterProfileId);
-
-    if (attemptCount < 3) {
-      this.logger.debug(`Verification attempt ${attemptCount} for profile ${renterProfileId}, threshold not reached`);
+    // Guard: only increment if the renter profile shows an actual verification failure
+    // (status must be 'failed' or 'pending' with evidence of a failed check).
+    // This prevents the counter from ticking up on every processMessage call.
+    const profile = await this.renterProfileService.getProfile(renterProfileId);
+    if (!profile || (profile.verification_status !== 'failed' && profile.verification_status !== 'pending')) {
       return null;
     }
 
-    // Check if we already sent failure guidance
+    // Check if we already sent failure guidance — skip increment to avoid pointless counter inflation
     const alreadyGuided = await this.renterProfileService.hasBeenSentVerificationFailureGuidance(renterProfileId);
     if (alreadyGuided) {
+      return null;
+    }
+
+    const attemptCount = await this.renterProfileService.incrementVerificationAttempts(renterProfileId);
+
+    if (attemptCount < 2) {
+      this.logger.debug(`Verification attempt ${attemptCount} for profile ${renterProfileId}, threshold not reached`);
       return null;
     }
 
@@ -398,14 +398,11 @@ export class VerificationService {
       `- Please handle all gear with care\n\n` +
       `Let me know if you have any questions!`;
 
-    // Send via Hygglo
-    const readOnly = process.env.READ_ONLY_MODE === 'true';
-    if (!readOnly) {
-      try {
-        await this.hyggloService.sendMessage(orderId, infoMessage);
-      } catch (sendErr) {
-        this.logger.warn(`Failed to send post-verification message: ${sendErr.message}`);
-      }
+    // Send via Hygglo (sendMessage handles READ_ONLY_MODE with per-rental exceptions)
+    try {
+      await this.hyggloService.sendMessage(orderId, infoMessage);
+    } catch (sendErr) {
+      this.logger.warn(`Failed to send post-verification message: ${sendErr.message}`);
     }
 
     // Store ai_decision as idempotency marker
@@ -416,31 +413,17 @@ export class VerificationService {
         input_summary: `post_verification_auto_send for ${rental.title}`,
         output_summary: `Sent booking info after verification: ${infoMessage.substring(0, 300)}`,
         confidence: 1.0,
-        action_taken: readOnly ? 'BLOCKED (read-only)' : 'Post-verification info message sent',
+        action_taken: 'Post-verification info message sent',
         notified: true,
       },
     });
 
-    // Notify Daniel
-    await this.telegramService.sendProactiveMessage(
-      `✅ *Post-Verification Info Sent*\n\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-      `├ 📅 ${startDate} to ${endDate}\n` +
-      `├ ⏰ Pickup: ${pickupTime}, Return: ${returnTime}\n` +
-      `└ Mode: ${readOnly ? 'READ-ONLY (not sent)' : 'SENT'}`,
-    );
-
-    // Feature 6: If booking times are already confirmed, send final summary to Daniel
+    // Extract renter notes from chat if times are confirmed
     if (booking?.pickup_time && booking?.return_time) {
-      // Extract renter notes from chat
-      let renterNotes = '';
       try {
         const chatMessages = await this.hyggloService.readMessages(orderId);
         const chatText = chatMessages.map(m => `${m.sender}: ${m.content}`).join('\n');
-        renterNotes = this.extractRenterNotesFromChat(chatText);
-
-        // Store notes in renter profile
+        const renterNotes = this.extractRenterNotesFromChat(chatText);
         if (renterNotes && profileId) {
           await this.renterProfileService.updateProgress(profileId, {
             rental_progress: renterNotes.substring(0, 1000),
@@ -449,17 +432,6 @@ export class VerificationService {
       } catch (notesErr) {
         this.logger.debug(`Renter notes extraction failed: ${notesErr.message}`);
       }
-
-      await this.telegramService.sendProactiveMessage(
-        `📋 *Final Booking Summary*\n\n` +
-        `├ 📦 ${rental.title}\n` +
-        `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-        `├ 📅 ${startDate} to ${endDate}\n` +
-        `├ ⏰ Pickup: ${booking.pickup_time}\n` +
-        `├ ⏰ Drop-off: ${booking.return_time}\n` +
-        (renterNotes ? `├ 📝 Notes: ${renterNotes}\n` : '') +
-        `└ ✅ Verified & times confirmed`,
-      );
     }
 
     this.logger.log(`Post-verification transition handled for ${rental.title}`);

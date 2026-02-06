@@ -11,14 +11,15 @@ import { CalendarModule } from '../calendar/calendar.module';
 import { DeliveryModule } from '../delivery/delivery.module';
 import { ValidationModule } from '../validation/validation.module';
 import { QualityScorerModule } from '../evaluation/quality-scorer.module';
-import { BundleIntelligenceModule } from '../bundles/bundle-intelligence.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
-import { UpsellModule } from '../upsell/upsell.module';
+import { RecommendationModule } from '../recommendations/recommendation.module';
 import { MonitoringModule } from '../monitoring/monitoring.module';
 import { VisionModule } from '../vision/vision.module';
 import { RenterProfileModule } from '../renter-profile/renter-profile.module';
 import { FollowUpModule } from '../follow-up/follow-up.module';
 import { VerificationModule } from '../verification/verification.module';
+import { RevenueModule } from '../revenue/revenue.module';
+import { MarketModule } from '../market/market.module';
 
 @Module({
   imports: [
@@ -33,14 +34,15 @@ import { VerificationModule } from '../verification/verification.module';
     DeliveryModule,
     ValidationModule,
     QualityScorerModule,
-    BundleIntelligenceModule,
     ConversationStageModule,
-    UpsellModule,
+    RecommendationModule,
     MonitoringModule,
     VisionModule,
     RenterProfileModule,
     FollowUpModule,
     VerificationModule,
+    RevenueModule,
+    MarketModule,
   ],
   providers: [AutonomousService],
   exports: [AutonomousService],

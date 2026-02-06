@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { SentryService } from '../monitoring/sentry.service';
+import { ErrorLogService } from '../monitoring/error-log.service';
 
 // Import Vision API types without strict checking
 const vision = require('@google-cloud/vision');
@@ -23,7 +23,7 @@ export class VisionService {
   private client: any = null;
   private enabled: boolean = false;
 
-  constructor(private sentryService: SentryService) {
+  constructor(private errorLogService: ErrorLogService) {
     // Only initialize if credentials are available
     if (process.env.GOOGLE_CLOUD_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       try {
@@ -85,7 +85,7 @@ export class VisionService {
 
       // Monitor performance
       const duration = Date.now() - startTime;
-      this.sentryService.monitorApiPerformance('google_vision', duration, {
+      this.errorLogService.monitorApiPerformance('google_vision', duration, {
         photo_type: photoType,
         damage_score: damageScore,
         detected_issues_count: damageIndicators.length,
@@ -99,7 +99,7 @@ export class VisionService {
 
       // Alert if significant damage detected
       if (photoType === 'return' && damageScore > 0.5) {
-        this.sentryService.captureMessage('Significant equipment damage detected', 'warning', {
+        this.errorLogService.captureMessage('Significant equipment damage detected', 'warning', {
           damage_score: damageScore,
           detected_issues: damageIndicators,
           photo_type: photoType,
@@ -110,7 +110,7 @@ export class VisionService {
       return result;
     } catch (error: any) {
       this.logger.error(`Vision API error: ${error.message}`, error.stack);
-      this.sentryService.captureError(error, {
+      this.errorLogService.captureError(error, {
         operation: 'vision_analysis',
         photo_type: photoType,
         image_url: imageUrl,

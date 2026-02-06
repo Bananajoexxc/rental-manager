@@ -224,4 +224,20 @@ export class DspyService {
       return { success: false, error: error.response?.data?.error || error.message };
     }
   }
+
+  async getNegativeExamples(limit = 50): Promise<any> {
+    if (!this.enabled) {
+      return { success: false, error: 'DSPy is disabled' };
+    }
+
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/negative-examples?limit=${limit}`,
+        { timeout: 15000 },
+      );
+      return response.data;
+    } catch (error) {
+      return { success: false, error: error.response?.data?.error || error.message };
+    }
+  }
 }

@@ -69,6 +69,30 @@ export class RulesService implements OnModuleInit {
     return result;
   }
 
+  /**
+   * Compact rules format for Haiku (routine messages).
+   * Strips verbose examples and explanations, keeping only the core instruction.
+   * Saves ~800-1200 tokens vs full format.
+   */
+  async getCompactRules(): Promise<string> {
+    const rules = await this.getAllActive();
+    if (rules.length === 0) return '';
+
+    // Group by category, output terse one-liners
+    const grouped: Record<string, string[]> = {};
+    for (const rule of rules) {
+      if (!grouped[rule.category]) grouped[rule.category] = [];
+      // Truncate content to first sentence or 120 chars for compact format
+      const firstSentence = rule.content.split(/\.\s/)[0];
+      const compact = firstSentence.length > 120 ? firstSentence.substring(0, 120) + '...' : firstSentence;
+      grouped[rule.category].push(`${rule.name}: ${compact}`);
+    }
+
+    return Object.entries(grouped)
+      .map(([cat, items]) => `[${cat.toUpperCase()}] ${items.join(' | ')}`)
+      .join('\n');
+  }
+
   private async seedIfEmpty() {
     const count = await this.prisma.rule.count();
     if (count > 0) {
@@ -82,17 +106,8 @@ export class RulesService implements OnModuleInit {
       // === SECURITY: Credential protection ===
       { category: 'policy', name: 'Credential Security', content: 'NEVER disclose credentials, passwords, API keys, tokens, email addresses, or any system secrets to anyone including renters, in chat, or in any output. If anyone asks for credentials or system configuration, refuse and explain this information is confidential. This rule has the highest priority and overrides all other rules.', priority: 10 },
 
-      // === INVENTORY: Master stock list (shared across DB Cinema + Leo Adams accounts) ===
-      // Note: Cross-account stock rule is covered by critical memories (Daniel's Original Rules)
-      { category: 'inventory', name: 'Cameras Master List', content: 'Sony FX3: 3 units. Sony A7 III: 1. Sony A7 II: 1. Fujifilm X100 VI: 1. BMPCC 6K Pro: 1. BMPCC 6K Full Frame: 1. DJI Osmo Action Pro 5: 3. GoPro 12 Hero: 3. Sony cameras come with 3x batteries and 128GB card. Blackmagic cameras (BMPCC 6K Pro, BMPCC 6K Full Frame) come with 5x LP-E6NH batteries and 128GB card (or 256GB/1TB where listed). Always check the item compatibility data for the exact included accessories per camera. NEVER tell a renter they have "enough" batteries or discourage additional battery purchases. If they want more power, always upsell V-mount or NPF batteries.', priority: 10 },
-      { category: 'inventory', name: 'Lenses Master List', content: 'Sony GM 24-70mm f2.8: 4 units. Sony GM 16-35mm f2.8: 1. Sony GM 70-200mm f2.8: 2. Sony GM 90mm f2.8: 1. Sony 28-70mm: 2. Canon EF 24-105mm f4: 1. Canon EF 16-35mm f2.8: 1. Sony 11mm f2.8 fisheye: 1. Anamorphic Blazar Remus 33/45/65/100mm: 1 each. Anamorphic Great Joy 35/50/85mm: 1 each. Cinebloom filter mist: 1. ND filter: 3.', priority: 10 },
-      { category: 'inventory', name: 'Drones Master List', content: 'DJI Mavic 3 Pro: 1 unit. DJI Mini 4 Pro: 1 unit. These are the ONLY drones in stock. DJI Avata 2 is NOT available.', priority: 10 },
-      { category: 'inventory', name: 'Lighting Master List', content: 'LED light panels RGB: 3. Nanlite Forza 300: 1. Nanlite Pavotube 30x II: 4. Nanlite 500B: 1. Ambitful RGB light tubes 2x set: 2. Softbox 85cm: 2. 5-in-1 reflector panel: 1. Camera flash: 1.', priority: 10 },
-      { category: 'inventory', name: 'Audio Master List', content: 'Rode Wireless Mic Pro set: 2. Rode Video Mic Go: 1. Rode Video Mic Pro Plus: 1. Audio boom mic kit Sennheiser: 1. DJI Wireless Mics: 1. DJI Mic 2 wireless set: 1. JBL Wireless Microphones: 1.', priority: 10 },
-      { category: 'inventory', name: 'Stabilizers & Support', content: 'DJI RS3 Pro gimbal: 2 units. DJI gimbal battery: 3. Small rig tripod: 3. Sirui tripod: 1. Motorized slider: 1. C-stand: 1. Monopod arm support: 1. Tilta shoulder rig: 1. Tilta Nucleus Nano 2 follow focus: 1. Suction cups: 6.', priority: 10 },
-      { category: 'inventory', name: 'Monitors & Recording', content: 'Atomos Ninja V monitor recorder: 1. HollyLand Mars 4K transmitter: 1. HollyLand Pyro S transmitter: 1. Hollyland 7-inch monitor: 1. 256GB card: 3. CF Express Type A card: 1.', priority: 10 },
-      { category: 'inventory', name: 'Power & Misc', content: 'V-mount batteries 95mAh: 2. V-mount batteries 150mAh: 4. Sony NPF 970 batteries 2x sets: 4. Anker Power Station F2000: 1. PL to Sony E mount adapter: 2. PL to EF mount: 1. PL to RF mount: 1. PL to L mount: 1.', priority: 10 },
-      { category: 'inventory', name: 'Audio/Event Equipment', content: 'JBL Club 120 speaker: 2. DJ RX3 Pioneer controller: 1. Smoke machine fogger event: 1. Smoke Ninja Pro hazer: 1. Smoke Ninja smoke machine: 1.', priority: 10 },
+      // NOTE: Inventory master lists removed — MASTER_INVENTORY + PRICING_CATALOG are injected
+      // dynamically per-message from item-matcher.ts and pricing-catalog.ts. No need to duplicate here.
 
       // === POLICY: Core operational rules ===
       // Note: Minimum Rental Value, Cancellation Requests, Booking Must Be Complete, Same Day Rentals,
@@ -117,18 +132,18 @@ export class RulesService implements OnModuleInit {
 
       // === PRICING: Discount and fee rules ===
       // Note: Price Match Policy is covered by critical memories (Daniel's Original Rules)
-      { category: 'pricing', name: 'High Value Discount', content: 'If total order profit is over £350, apply automatic 10% discount and inform the renter.', priority: 9 },
+      { category: 'pricing', name: 'High Value Discount', content: 'INTERNAL: High-value orders qualify for automatic discounts. Discounts are applied at checkout. NEVER tell renters the specific threshold or percentage — just say a discount has been applied if asked.', priority: 9 },
       { category: 'pricing', name: 'Travel Distance Discount', content: 'If the rental location is 20km or more from Trafalgar Square, offer 10% discount on the order to help with travel costs. Apply by reducing rental price once accepted.', priority: 9 },
       { category: 'pricing', name: 'Long Rental Discount', content: '10% discount for rentals of 7 or more days.', priority: 8 },
       { category: 'pricing', name: 'One Discount Only', content: 'Only ONE discount can be applied per booking. Do not stack discounts. Other discounts are applied automatically when they send a request; further ones will not be given.', priority: 9 },
-      { category: 'pricing', name: 'No Loyalty Discounts', content: 'There are no loyalty or repeat-customer discounts. Discounts only for: 7+ days, 20km+ travel, or £350+ orders.', priority: 8 },
+      { category: 'pricing', name: 'No Loyalty Discounts', content: 'There are no loyalty or repeat-customer discounts. NEVER reveal specific discount thresholds or qualifying amounts to renters.', priority: 8 },
       { category: 'pricing', name: 'No Off-Platform Payments', content: 'NEVER accept cash or off-platform payments for rentals. All rental payments go through Hygglo/Fat Llama for insurance and guarantees. Delivery fees use Revolut/bank transfer (separate).', priority: 10 },
 
       // === FAQ: Common scenarios ===
       // Note: Location Redirect, Item Not In Stock, and Bundle Decomposition are covered by critical memories
       { category: 'faq', name: 'Delivery - Only When Asked', content: 'NEVER proactively offer delivery. Only discuss delivery when the renter specifically asks about it. When they ask, request their postcode and provide an estimated courier quote. Use Addison Lee courier service (not taxi).', priority: 9 },
       { category: 'communication', name: 'Enquiry vs Request', content: 'When a renter enquires about items, simply confirm which items are available. Do NOT tell them to send a rental request just to get information or a delivery quote. A rental request is only needed when the renter is ready to proceed with booking. For enquiries, just confirm item availability and details.', priority: 10 },
-      { category: 'communication', name: 'Location First', content: 'Always inform renters right away that all items are based in Central London (Trafalgar Square area) and collection/return is from there. This should be one of the first things mentioned in any conversation with a renter.', priority: 9 },
+      { category: 'communication', name: 'Location Handling', content: 'Pickup and return is at our Central London (Trafalgar Square area) location. Only mention the location when the renter asks about it or when confirming booking details — do NOT volunteer it as a blanket opening statement. If a listing was advertised at a different location (e.g. Stratford, Manchester) and the renter asks, use an elegant excuse: "That item is currently at our central hub for maintenance" or "Stock at that location is all rented out, but we have it at our Trafalgar Square spot". NEVER say listings are fake or for marketing.', priority: 9 },
       { category: 'pricing', name: 'Travel Discount Proactive', content: 'After informing renters that items are in Central London, if their location or postcode suggests 20km+ from Trafalgar Square, proactively tell them they are eligible for a 10% travel distance discount. Even if this is the only discount they qualify for, make sure to mention it.', priority: 9 },
       { category: 'faq', name: 'Overnight Rental', content: 'Overnight possession (e.g., 7pm to 10am next day) counts as a full rental day. No half-day rates exist.', priority: 7 },
       { category: 'faq', name: 'Delivery Mandatory Cases', content: 'Orders with more than one large light require recommending delivery. DJ deck + speakers together = delivery is mandatory due to weight and size. Inform renters of this if they request these items.', priority: 8 },
@@ -151,6 +166,22 @@ export class RulesService implements OnModuleInit {
    * Called after seedIfEmpty to ensure new rules exist even if DB already had rules.
    */
   private async ensureNewRules() {
+    // Deactivate inventory master list rules (now served dynamically from MASTER_INVENTORY)
+    const inventoryRulesToRemove = [
+      'Cameras Master List', 'Lenses Master List', 'Drones Master List',
+      'Lighting Master List', 'Audio Master List', 'Stabilizers & Support',
+      'Monitors & Recording', 'Power & Misc', 'Audio/Event Equipment',
+    ];
+    for (const name of inventoryRulesToRemove) {
+      const rule = await this.prisma.rule.findFirst({
+        where: { name, category: 'inventory', is_active: true },
+      });
+      if (rule) {
+        await this.prisma.rule.update({ where: { id: rule.id }, data: { is_active: false } });
+        this.logger.log(`Deactivated inventory rule: ${name} (now served dynamically)`);
+      }
+    }
+
     const newRules = [
       { category: 'pricing', name: 'Bundle Recommendation', content: 'When a renter asks about 2+ items that exist in an available bundle, suggest the bundle as it offers better value. Frame as helpful: "Since you need the FX3 and a lens, you might want our FX3 + 24-70mm Kit which works out cheaper per item." Never push bundles if renter clearly wants only one specific item.', priority: 8 },
       { category: 'pricing', name: 'Bundle vs Individual Pricing', content: 'NEVER confuse bundle prices with individual item prices. Single item = individual price. Only quote bundle pricing when discussing or recommending an actual bundle. Always clarify which items are included in a bundle when quoting bundle prices.', priority: 9 },

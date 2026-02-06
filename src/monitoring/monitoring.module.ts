@@ -1,9 +1,9 @@
 import { Module, Global } from '@nestjs/common';
-import { SentryService } from './sentry.service';
+import { ErrorLogService } from './error-log.service';
 
 @Global()
 @Module({
-  providers: [SentryService],
-  exports: [SentryService],
+  providers: [ErrorLogService],
+  exports: [ErrorLogService],
 })
 export class MonitoringModule {}

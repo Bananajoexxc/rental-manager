@@ -14,6 +14,10 @@ import { MarketModule } from '../market/market.module';
 import { RemindersModule } from '../reminders/reminders.module';
 import { HyggloModule } from '../hygglo/hygglo.module';
 import { ValidationModule } from '../validation/validation.module';
+import { QualityScorerModule } from '../evaluation/quality-scorer.module';
+import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
+import { RecommendationModule } from '../recommendations/recommendation.module';
+import { AutolearnModule } from '../autolearn/autolearn.module';
 
 @Module({
   imports: [
@@ -31,6 +35,10 @@ import { ValidationModule } from '../validation/validation.module';
     forwardRef(() => RemindersModule),
     HyggloModule,
     ValidationModule,
+    QualityScorerModule,
+    ConversationStageModule,
+    RecommendationModule,
+    forwardRef(() => AutolearnModule),
   ],
   providers: [TelegramService],
   exports: [TelegramService],

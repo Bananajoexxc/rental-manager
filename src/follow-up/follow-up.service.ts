@@ -38,7 +38,6 @@ export class FollowUpService {
     await this.prisma.follow_up_state.create({
       data: {
         rental_id: rentalId,
-        last_renter_message_at: new Date(),
         status: 'active',
       },
     });
@@ -112,6 +111,14 @@ export class FollowUpService {
       this.logger.debug(`Delivery T&Cs check failed: ${tcErr.message}`);
     }
 
+    // 1c. Check if time-specific follow-up is needed (separate cadence from general follow-ups)
+    try {
+      const timeFollowUpSent = await this.evaluateTimeFollowUp(state, state.rental);
+      if (timeFollowUpSent) return; // Time follow-up handled this cycle
+    } catch (tfErr) {
+      this.logger.debug(`Time follow-up check failed: ${tfErr.message}`);
+    }
+
     // 2. Paused until: if set and future -> skip
     if (state.paused_until) {
       const pauseEnd = new Date(state.paused_until);
@@ -131,11 +138,25 @@ export class FollowUpService {
       return; // No renter message yet, nothing to follow up on
     }
 
+    // Bot must have sent at least one message before we can follow up
+    // (prevents following up on threads where the first response hasn't been sent yet)
+    if (!state.last_bot_message_at) {
+      return;
+    }
+
     const lastRenterMsgTime = new Date(state.last_renter_message_at);
+    const botMsgTime = new Date(state.last_bot_message_at);
+
+    // Only follow up if the bot has already responded to the renter's last message
+    if (botMsgTime < lastRenterMsgTime) {
+      // Bot hasn't responded to the renter's last message yet — skip follow-up
+      return;
+    }
+
     const hoursSinceRenter = (now.getTime() - lastRenterMsgTime.getTime()) / (1000 * 60 * 60);
 
-    // 4. Less than 1 hour -> skip
-    if (hoursSinceRenter < 1) {
+    // 4. Less than 3 hours -> skip (first follow-up at 3h)
+    if (hoursSinceRenter < 3) {
       return;
     }
 
@@ -143,41 +164,49 @@ export class FollowUpService {
     if (state.last_bot_followup_at) {
       const lastFollowupTime = new Date(state.last_bot_followup_at);
       const hoursSinceFollowup = (now.getTime() - lastFollowupTime.getTime()) / (1000 * 60 * 60);
-      if (hoursSinceFollowup < 1) {
-        return; // Wait at least 1 hour between follow-ups
+
+      // Second follow-up: 10 hours after the first
+      if (state.followup_count === 1 && hoursSinceFollowup < 10) {
+        return;
+      }
+      // Final follow-up: wait for 24h since last renter message
+      if (state.followup_count === 2) {
+        return; // Handled by the 24h check below
       }
     }
 
-    // 6. 1+ hours AND followup_count < 2 -> send follow-up
-    if (hoursSinceRenter >= 1 && state.followup_count < 2) {
-      await this.sendFollowUp(state, state.rental, `inactivity_${state.followup_count + 1}`);
+    // 6. 3+ hours AND followup_count === 0 -> send first follow-up
+    if (hoursSinceRenter >= 3 && state.followup_count === 0) {
+      await this.sendFollowUp(state, state.rental, 'inactivity_1');
       return;
     }
 
-    // 7. 2+ hours AND followup_count >= 2 AND auto_accept_eligible -> trigger auto-accept
-    if (hoursSinceRenter >= 2 && state.followup_count >= 2 && state.auto_accept_eligible) {
+    // 7. followup_count === 1 AND 10h+ since last follow-up -> send second follow-up
+    if (state.followup_count === 1) {
+      await this.sendFollowUp(state, state.rental, 'inactivity_2');
+      return;
+    }
+
+    // 8. 24+ hours AND followup_count === 2 -> final follow-up
+    if (hoursSinceRenter >= 24 && state.followup_count === 2) {
+      await this.sendFollowUp(state, state.rental, 'final_attempt_24h');
+      return;
+    }
+
+    // 9. followup_count >= 3 AND auto_accept_eligible -> trigger auto-accept (2h after final)
+    if (hoursSinceRenter >= 26 && state.followup_count >= 3 && state.auto_accept_eligible) {
       await this.triggerAutoAccept(state, state.rental);
       return;
     }
 
-    // 8. 2+ hours AND followup_count >= 2 AND NOT eligible -> notify Daniel
-    if (hoursSinceRenter >= 2 && state.followup_count >= 2 && !state.auto_accept_eligible) {
-      // Only notify once
+    // 10. followup_count >= 3 AND NOT eligible -> mark as exhausted (no notification)
+    if (hoursSinceRenter >= 26 && state.followup_count >= 3 && !state.auto_accept_eligible) {
       if (!state.auto_accepted) {
-        await this.telegramService.sendProactiveMessage(
-          `⏰ *Follow-Up Exhausted*\n\n` +
-          `├ 📦 ${state.rental?.title || 'Unknown'}\n` +
-          `├ 👤 ${state.rental?.renter_info || 'Unknown'}\n` +
-          `├ ⏱️ Inactive for ${hoursSinceRenter.toFixed(1)}h\n` +
-          `├ 📨 ${state.followup_count} follow-ups sent\n` +
-          `└ ❌ Not auto-accept eligible - needs manual action`,
-        );
-
-        // Mark so we don't keep notifying
         await this.prisma.follow_up_state.update({
           where: { id: state.id },
-          data: { auto_accepted: true }, // Using as "notified" flag
+          data: { auto_accepted: true },
         });
+        this.logger.log(`Follow-ups exhausted for ${state.rental?.title} — no response after ${state.followup_count} attempts`);
       }
     }
   }
@@ -186,40 +215,20 @@ export class FollowUpService {
    * Send a follow-up message with distinct wording.
    */
   async sendFollowUp(state: any, rental: any, reason: string): Promise<void> {
-    const isFirst = state.followup_count === 0;
-    const renterName = rental?.renter_info || 'there';
+    // Deterministic templates — no AI call needed, saves tokens
+    const itemName = rental?.title || 'the rental';
+    const followupNumber = state.followup_count + 1;
+    const followUpMessage = followupNumber === 1
+      ? `Just checking in - let me know if you had any other questions about the ${itemName}!`
+      : followupNumber === 2
+      ? `Still interested in the ${itemName}? Happy to hold it for you if needed.`
+      : `Last check-in on the ${itemName} - no worries if plans changed, just let me know either way!`;
 
-    // Generate follow-up message using AI for natural variety
-    let followUpMessage: string;
-
+    // Send via Hygglo (sendMessage handles READ_ONLY_MODE with per-rental exceptions)
     try {
-      const prompt = isFirst
-        ? `Generate a very brief, friendly follow-up message for a rental inquiry that went quiet for about an hour. ` +
-          `Renter name: ${renterName}. Rental: ${rental?.title || 'equipment rental'}. ` +
-          `Keep it casual, 1-2 sentences max. Don't be pushy. Example tone: "Hey, just checking if you still had any questions about the [item]?" ` +
-          `Do NOT include any greeting like "Hi" at the start. Go straight into the check-in.`
-        : `Generate a brief, gentle second follow-up for a rental inquiry. This is the SECOND follow-up - the renter hasn't responded for 2+ hours. ` +
-          `Renter name: ${renterName}. Rental: ${rental?.title || 'equipment rental'}. ` +
-          `Be slightly more direct but still friendly. Mention you can hold the item if they're interested. 1-2 sentences max. ` +
-          `Do NOT repeat the first follow-up's wording.`;
-
-      const response = await this.aiService.processExtraction(prompt);
-      followUpMessage = response.content.trim().replace(/^["']|["']$/g, '');
-    } catch {
-      // Fallback messages
-      followUpMessage = isFirst
-        ? `Just checking in - let me know if you had any other questions about the ${rental?.title || 'rental'}!`
-        : `Still interested in the ${rental?.title || 'rental'}? Happy to hold it for you if so.`;
-    }
-
-    // Send via Hygglo (gated by READ_ONLY_MODE within sendMessage)
-    const readOnly = process.env.READ_ONLY_MODE === 'true';
-    if (!readOnly) {
-      try {
-        await this.hyggloService.sendMessage(rental.listing_id, followUpMessage);
-      } catch (error) {
-        this.logger.warn(`Failed to send follow-up for ${rental.title}: ${error.message}`);
-      }
+      await this.hyggloService.sendMessage(rental.listing_id, followUpMessage);
+    } catch (error) {
+      this.logger.warn(`Failed to send follow-up for ${rental.title}: ${error.message}`);
     }
 
     // Update state
@@ -231,16 +240,6 @@ export class FollowUpService {
         last_bot_message_at: new Date(),
       },
     });
-
-    // Notify Daniel
-    await this.telegramService.sendProactiveMessage(
-      `📨 *Follow-Up Sent* (${state.followup_count + 1}/2)\n\n` +
-      `├ 📦 ${rental?.title || 'Unknown'}\n` +
-      `├ 👤 ${renterName}\n` +
-      `├ 💬 "${followUpMessage.substring(0, 100)}"\n` +
-      `├ 📝 Reason: ${reason}\n` +
-      `└ Mode: ${readOnly ? 'READ-ONLY (not sent)' : 'SENT'}`,
-    );
 
     this.logger.log(`Follow-up ${state.followup_count + 1} sent for ${rental?.title} (reason: ${reason})`);
   }
@@ -374,22 +373,13 @@ export class FollowUpService {
       const confirmMessage = `Great news - your booking for the ${rental.title} has been confirmed! ` +
         `Looking forward to the rental. Let me know if you have any questions about pickup.`;
 
-      const readOnly = process.env.READ_ONLY_MODE === 'true';
-      if (!readOnly) {
-        try {
-          await this.hyggloService.sendMessage(rental.listing_id, confirmMessage);
-        } catch {
-          // Silent failure - confirmation is best-effort
-        }
+      try {
+        await this.hyggloService.sendMessage(rental.listing_id, confirmMessage);
+      } catch {
+        // Silent failure - confirmation is best-effort
       }
 
-      await this.telegramService.sendProactiveMessage(
-        `✅ *Auto-Accepted*\n\n` +
-        `├ 📦 ${rental.title}\n` +
-        `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-        `├ 🤖 Accepted via Playwright\n` +
-        `└ Confirmation ${readOnly ? 'BLOCKED (read-only)' : 'sent'}`,
-      );
+      this.logger.log(`Auto-accepted: ${rental.title}`);
     } else {
       await this.telegramService.sendProactiveMessage(
         `⚠️ *Auto-Accept Failed*\n\n` +
@@ -603,16 +593,6 @@ export class FollowUpService {
     });
 
     // Notify Daniel with instructions to apply in Hygglo UI
-    await this.telegramService.sendProactiveMessage(
-      `💰 *Discount Triggered*\n\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-      `├ 📊 Reason: ${eligibility.reason}\n` +
-      `├ 💵 Original: £${originalPrice}\n` +
-      `├ 🏷️ Discounted: £${discountedPrice} (${discountPercentage}% off)\n` +
-      `└ ⚡ Apply via Hygglo Earnings field`,
-    );
-
     this.logger.log(`Discount triggered for ${rental.title}: ${eligibility.reason} (£${originalPrice} → £${discountedPrice})`);
 
     return {
@@ -668,6 +648,14 @@ export class FollowUpService {
   async checkDeliveryTCs(state: any, rental: any): Promise<void> {
     if (!rental) return;
 
+    // Stage gate: only send delivery T&Cs after QUALIFIED stage (not at inquiry/interest)
+    const followUpState = await this.prisma.follow_up_state.findUnique({
+      where: { rental_id: rental.id },
+      select: { conversation_stage: true },
+    });
+    const qualifiedStages = ['qualified', 'booking_ready', 'booking_sent', 'awaiting_verification', 'confirmed'];
+    if (!followUpState || !qualifiedStages.includes(followUpState.conversation_stage)) return;
+
     // Check if this is a delivery order (look for delivery-related ai_decision records)
     const deliveryDecisions = await this.prisma.ai_decision.findFirst({
       where: {
@@ -713,13 +701,11 @@ export class FollowUpService {
       `- Return delivery is charged separately\n\n` +
       `Any questions, just ask!`;
 
-    const readOnly = process.env.READ_ONLY_MODE === 'true';
-    if (!readOnly) {
-      try {
-        await this.hyggloService.sendMessage(rental.listing_id, tcsMessage);
-      } catch (sendErr) {
-        this.logger.warn(`Failed to send delivery T&Cs: ${sendErr.message}`);
-      }
+    // sendMessage handles READ_ONLY_MODE with per-rental exceptions
+    try {
+      await this.hyggloService.sendMessage(rental.listing_id, tcsMessage);
+    } catch (sendErr) {
+      this.logger.warn(`Failed to send delivery T&Cs: ${sendErr.message}`);
     }
 
     // Store marker
@@ -730,20 +716,93 @@ export class FollowUpService {
         input_summary: `delivery_tcs_sent for ${rental.title}`,
         output_summary: `Delivery T&Cs sent before verification`,
         confidence: 1.0,
-        action_taken: readOnly ? 'BLOCKED (read-only)' : 'Delivery T&Cs sent',
+        action_taken: 'Delivery T&Cs sent',
         notified: true,
       },
     });
 
-    // Notify Daniel
-    await this.telegramService.sendProactiveMessage(
-      `📦 *Delivery T&Cs Sent*\n\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-      `└ Mode: ${readOnly ? 'READ-ONLY (not sent)' : 'SENT'}`,
-    );
-
     this.logger.log(`Delivery T&Cs sent for ${rental.title}`);
+  }
+
+  /**
+   * Evaluate whether a time-specific follow-up should be sent.
+   * Separate cadence from general follow-ups: 3h → 9h → 18h after time request.
+   * Returns true if a follow-up was sent.
+   */
+  private async evaluateTimeFollowUp(state: any, rental: any): Promise<boolean> {
+    // Gate: must be confirmed stage, time request sent, times still pending, not auto-assigned
+    if (
+      state.conversation_stage !== 'confirmed' ||
+      !state.time_request_sent ||
+      state.times_status !== 'none' ||
+      state.times_auto_assigned ||
+      state.time_followup_count >= 3
+    ) {
+      return false;
+    }
+
+    const now = new Date();
+
+    // Calculate time since time request was sent
+    const requestSentAt = state.time_request_sent_at ? new Date(state.time_request_sent_at) : null;
+    if (!requestSentAt) return false;
+
+    const hoursSinceRequest = (now.getTime() - requestSentAt.getTime()) / (1000 * 60 * 60);
+
+    // Check spacing from last time follow-up
+    const lastTimeFollowup = state.last_time_followup_at ? new Date(state.last_time_followup_at) : null;
+    const hoursSinceLastFollowup = lastTimeFollowup
+      ? (now.getTime() - lastTimeFollowup.getTime()) / (1000 * 60 * 60)
+      : Infinity;
+
+    // Follow-up schedule: 3h, 9h, 18h after request
+    const followupCount = state.time_followup_count || 0;
+    let shouldSend = false;
+
+    if (followupCount === 0 && hoursSinceRequest >= 3) {
+      shouldSend = true;
+    } else if (followupCount === 1 && hoursSinceRequest >= 9 && hoursSinceLastFollowup >= 5) {
+      shouldSend = true;
+    } else if (followupCount === 2 && hoursSinceRequest >= 18 && hoursSinceLastFollowup >= 8) {
+      shouldSend = true;
+    }
+
+    if (!shouldSend) return false;
+
+    await this.sendTimeFollowUp(state, rental, followupCount);
+    return true;
+  }
+
+  /**
+   * Send a time-specific follow-up message. Static templates — no AI calls.
+   */
+  private async sendTimeFollowUp(state: any, rental: any, followupNumber: number): Promise<void> {
+    const itemName = rental?.title || 'the rental';
+
+    const messages = [
+      `Quick reminder — just need pickup and return times (with AM or PM) for the ${itemName}!`,
+      `Still need your exact times for the ${itemName}. Just drop a time with AM or PM and I'll lock it in.`,
+      `Last check on times — if I don't hear back, I'll assign the latest available slot for the ${itemName}. Just let me know if you have a preference!`,
+    ];
+
+    const message = messages[Math.min(followupNumber, messages.length - 1)];
+
+    try {
+      await this.hyggloService.sendMessage(rental.listing_id, message);
+    } catch (error) {
+      this.logger.warn(`Failed to send time follow-up for ${rental?.title}: ${error.message}`);
+    }
+
+    await this.prisma.follow_up_state.update({
+      where: { id: state.id },
+      data: {
+        time_followup_count: { increment: 1 },
+        last_time_followup_at: new Date(),
+        last_bot_message_at: new Date(),
+      },
+    });
+
+    this.logger.log(`Time follow-up ${followupNumber + 1} sent for ${rental?.title}`);
   }
 
   /**
@@ -754,5 +813,47 @@ export class FollowUpService {
       where: { rental_id: rentalId },
       data: { status: 'completed' },
     });
+  }
+
+  /**
+   * Detect if a renter rejected an upsell suggestion and track it.
+   * Call after each renter message to check if the previous bot message
+   * suggested something the renter just declined.
+   */
+  async detectRejection(
+    rentalId: string,
+    renterMessage: string,
+    previousBotMessage: string,
+  ): Promise<void> {
+    const rejectionPatterns = /\b(no thanks|not interested|too expensive|don't need|don't want|not for me|skip that|pass on|nah|just the|only need|only want)\b/i;
+    if (!rejectionPatterns.test(renterMessage)) return;
+
+    // Extract item names from the bot's previous suggestion
+    const { getInventoryItemNames, findBestMatch } = await import('../utils/item-matcher.js');
+    const botWords = previousBotMessage.split(/[\s,.\-!?;:()]+/).filter(w => w.length > 2);
+    const suggestedItems = botWords
+      .map(w => findBestMatch(w, getInventoryItemNames()))
+      .filter(Boolean) as string[];
+
+    if (suggestedItems.length === 0) return;
+
+    // Get current rejected list
+    const state = await this.prisma.follow_up_state.findUnique({
+      where: { rental_id: rentalId },
+      select: { rejected_suggestions: true },
+    });
+    if (!state) return;
+
+    const existing = state.rejected_suggestions ? state.rejected_suggestions.split(',').map(s => s.trim()) : [];
+    const newRejections = suggestedItems.filter(item => !existing.includes(item));
+
+    if (newRejections.length > 0) {
+      const updated = [...existing, ...newRejections].join(', ');
+      await this.prisma.follow_up_state.update({
+        where: { rental_id: rentalId },
+        data: { rejected_suggestions: updated },
+      });
+      this.logger.log(`Tracked rejected suggestions for ${rentalId}: ${newRejections.join(', ')}`);
+    }
   }
 }

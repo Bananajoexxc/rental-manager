@@ -16,7 +16,7 @@ export interface HyggloAccountConfig {
 export interface RentalListing {
   listingId: string;
   title: string;
-  status: 'ongoing' | 'upcoming';
+  status: 'ongoing' | 'upcoming' | 'pending';
   startDate?: Date;
   endDate?: Date;
   renterInfo?: string;
@@ -79,6 +79,8 @@ export class HyggloService implements OnModuleInit {
   private client: AxiosInstance;
   private hasLoggedOrderSample = false;
   private lastMessageCheckTime = new Map<string, number>();
+  private recentlySentMessages = new Map<string, number>(); // content hash → timestamp, to avoid re-processing our own sent messages
+  private readonly SENT_MESSAGE_TTL_MS = 10 * 60 * 1000; // 10 minute window
   private authInFlight = new Map<HyggloAccount, Promise<boolean>>();
 
   constructor(private loggingService: LoggingService) {
@@ -331,6 +333,11 @@ export class HyggloService implements OnModuleInit {
           rentals.push(...upcoming);
         }
 
+        if (status === 'both') {
+          const pending = await this.scanRentalsForAccount(account.name, 'pending');
+          rentals.push(...pending);
+        }
+
         return rentals;
       } catch (error) {
         this.logger.error(`Error scanning account ${account.label}: ${error.message}`);
@@ -358,6 +365,12 @@ export class HyggloService implements OnModuleInit {
         this.lastMessageCheckTime.delete(key);
       }
     }
+    // Also prune sent message tracker
+    for (const [key, timestamp] of this.recentlySentMessages) {
+      if (now - timestamp > this.SENT_MESSAGE_TTL_MS) {
+        this.recentlySentMessages.delete(key);
+      }
+    }
   }
 
   /**
@@ -380,7 +393,7 @@ export class HyggloService implements OnModuleInit {
     return this.scanRentalsForAccount(account, status);
   }
 
-  private async scanRentalsForAccount(accountName: HyggloAccount, status: 'ongoing' | 'upcoming'): Promise<RentalListing[]> {
+  private async scanRentalsForAccount(accountName: HyggloAccount, status: 'ongoing' | 'upcoming' | 'pending'): Promise<RentalListing[]> {
     try {
       const authenticated = await this.ensureAuthenticated(accountName);
       if (!authenticated) {
@@ -394,7 +407,7 @@ export class HyggloService implements OnModuleInit {
 
       // Map our status to API filter parameter
       // API accepts: 'pending' | 'future' | 'current' | 'completed' | 'obsolete' for role=owner
-      const filter = status === 'ongoing' ? 'current' : 'future';
+      const filter = status === 'ongoing' ? 'current' : status === 'pending' ? 'pending' : 'future';
 
       const response = await this.client.get('/v4/my/orders', {
         params: {
@@ -469,7 +482,7 @@ export class HyggloService implements OnModuleInit {
     return enriched;
   }
 
-  private mapOrdersToRentalListings(orders: any[], status: 'ongoing' | 'upcoming', account: HyggloAccount): RentalListing[] {
+  private mapOrdersToRentalListings(orders: any[], status: 'ongoing' | 'upcoming' | 'pending', account: HyggloAccount): RentalListing[] {
     return orders.map((order) => {
       const labels = order.labels || {};
       const detail = order._detail || {};
@@ -521,6 +534,11 @@ export class HyggloService implements OnModuleInit {
         endDate = new Date(detail.rentalPeriod.endDateUTC);
       }
 
+      // Hygglo models 1-day rentals as start == end. Normalize to start + 1 day.
+      if (startDate && endDate && startDate.getTime() === endDate.getTime()) {
+        endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+      }
+
       // Fallback: parse dates from labels.duration.compact (e.g., "31 Dec-1 Jan", "30-31 Jan", "29 Jan")
       if (!startDate || !endDate) {
         const parsed = this.parseDurationLabel(labels.duration?.compact || labels.duration?.full || '');
@@ -564,6 +582,60 @@ export class HyggloService implements OnModuleInit {
         _detail: detail,
       };
     });
+  }
+
+  /**
+   * Parse Hygglo's createdAtLabel format (e.g. "4 Feb, 18:35", "4 Feb", "Yesterday, 14:00")
+   * into a proper Date object.
+   */
+  private parseCreatedAtLabel(label: string): Date | null {
+    if (!label) return null;
+
+    const months: Record<string, number> = {
+      Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+      Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+    };
+
+    // Format: "4 Feb, 18:35" or "4 Feb"
+    const match = label.match(/^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(?:,?\s+(\d{1,2}):(\d{2}))?/);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const month = months[match[2]];
+      const now = new Date();
+      const year = now.getFullYear();
+      const hours = match[3] ? parseInt(match[3], 10) : 0;
+      const minutes = match[4] ? parseInt(match[4], 10) : 0;
+
+      const date = new Date(year, month, day, hours, minutes);
+      // If the date is in the future by more than a day, it was probably last year
+      if (date.getTime() > now.getTime() + 24 * 60 * 60 * 1000) {
+        date.setFullYear(year - 1);
+      }
+      return date;
+    }
+
+    // Format: "Yesterday, 14:00"
+    if (label.toLowerCase().startsWith('yesterday')) {
+      const timeMatch = label.match(/(\d{1,2}):(\d{2})/);
+      const now = new Date();
+      now.setDate(now.getDate() - 1);
+      if (timeMatch) {
+        now.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), 0, 0);
+      }
+      return now;
+    }
+
+    // Format: "Today, 14:00"
+    if (label.toLowerCase().startsWith('today')) {
+      const timeMatch = label.match(/(\d{1,2}):(\d{2})/);
+      const now = new Date();
+      if (timeMatch) {
+        now.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), 0, 0);
+      }
+      return now;
+    }
+
+    return null;
   }
 
   /**
@@ -812,6 +884,9 @@ export class HyggloService implements OnModuleInit {
 
   async readMessages(orderId: string): Promise<{ sender: string; content: string; timestamp: string }[]> {
     // Fetch order detail which contains activities (chat messages)
+    // Try all accounts and prefer the owner perspective for correct sender labeling
+    let fallbackResult: { detail: any; account: string } | null = null;
+
     for (const account of this.accounts) {
       const authenticated = await this.ensureAuthenticated(account.name);
       if (!authenticated) continue;
@@ -826,24 +901,15 @@ export class HyggloService implements OnModuleInit {
         } as any);
 
         const detail = response.data;
-        const activities: any[] = detail.activities || [];
 
-        // Extract chat messages from activities
-        const chatMessages = activities
-          .filter((a: any) => a.chatMessage?.text?.content)
-          .map((a: any) => {
-            const renterName = detail.users?.otherPart?.name || detail.labels?.otherPart || 'Renter';
-            const ownerName = 'Owner';
-            return {
-              sender: a.chatMessage.byMe ? ownerName : renterName,
-              content: a.chatMessage.text.content,
-              timestamp: a.createdAtLabel || new Date().toISOString(),
-            };
-          });
+        if (detail.role === 'owner') {
+          // Preferred: reading as owner gives us the correct perspective
+          return this.extractChatMessages(detail, account.name, true);
+        }
 
-        if (chatMessages.length > 0) {
-          this.logger.log(`readMessages(${orderId}) found ${chatMessages.length} chat messages from order detail for ${account.name}`);
-          return chatMessages;
+        // Store as fallback in case no owner account can access this order
+        if (!fallbackResult) {
+          fallbackResult = { detail, account: account.name };
         }
       } catch (error) {
         const status = error instanceof AxiosError ? error.response?.status : 'unknown';
@@ -851,19 +917,104 @@ export class HyggloService implements OnModuleInit {
       }
     }
 
+    // Use fallback (non-owner perspective) if no owner account found
+    if (fallbackResult) {
+      return this.extractChatMessages(fallbackResult.detail, fallbackResult.account, false);
+    }
+
     this.logger.debug(`readMessages(${orderId}) — no messages found`);
     return [];
   }
 
+  private extractChatMessages(detail: any, accountName: string, isOwnerPerspective: boolean): { sender: string; content: string; timestamp: string }[] {
+    const activities: any[] = detail.activities || [];
+    const otherPartName = detail.users?.otherPart?.name || detail.labels?.otherPart || 'Renter';
+
+    const chatMessages = activities
+      .filter((a: any) => a.chatMessage?.text?.content)
+      .map((a: any) => {
+        // Always label from the OWNER's perspective:
+        // "Owner" = the listing owner, renterName = the person renting
+        let sender: string;
+        if (isOwnerPerspective) {
+          sender = a.chatMessage.byMe ? 'Owner' : otherPartName;
+        } else {
+          // Viewing as renter: byMe=true means renter sent it, byMe=false means owner sent it
+          sender = a.chatMessage.byMe ? otherPartName : 'Owner';
+        }
+
+        let timestamp = new Date().toISOString();
+        if (a.createdAtLabel) {
+          const parsed = this.parseCreatedAtLabel(a.createdAtLabel);
+          if (parsed) timestamp = parsed.toISOString();
+        }
+
+        return { sender, content: a.chatMessage.text.content, timestamp };
+      });
+
+    if (chatMessages.length > 0) {
+      this.logger.log(`readMessages(${detail.id}) found ${chatMessages.length} chat messages from order detail for ${accountName} (role: ${isOwnerPerspective ? 'owner' : 'customer'})`);
+    }
+    return chatMessages;
+  }
+
+  private isWriteEnabledRental(rentalId: string): boolean {
+    const allowed = process.env.WRITE_ENABLED_RENTALS || '';
+    if (!allowed) return false;
+    return allowed.split(',').map(s => s.trim()).includes(rentalId);
+  }
+
   async sendMessage(rentalId: string, message: string): Promise<boolean> {
     const readOnly = process.env.READ_ONLY_MODE === 'true';
-    if (readOnly) {
+    const writeEnabled = this.isWriteEnabledRental(rentalId);
+
+    if (readOnly && !writeEnabled) {
       this.logger.warn(`BLOCKED [READ_ONLY_MODE] sendMessage on rental ${rentalId}: "${message.substring(0, 80)}..."`);
       return false;
     }
 
-    this.logger.log(`sendMessage(${rentalId}) -- stub: messaging endpoints not yet mapped. Would send: "${message.substring(0, 80)}..."`);
-    this.loggingService.info('sendMessage stub called', { rentalId, messageLength: message.length });
+    // Send message via PATCH /v4/my/orders/{id}?timezone=Europe/London
+    // Filter accounts: respect SEND_ENABLED_ACCOUNTS if set (comma-separated account names)
+    const sendEnabledRaw = process.env.SEND_ENABLED_ACCOUNTS || '';
+    const sendEnabledAccounts = sendEnabledRaw ? sendEnabledRaw.split(',').map(s => s.trim().toLowerCase()) : null;
+
+    for (const account of this.accounts) {
+      // Skip accounts not in the send-enabled list (if configured)
+      if (sendEnabledAccounts && !sendEnabledAccounts.includes(account.name)) {
+        this.logger.debug(`sendMessage: skipping ${account.name} — not in SEND_ENABLED_ACCOUNTS`);
+        continue;
+      }
+
+      const authenticated = await this.ensureAuthenticated(account.name);
+      if (!authenticated) continue;
+
+      const token = this.tokens.get(account.name)!;
+
+      try {
+        const response = await this.client.patch(
+          `/v4/my/orders/${rentalId}`,
+          { action: 'chat', data: { message } },
+          {
+            params: { timezone: 'Europe/London' },
+            headers: { 'Authorization': `Bearer ${token.accessToken}` },
+            __account: account.name,
+          } as any,
+        );
+
+        if (response.status === 200) {
+          this.logger.log(`sendMessage(${rentalId}) sent via ${account.name}: "${message.substring(0, 80)}..."`);
+          this.loggingService.info('Message sent', { rentalId, account: account.name, messageLength: message.length });
+          // Track this message so the scanner won't re-process it as a new renter message
+          this.recentlySentMessages.set(`${rentalId}:${message}`, Date.now());
+          return true;
+        }
+      } catch (error) {
+        const status = error instanceof AxiosError ? error.response?.status : 'unknown';
+        this.logger.debug(`sendMessage for ${rentalId} failed on ${account.name}: ${status}`);
+      }
+    }
+
+    this.logger.warn(`sendMessage(${rentalId}) failed on all accounts`);
     return false;
   }
 
@@ -874,26 +1025,46 @@ export class HyggloService implements OnModuleInit {
     try {
       const allRentals = await this.scanAllAccounts('both');
 
+      // Deduplicate: same listing can appear from multiple account scans
+      const processedListingIds = new Set<string>();
+
       for (const rental of allRentals) {
+        // Skip if we already processed this listing in this scan cycle
+        if (processedListingIds.has(rental.listingId)) continue;
+        processedListingIds.add(rental.listingId);
+
         try {
           const messages = await this.readMessages(rental.listingId);
           if (messages.length === 0) continue;
 
           let lastCheckTime = this.lastMessageCheckTime.get(rental.listingId);
 
-          // On first check after startup, only treat messages from the last 5 minutes as "new"
+          // On first check after startup, only treat messages from a recent window as "new"
           // to avoid re-processing the entire chat history on every restart
           if (lastCheckTime === undefined) {
-            const STARTUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+            const isWriteEnabled = this.isWriteEnabledRental(rental.listingId);
+            // Write-enabled rentals get a 24-hour lookback so we don't miss messages
+            // that arrived before restart; all others get a conservative 5-minute window
+            const STARTUP_WINDOW_MS = isWriteEnabled ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000;
             lastCheckTime = Date.now() - STARTUP_WINDOW_MS;
-            this.logger.debug(`First message check for ${rental.listingId}, using startup window (last 5 min)`);
+            this.logger.debug(`First message check for ${rental.listingId}, using startup window (${isWriteEnabled ? '24h — write-enabled' : '5 min'})`);
           }
 
           for (const msg of messages) {
             const msgTime = new Date(msg.timestamp).getTime();
-            const isNew = msgTime > lastCheckTime;
+            const isNew = !isNaN(msgTime) && msgTime > lastCheckTime;
 
-            if (isNew) {
+            // Only process messages from the renter, not from ourselves (Owner)
+            // Also skip messages whose content matches something we recently sent
+            // (prevents re-processing bot responses picked up from another account perspective)
+            if (isNew && msg.sender !== 'Owner') {
+              const sentKey = `${rental.listingId}:${msg.content}`;
+              const sentAt = this.recentlySentMessages.get(sentKey);
+              if (sentAt && Date.now() - sentAt < this.SENT_MESSAGE_TTL_MS) {
+                this.logger.debug(`Skipping own sent message for ${rental.listingId}: "${msg.content.substring(0, 50)}..."`);
+                continue;
+              }
+
               allNewMessages.push({
                 rentalId: rental.listingId,
                 sender: msg.sender,

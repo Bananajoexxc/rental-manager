@@ -2,29 +2,6 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import * as Sentry from '@sentry/nestjs';
-import { nodeProfilingIntegration } from '@sentry/profiling-node';
-
-// Initialize Sentry BEFORE any other code
-if (process.env.SENTRY_DSN) {
-  Sentry.init({
-    dsn: process.env.SENTRY_DSN,
-    environment: process.env.NODE_ENV || 'production',
-    tracesSampleRate: 0.1, // 10% performance monitoring to reduce overhead
-    profilesSampleRate: 0.1, // 10% profiling
-    integrations: [
-      nodeProfilingIntegration(),
-    ],
-    beforeSend(event, hint) {
-      // Add custom context
-      if (event.exception) {
-        const logger = new Logger('Sentry');
-        logger.error(`Error captured: ${event.exception.values?.[0]?.type}`);
-      }
-      return event;
-    },
-  });
-}
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');

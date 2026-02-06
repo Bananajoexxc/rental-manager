@@ -171,6 +171,92 @@ export class RevenueService {
     return lines.join('\n');
   }
 
+  /**
+   * Track a revenue metric event for the autolearn engine.
+   */
+  async trackRevenueMetric(data: {
+    rentalId?: string;
+    metricType: 'booking_revenue' | 'upsell_revenue' | 'discount_applied' | 'delivery_fee' | 'platform_fee';
+    amount: number;
+    account?: string;
+    metadata?: Record<string, any>;
+    periodStart?: Date;
+    periodEnd?: Date;
+  }): Promise<void> {
+    await this.prisma.revenue_metric.create({
+      data: {
+        rental_id: data.rentalId,
+        metric_type: data.metricType,
+        amount: data.amount,
+        account: data.account,
+        metadata: data.metadata || undefined,
+        period_start: data.periodStart,
+        period_end: data.periodEnd,
+      },
+    });
+  }
+
+  /**
+   * Get revenue metrics summary for the autolearn engine.
+   * Returns aggregated data by metric type for a given period.
+   */
+  async getRevenueMetrics(days: number = 30): Promise<{
+    totalBookingRevenue: number;
+    totalUpsellRevenue: number;
+    totalDiscountsApplied: number;
+    totalDeliveryFees: number;
+    totalPlatformFees: number;
+    metricCount: number;
+    byAccount: Record<string, number>;
+  }> {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const metrics = await this.prisma.revenue_metric.findMany({
+      where: { created_at: { gte: since } },
+    });
+
+    const byType: Record<string, number> = {};
+    const byAccount: Record<string, number> = {};
+
+    for (const m of metrics) {
+      byType[m.metric_type] = (byType[m.metric_type] || 0) + m.amount;
+      if (m.account) {
+        byAccount[m.account] = (byAccount[m.account] || 0) + m.amount;
+      }
+    }
+
+    return {
+      totalBookingRevenue: Math.round((byType['booking_revenue'] || 0) * 100) / 100,
+      totalUpsellRevenue: Math.round((byType['upsell_revenue'] || 0) * 100) / 100,
+      totalDiscountsApplied: Math.round((byType['discount_applied'] || 0) * 100) / 100,
+      totalDeliveryFees: Math.round((byType['delivery_fee'] || 0) * 100) / 100,
+      totalPlatformFees: Math.round((byType['platform_fee'] || 0) * 100) / 100,
+      metricCount: metrics.length,
+      byAccount,
+    };
+  }
+
+  /**
+   * Format revenue metrics for the autolearn feedback summary.
+   */
+  async getFormattedRevenueMetrics(days: number = 30): Promise<string> {
+    const metrics = await this.getRevenueMetrics(days);
+    const lines: string[] = [`Revenue Metrics (last ${days} days):`];
+    lines.push(`Booking revenue: £${metrics.totalBookingRevenue}`);
+    lines.push(`Upsell revenue: £${metrics.totalUpsellRevenue}`);
+    lines.push(`Discounts applied: -£${metrics.totalDiscountsApplied}`);
+    lines.push(`Delivery fees: £${metrics.totalDeliveryFees}`);
+    lines.push(`Platform fees: -£${metrics.totalPlatformFees}`);
+    if (Object.keys(metrics.byAccount).length > 0) {
+      lines.push('\nBy Account:');
+      for (const [acc, total] of Object.entries(metrics.byAccount)) {
+        lines.push(`  ${acc}: £${Math.round(total * 100) / 100}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
   private getPeriodStart(period: 'week' | 'month' | 'all'): Date | null {
     if (period === 'all') return null;
     const d = new Date();

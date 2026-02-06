@@ -10,6 +10,7 @@ import { MemoryService } from './memory/memory.service';
 import { CalendarService } from './calendar/calendar.service';
 import { BlacklistService } from './blacklist/blacklist.service';
 import { PrismaService } from './prisma/prisma.service';
+import { TelegramService } from './telegram/telegram.service';
 
 @ApiTags('Health')
 @Controller()
@@ -22,7 +23,11 @@ export class AppController {
     private readonly calendarService: CalendarService,
     private readonly blacklistService: BlacklistService,
     private readonly prisma: PrismaService,
+    private readonly telegramService: TelegramService,
   ) {}
+
+  // In-memory session store for renter chat testing
+  private renterChatSessions = new Map<string, { role: 'user' | 'assistant'; content: string }[]>();
 
   @Get()
   @ApiOperation({
@@ -324,7 +329,7 @@ export class AppController {
         }
       } catch { /* availability lookup optional */ }
 
-      const response = await this.aiService.processComplex(userMessage, {
+      const response = await this.aiService.processRoutine(userMessage, {
         rules,
         memories,
         conversationHistory: history,
@@ -346,6 +351,43 @@ export class AppController {
     }
   }
 
+  @Post('api/renter-chat')
+  @ApiTags('Testing')
+  @ApiOperation({ summary: 'Test renter-facing conversation engine' })
+  async renterChatMessage(@Body() body: { message: string; account?: string; sessionId?: string }) {
+    const userMessage = body.message;
+    if (!userMessage || typeof userMessage !== 'string') {
+      return { error: 'Message is required' };
+    }
+
+    const sessionId = body.sessionId || 'test-default';
+    const account = (body.account || 'dbcinema') as 'dbcinema' | 'leo';
+
+    if (!this.renterChatSessions.has(sessionId)) {
+      this.renterChatSessions.set(sessionId, []);
+    }
+    const history = this.renterChatSessions.get(sessionId)!;
+
+    try {
+      const result = await (this.telegramService as any).processRenterConversation(userMessage, account, history);
+      if (!result) {
+        return { reply: '(no response)', model: 'unknown', quality: '' };
+      }
+      return { reply: result.rawContent, quality: result.qualityInfo, model: 'adaptive' };
+    } catch (error) {
+      return { error: `Renter chat error: ${error.message}` };
+    }
+  }
+
+  @Post('api/renter-chat/reset')
+  @ApiTags('Testing')
+  @ApiOperation({ summary: 'Reset renter chat session' })
+  async resetRenterChat(@Body() body: { sessionId?: string }) {
+    const sessionId = body.sessionId || 'test-default';
+    this.renterChatSessions.delete(sessionId);
+    return { status: 'session reset', sessionId };
+  }
+
   @Get('dashboard')
   @ApiExcludeEndpoint()
   @Header('Content-Type', 'text/html')
@@ -354,4 +396,5 @@ export class AppController {
     const html = fs.readFileSync(htmlPath, 'utf-8');
     res.send(html);
   }
+
 }

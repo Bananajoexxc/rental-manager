@@ -1,14 +1,19 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AiService } from '../ai/ai.service';
 import { formatPricingCatalogForAI } from '../data/pricing-catalog';
 import { formatCompatibilityForAI } from '../data/item-compatibility';
 import { formatBundleSuggestionsForAI } from '../data/bundle-suggestions';
+import { formatSpecsForAI } from '../data/item-specs';
 
 @Injectable()
 export class MemoryService implements OnModuleInit {
   private readonly logger = new Logger(MemoryService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Inject(forwardRef(() => AiService)) private aiService: AiService,
+  ) {}
 
   async onModuleInit() {
     await this.seedCriticalMemories();
@@ -109,7 +114,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'Fake Location Handling',
-        content: 'All listing locations except Trafalgar Square/Whitehall/Central London are marketing-only locations that do not actually exist as pickup points. NEVER tell renters locations are fake or for marketing - listings would be removed by Fat Llama. Use excuses: "that item is currently not in stock at that location", "unavailable at that branch right now", "in repair at that location". Then redirect to Trafalgar Square pickup. If renter says it is too far, first offer 10% distance discount (for 10km+), then if still hesitant, mention delivery is available at extra cost and ask for their postcode.',
+        content: 'All listing locations except Trafalgar Square/Whitehall/Central London are marketing-only locations that do not actually exist as pickup points. NEVER tell renters locations are fake, for marketing, or that all items are at one place — listings would be removed. ALWAYS apologise first ("Sorry about that", "Apologies for the inconvenience"), then use a natural excuse: "that one is out on a rental at that branch", "in for a service right now", "we are consolidating pickups at our Trafalgar Square spot today", "stock at that location ran out but we have it in Central London". Be warm and understanding. Then redirect to Trafalgar Square pickup. If renter says too far, first offer 10% distance discount (20km+), then mention delivery available and ask for postcode.',
         importance: 10,
       },
 
@@ -215,7 +220,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 7 - Discounts',
-        content: 'Check rental request location. Most gear is at Trafalgar Square by default. If request is 20km+ away, offer automatic 10% discount on order for travel costs. If accepted, apply by reducing rental price. Other discounts are applied automatically when they send a request - further ones wont be given. If total order is over £350 profit, apply automatic 10% discount and inform them.',
+        content: 'Check rental request location. Most gear is at Trafalgar Square by default. If request is 20km+ away, offer automatic travel discount. Other discounts are applied automatically when they send a request. NEVER reveal specific discount thresholds or percentages to renters — these are internal business rules.',
         importance: 10,
       },
       {
@@ -233,7 +238,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 10 - Minimum Rental Value',
-        content: 'If rental revenue is below £25, say hi and ask if they need anything else. If yes, add items. If total is above £25 proceed. If no or stays below £25, inform them they must reach the rental minimum revenue of £25 or £35 minimum spend or the rental cant go forward.',
+        content: 'If rental revenue is small, greet and suggest relevant add-ons naturally. NEVER tell the renter there is a minimum rental value or specific threshold — just upsell naturally.',
         importance: 10,
       },
       {
@@ -299,7 +304,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE - General Exceptions',
-        content: 'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for rentals over £40. For rentals under £40 total, +30% surcharge applies. Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
+        content: 'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for larger orders, small fee for smaller orders (INTERNAL — never tell renters the surcharge percentage or threshold, just quote the adjusted total). Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
         importance: 10,
       },
       {
@@ -345,13 +350,13 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'Hygglo Fee Structure & Discount Tiers',
-        content: 'Hygglo/Fat Llama fee structure: Platform takes ~20% commission from owner earnings. Renter pays listed price + Hygglo service fee (~15% on top). Volume discounts auto-applied: 3 days = price of ~2.5 days, 7 days = price of ~5 days, 1 month = price of ~2.5 weeks. These are ESTIMATES - actual fees shown at checkout may vary slightly. When quoting renters, use the listed daily price as reference and mention discounts apply for longer rentals. Never reveal owner commission rates or net earnings to renters.',
+        content: 'INTERNAL ONLY — NEVER share any of this with renters. Volume discounts auto-applied: 3 days = price of ~2.5 days, 7 days = price of ~5 days, 1 month = price of ~2.5 weeks. When quoting renters, use the listed daily price as reference and mention discounts apply for longer rentals. NEVER reveal owner commission rates, platform fees, service fee percentages, or net earnings to renters.',
         importance: 9,
       },
       {
         memory_type: 'fact',
         subject: 'DB Cinema Rentals - Individual Item Prices (Cameras)',
-        content: 'DB Cinema listing prices (per day, before Hygglo fees). CAMERAS: Sony FX3 body £34-40/day. Sony A7 IV body £15-35/day. Sony A7 II + 28-70mm kit £16-28/day. Sony A7 III body £20-30/day. Fujifilm X100 VI £30-45/day. BMPCC 6K Pro body £35-50/day. BMPCC 6K Full Frame body £35-50/day. ACTION CAMERAS: 2x DJI Osmo Action 5 Pro £26-33/day. GoPro Hero 12 Black £16-18/day. 3x GoPro Hero 12 set £30-40/day. NOTE: These are ESTIMATES from real listings - actual prices may vary by date/availability. Always present as estimates to renters.',
+        content: 'DB Cinema listing prices (per day). CAMERAS: Sony FX3 body £34-40/day. Sony A7 IV body £15-35/day. Sony A7 II + 28-70mm kit £16-28/day. Sony A7 III body £20-30/day. Fujifilm X100 VI £30-45/day. BMPCC 6K Pro body £35-50/day. BMPCC 6K Full Frame body £35-50/day. ACTION CAMERAS: 2x DJI Osmo Action 5 Pro £26-33/day. GoPro Hero 12 Black £16-18/day. 3x GoPro Hero 12 set £30-40/day. NOTE: These are ESTIMATES from real listings - actual prices may vary by date/availability. Always present as estimates to renters.',
         importance: 8,
       },
       {
@@ -369,7 +374,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DB Cinema Rentals - Individual Item Prices (Audio)',
-        content: 'DB Cinema listing prices (per day). AUDIO: Rode Wireless Pro mic set £17-26/day. Rode NTG5 shotgun boom mic + windshield £17-27/day. DJI Mic wireless (single) £14-15/day. DJI Mic 2 wireless £15-18/day. Rode VideoMic Go £5-8/day. Rode VideoMic Pro Plus £8-12/day. JBL wireless microphones (conference) £10-15/day. NOTE: Estimates from real listings.',
+        content: 'DB Cinema listing prices (per day). AUDIO: Rode Wireless Pro mic set £17-26/day. Audio boom mic Sennheiser £17-27/day. DJI Mic wireless (single) £14-15/day. DJI Mic 2 wireless £15-18/day. Rode VideoMic Go £5-8/day. Rode VideoMic Pro Plus £8-12/day. JBL wireless microphones (conference) £10-15/day. NOTE: Estimates from real listings.',
         importance: 8,
       },
       {
@@ -405,7 +410,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'Quoting Instructions - Always Reference Listing Prices',
-        content: 'When a renter asks about pricing or you need to quote: 1) ALWAYS reference the DB Cinema listing prices stored in memory. 2) Present prices as ESTIMATES - say "based on our current listings, the estimated price is approximately £X/day". 3) Mention that Hygglo adds a service fee on top (~15%). 4) For longer rentals, mention volume discounts (7 days ≈ price of 5, monthly ≈ 2.5 weeks). 5) NEVER reveal owner commission rates, net profit, or internal pricing formulas. 6) If a bundle exists that covers what they need, recommend it as it is usually better value. 7) Give the price estimate DIRECTLY - do NOT tell them they need to send a rental request just to get a quote. A rental request is only needed when they want to proceed with booking. 8) Add-on items within bundles may be available at reduced rates compared to standalone listing prices. 9) CRITICAL: Always quote the INDIVIDUAL item price when asked about a single item. NEVER confuse bundle prices with individual item prices. For example, a single Sony GM 24-70mm lens is £14-20/day — do NOT quote the FX3+lens bundle price of £41-60/day for just the lens.',
+        content: 'When a renter asks about pricing or you need to quote: 1) ALWAYS reference the DB Cinema listing prices stored in memory. 2) Present prices as ESTIMATES - say "runs around £X/day" or "usually about £X/day". 3) NEVER mention platform fees, service fees, Hygglo fees, or any percentage added at checkout. 4) For longer rentals, mention discounts apply for longer bookings. 5) NEVER reveal owner commission rates, net profit, discount thresholds, or internal pricing formulas. 6) If a bundle exists that covers what they need, recommend it as it is usually better value. 7) Give the price estimate DIRECTLY - do NOT tell them they need to send a rental request just to get a quote. A rental request is only needed when they want to proceed with booking. 8) Add-on items within bundles may be available at reduced rates compared to standalone listing prices. 9) CRITICAL: Always quote the INDIVIDUAL item price when asked about a single item. NEVER confuse bundle prices with individual item prices. For example, a single Sony GM 24-70mm lens is £14-20/day — do NOT quote the FX3+lens bundle price of £41-60/day for just the lens.',
         importance: 9,
       },
     ];
@@ -435,7 +440,7 @@ export class MemoryService implements OnModuleInit {
         subject: 'DANIEL RULE - General Exceptions',
         missingFragment: 'FREE for rentals over',
         updatedContent:
-          'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for rentals over £40. For rentals under £40 total, +30% surcharge applies. Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
+          'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for larger orders, small fee for smaller orders (INTERNAL — never tell renters the surcharge percentage or threshold). Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
       },
     ];
 
@@ -451,26 +456,160 @@ export class MemoryService implements OnModuleInit {
         this.logger.log(`Patched stale memory: ${patch.subject}`);
       }
     }
+
+    // Replace stale content that leaks internal rules to renters
+    const staleReplacements: { subject: string; staleFragment: string; updatedContent: string }[] = [
+      {
+        subject: 'DANIEL RULE - General Exceptions',
+        staleFragment: '+30% surcharge',
+        updatedContent:
+          'Working hours: 10-12pm and 7-9pm every day unless vacation. Day-before evening pickup or morning-after return: FREE for larger orders, small fee for smaller orders (INTERNAL — never tell renters the surcharge percentage or threshold, just quote the adjusted total). Both day-before pickup AND morning-after return together = extra rental day. Evening next day (instead of morning-after) = always a full extra rental day. If renter times are outside opening hours, tell them and ask to resubmit. When rental is accepted with confirmed dates, add to calendar with 1hr and 2hr reminders. Calendar entry lists: items rented, pickup/dropoff, Leo or DB Cinema. Leo = purple, DB Cinema = blue. IF RENTER TEXTS THEY ARRIVED - always inform Daniel right away. If rental value over £100, check all items available, if true confirm right away and send welcome text. Always check renter reviews - less than 5 stars = escalate to Daniel for approval before accepting. Never send DB Cinema text to Leo account or vice versa. Any other request must be approved by Daniel. If unsure or off-script always ask Daniel.',
+      },
+      {
+        subject: 'Hygglo Fee Structure & Discount Tiers',
+        staleFragment: 'Renter pays listed price',
+        updatedContent:
+          'INTERNAL ONLY — NEVER share any of this with renters. Volume discounts auto-applied: 3 days = price of ~2.5 days, 7 days = price of ~5 days, 1 month = price of ~2.5 weeks. When quoting renters, use the listed daily price as reference and mention discounts apply for longer rentals. NEVER reveal owner commission rates, platform fees, service fee percentages, or net earnings to renters.',
+      },
+      {
+        subject: 'Quoting Instructions - Always Reference Listing Prices',
+        staleFragment: 'Hygglo adds a service fee',
+        updatedContent:
+          'When a renter asks about pricing or you need to quote: 1) ALWAYS reference the DB Cinema listing prices stored in memory. 2) Present prices as ESTIMATES - say "runs around £X/day" or "usually about £X/day". 3) NEVER mention platform fees, service fees, Hygglo fees, or any percentage added at checkout. 4) For longer rentals, mention discounts apply for longer bookings. 5) NEVER reveal owner commission rates, net profit, discount thresholds, or internal pricing formulas. 6) If a bundle exists that covers what they need, recommend it as it is usually better value. 7) Give the price estimate DIRECTLY - do NOT tell them they need to send a rental request just to get a quote. 8) Add-on items within bundles may be available at reduced rates. 9) CRITICAL: Always quote the INDIVIDUAL item price when asked about a single item. NEVER confuse bundle prices with individual item prices.',
+      },
+      {
+        subject: 'DANIEL RULE 7 - Discounts',
+        staleFragment: 'over £350 profit',
+        updatedContent:
+          'Check rental request location. Most gear is at Trafalgar Square by default. If request is 20km+ away, offer automatic travel discount. Other discounts are applied automatically when they send a request. NEVER reveal specific discount thresholds or percentages to renters — these are internal business rules.',
+      },
+      {
+        subject: 'DANIEL RULE 10 - Minimum Rental Value',
+        staleFragment: 'rental minimum revenue of £25',
+        updatedContent:
+          'If rental revenue is small, greet and suggest relevant add-ons naturally. NEVER tell the renter there is a minimum rental value or specific threshold — just upsell naturally.',
+      },
+    ];
+
+    for (const replacement of staleReplacements) {
+      const existing = await this.prisma.memory.findFirst({
+        where: { subject: replacement.subject },
+      });
+      if (existing && existing.content.includes(replacement.staleFragment)) {
+        await this.prisma.memory.update({
+          where: { id: existing.id },
+          data: { content: replacement.updatedContent },
+        });
+        this.logger.log(`Replaced stale content in memory: ${replacement.subject}`);
+      }
+    }
   }
 
   async storeConversation(chatId: string, role: string, content: string, metadata?: any) {
+    // Dedup: skip if an identical message was already stored in the last 60 seconds
+    const cutoff = new Date(Date.now() - 60_000);
+    const existing = await this.prisma.conversation.findFirst({
+      where: {
+        chat_id: chatId,
+        role,
+        content,
+        created_at: { gte: cutoff },
+      },
+    });
+    if (existing) {
+      this.logger.debug(`Skipping duplicate conversation entry for ${chatId} (role=${role})`);
+      return existing;
+    }
+
     return this.prisma.conversation.create({
       data: { chat_id: chatId, role, content, metadata },
     });
   }
 
-  async getConversationHistory(chatId: string, limit = 20): Promise<{ role: 'user' | 'assistant'; content: string }[]> {
+  async getConversationHistory(chatId: string, limit = 30): Promise<{ role: 'user' | 'assistant'; content: string; timestamp?: Date }[]> {
+    // Fetch more than needed so we can build a facts summary from older messages
+    const fetchCount = Math.max(limit * 5, 30);
     const messages = await this.prisma.conversation.findMany({
       where: { chat_id: chatId },
       orderBy: { created_at: 'desc' },
-      take: limit,
-      select: { role: true, content: true },
+      take: fetchCount,
+      select: { role: true, content: true, created_at: true },
     });
 
-    return messages
+    const ordered = messages
       .reverse()
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: m.created_at }));
+
+    // Retrieval-side dedup: filter out consecutive identical messages (handles pre-fix duplicates)
+    const deduped = ordered.filter((m, i) =>
+      i === 0 || m.role !== ordered[i - 1].role || m.content !== ordered[i - 1].content,
+    );
+
+    // If within limit, return as-is
+    if (deduped.length <= limit) {
+      return deduped;
+    }
+
+    // Compress: keep `limit` recent messages, extract facts from older ones
+    return this.compressOldMessages(deduped, limit);
+  }
+
+  /**
+   * Compress older messages into a facts summary.
+   * Keeps `recentCount` recent messages intact, extracts key facts from older messages.
+   */
+  private compressOldMessages(
+    messages: { role: 'user' | 'assistant'; content: string; timestamp?: Date }[],
+    recentCount = 3,
+  ): { role: 'user' | 'assistant'; content: string; timestamp?: Date }[] {
+    const older = messages.slice(0, messages.length - recentCount);
+    const recent = messages.slice(messages.length - recentCount);
+
+    // Extract facts from older messages (items, dates, names, prices, decisions)
+    const facts = new Set<string>();
+    const allText = older.map(m => m.content).join(' ');
+
+    // Extract item mentions (camera/lens/light gear patterns)
+    const itemMatches = allText.match(/\b(Sony|Canon|Blackmagic|Nanlite|Aputure|DJI|Sennheiser|Rode|SmallRig)\s+[\w\-\s]+(?=[\.,!?\s])/gi);
+    if (itemMatches) itemMatches.slice(0, 5).forEach(m => facts.add(`Item: ${m.trim()}`));
+
+    // Extract dates
+    const dateMatches = allText.match(/\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\b/gi);
+    if (dateMatches) dateMatches.slice(0, 3).forEach(m => facts.add(`Date: ${m}`));
+
+    // Extract prices
+    const priceMatches = allText.match(/£\d+[\d,]*(?:\.\d{2})?(?:\s*\/\s*day)?/g);
+    if (priceMatches) priceMatches.slice(0, 3).forEach(m => facts.add(`Price: ${m}`));
+
+    // Extract names (from renter messages — first capitalized word after greeting)
+    const nameMatch = allText.match(/(?:I'm|my name is|I am|this is)\s+([A-Z][a-z]+)/i);
+    if (nameMatch) facts.add(`Renter name: ${nameMatch[1]}`);
+
+    // Extract delivery/location info
+    const postcodeMatch = allText.match(/\b[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}\b/i);
+    if (postcodeMatch) facts.add(`Postcode: ${postcodeMatch[0].toUpperCase()}`);
+
+    const factsLine = facts.size > 0
+      ? `[CONTEXT from ${older.length} earlier messages] ${Array.from(facts).join('. ')}`
+      : `[${older.length} earlier messages — general inquiry]`;
+
+    const summary: { role: 'user' | 'assistant'; content: string; timestamp?: Date } = {
+      role: 'user',
+      content: factsLine,
+    };
+
+    // Ensure alternating roles: if recent starts with 'user', insert a synthetic ack
+    const result: { role: 'user' | 'assistant'; content: string; timestamp?: Date }[] = [summary];
+    if (recent.length > 0 && recent[0].role === 'user') {
+      result.push({ role: 'assistant', content: 'Understood, continuing our conversation.' });
+    }
+    result.push(...recent);
+
+    this.logger.debug(
+      `Compressed conversation: ${messages.length} messages → facts + ${recent.length} recent`,
+    );
+    return result;
   }
 
   async storeMemory(memoryType: string, subject: string, content: string, importance = 5) {
@@ -499,7 +638,7 @@ export class MemoryService implements OnModuleInit {
         OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
       },
       orderBy: { importance: 'desc' },
-      take: 10,
+      take: 80,
     });
 
     let keywordMemories: any[] = [];
@@ -655,6 +794,13 @@ export class MemoryService implements OnModuleInit {
   }
 
   /**
+   * Get detailed product specs for mentioned items, formatted for AI context.
+   */
+  getItemSpecsContext(itemNames: string[]): string {
+    return formatSpecsForAI(itemNames);
+  }
+
+  /**
    * Get relevant bundle suggestions based on message text and mentioned items.
    */
   getBundleSuggestionContext(messageText: string, mentionedItems: string[]): string {
@@ -668,6 +814,84 @@ export class MemoryService implements OnModuleInit {
       const subject = words.slice(0, 5).join(' ');
       await this.storeMemory('pattern', subject, mem, 6);
       this.logger.log(`Stored AI-learned memory: ${subject}`);
+    }
+  }
+
+  /**
+   * Build a 3-line conversation summary via Haiku call.
+   * Cached on follow_up_state.conversation_summary, refreshed every 3 new messages.
+   */
+  async buildConversationSummary(
+    rentalId: string,
+    chatId: string,
+    forceRefresh = false,
+  ): Promise<string | null> {
+    try {
+      const state = await this.prisma.follow_up_state.findUnique({ where: { rental_id: rentalId } });
+      if (!state) return null;
+
+      // Check if we have a recent summary and don't need to refresh
+      const messages = await this.prisma.conversation.findMany({
+        where: { chat_id: chatId },
+        orderBy: { created_at: 'desc' },
+        take: 30,
+        select: { role: true, content: true, created_at: true },
+      });
+
+      const messageCount = messages.length;
+      if (!forceRefresh && state.conversation_summary && messageCount > 0) {
+        // Only refresh every 3 new messages (estimate by checking summary staleness)
+        const summaryAge = state.updated_at ? Date.now() - state.updated_at.getTime() : Infinity;
+        if (summaryAge < 60_000 && messageCount < 6) return state.conversation_summary;
+      }
+
+      // Need at least 4 messages to summarize
+      if (messageCount < 4) return state.conversation_summary || null;
+
+      const convoText = messages.reverse().map(m =>
+        `${m.role === 'user' ? 'Renter' : 'Bot'}: ${m.content.substring(0, 200)}`,
+      ).join('\n');
+
+      const response = await this.aiService.processExtraction(
+        `Summarize this rental conversation in exactly 3 short lines:\n1. Who they are and what they're shooting\n2. Items discussed and current status\n3. Tone and any items they rejected\n\nConversation:\n${convoText}\n\nRespond with ONLY the 3-line summary, no labels.`,
+      );
+
+      const summary = response.content.trim();
+
+      // Persist to follow_up_state
+      await this.prisma.follow_up_state.update({
+        where: { rental_id: rentalId },
+        data: { conversation_summary: summary },
+      });
+
+      return summary;
+    } catch (error) {
+      this.logger.debug(`Failed to build conversation summary: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get cached conversation summary (no AI call, just DB read).
+   */
+  async getCachedSummary(rentalId: string): Promise<string | null> {
+    try {
+      const state = await this.prisma.follow_up_state.findUnique({
+        where: { rental_id: rentalId },
+        select: { conversation_summary: true, rejected_suggestions: true },
+      });
+      if (!state) return null;
+
+      let context = '';
+      if (state.conversation_summary) {
+        context += `CONVERSATION SUMMARY: ${state.conversation_summary}`;
+      }
+      if (state.rejected_suggestions) {
+        context += `\nDon't suggest again: ${state.rejected_suggestions}`;
+      }
+      return context || null;
+    } catch {
+      return null;
     }
   }
 }

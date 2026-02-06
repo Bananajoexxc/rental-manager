@@ -2,13 +2,88 @@
  * Shared utility for fuzzy item name matching across services.
  */
 
+// Common aliases: normalize variant spellings AND brand abbreviations to canonical forms
+const ALIASES: Record<string, string> = {
+  microphones: 'mics',
+  microphone: 'mic',
+  stabiliser: 'stabilizer',
+  colour: 'color',
+  grey: 'gray',
+  centre: 'center',
+  // Brand/product abbreviations — Hygglo titles use long forms, inventory uses short
+  gmaster: 'gm',
+  'g master': 'gm',
+  'cinema camera': 'camera',
+  'full frame': 'ff',
+  monolight: 'light',
+  'led light': 'light',
+};
+
 export function normalizeItemName(input: string): string {
-  return input
+  let result = input
     .toLowerCase()
+    // Replace hyphens with spaces BEFORE stripping special chars (so "g-master" → "g master" → alias match)
+    .replace(/-/g, ' ')
     .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Apply aliases (multi-word first, then single-word to avoid partial matches)
+  const sortedAliases = Object.entries(ALIASES).sort((a, b) => b[0].length - a[0].length);
+  for (const [from, to] of sortedAliases) {
+    result = result.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+  }
+
+  return result;
 }
+
+/**
+ * Generate additional token variants for model number matching.
+ * E.g., "a7iii" also checks "a7", "a7 iii"; "6k" stays "6k".
+ * Only splits when there's an actual number involved (not "vmount" → "v"+"mount").
+ */
+function getTokenVariants(token: string): string[] {
+  const variants = [token];
+  if (/\d/.test(token) && /[a-z]/.test(token)) {
+    // Try splitting at letter→digit and digit→letter boundaries
+    const split = token.replace(/(\d)([a-z])/g, '$1 $2').replace(/([a-z])(\d)/g, '$1 $2');
+    if (split !== token) {
+      const parts = split.split(' ');
+      // Add the joined alphanumeric prefix: "a7iii" → "a7" (useful model ID)
+      // and any meaningful parts (≥2 chars)
+      for (const part of parts) {
+        if (part.length >= 2 && !variants.includes(part)) {
+          variants.push(part);
+        }
+      }
+      // Also add combined prefix forms: "a7iii" → "a7 iii" as a combined variant
+      // by including contiguous subsets
+      if (parts.length >= 2) {
+        const prefix = parts[0] + parts[1]; // e.g., "a7"
+        if (prefix.length >= 2 && !variants.includes(prefix)) {
+          variants.push(prefix);
+        }
+      }
+    }
+  }
+  return variants;
+}
+
+// Words too generic to match alone — must pair with a product-specific token
+const GENERIC_TOKENS = new Set([
+  'wireless', 'audio', 'mic', 'mics', 'video', 'pro', 'set', 'kit', 'light',
+  'camera', 'lens', 'battery', 'card', 'filter', 'mount', 'plate',
+  'adapter', 'cable', 'case', 'bag', 'charger', 'holder', 'stand',
+  'arm', 'support', 'panel', 'tube', 'speaker', 'controller', 'dj',
+  'dji', 'jbl', 'nanlite', 'hollyland', 'tilta',
+  // NOTE: sony, canon, rode deliberately NOT generic — brand mismatch must block cross-brand matching
+  'to', 'for', 'with', 'and', 'the', 'in', 'on', 'of', 'pl',
+  'microphone', 'microphones', 'vmount',
+  // Noise words common in Hygglo listing titles (NOT model identifiers like gm, iii, ii)
+  'zoom', 'tele', 'telephoto', 'wide', 'angle', 'prime', 'ff',
+  '4k', 'full', 'frame', 'cinema', 'photo', 'photography', 'filming',
+  'professional', 'rental', 'hire', 'rent', 'london', 'uk',
+]);
 
 export function findBestMatch(input: string, inventory: string[]): string | null {
   const normalized = normalizeItemName(input);
@@ -19,28 +94,106 @@ export function findBestMatch(input: string, inventory: string[]): string | null
     if (normalizeItemName(item) === normalized) return item;
   }
 
-  // Contains match
+  // Contains match — only if the shorter string is at least 3 tokens
+  // AND shares a brand/product token (prevents cross-brand matches)
+  let bestContains: string | null = null;
+  let bestContainsLen = 0;
   for (const item of inventory) {
     const normItem = normalizeItemName(item);
-    if (normItem.includes(normalized) || normalized.includes(normItem)) return item;
+    const shorter = normalized.length <= normItem.length ? normalized : normItem;
+    if (shorter.split(' ').length >= 3) {
+      if (normItem.includes(normalized) || normalized.includes(normItem)) {
+        // Prefer the item with the longest overlap
+        const overlap = Math.min(normalized.length, normItem.length);
+        if (overlap > bestContainsLen) {
+          bestContainsLen = overlap;
+          bestContains = item;
+        }
+      }
+    }
+  }
+  if (bestContains) return bestContains;
+
+  // Category keyword matching — prioritise distinctive product-type words
+  const categoryKeywords: Record<string, string[]> = {
+    fisheye: ['fisheye', 'fish eye'],
+    anamorphic: ['anamorphic', 'blazar', 'great joy', 'remus'],
+    gimbal: ['gimbal', 'rs3', 'stabiliser', 'stabilizer'],
+    drone: ['drone', 'mavic', 'mini 4', 'avata'],
+    tripod: ['tripod'],
+    slider: ['slider'],
+    monitor: ['monitor', 'atomos ninja', 'hollyland 7'],
+    partybox: ['partybox', 'party box'],
+    nanlite: ['nanlite', 'pavotube', 'forza'],
+  };
+  for (const [, keywords] of Object.entries(categoryKeywords)) {
+    const matchesInput = keywords.some(kw => normalized.includes(kw));
+    if (matchesInput) {
+      for (const item of inventory) {
+        const normItem = normalizeItemName(item);
+        if (keywords.some(kw => normItem.includes(kw))) {
+          return item;
+        }
+      }
+    }
   }
 
-  // Token overlap scoring
+  // Token overlap scoring — stricter rules to prevent false positives
   const inputTokens = normalized.split(' ');
   let bestScore = 0;
   let bestItem: string | null = null;
 
+  // Brand detection for cross-brand blocking
+  const BRANDS = ['sony', 'canon', 'blackmagic', 'bmpcc', 'fujifilm', 'panasonic', 'nikon', 'red'];
+  const inputBrands = BRANDS.filter(b => normalized.includes(b));
+
   for (const item of inventory) {
-    const itemTokens = normalizeItemName(item).split(' ');
-    let score = 0;
-    for (const token of inputTokens) {
-      if (itemTokens.some((t) => t.includes(token) || token.includes(t))) {
-        score++;
+    const normItem = normalizeItemName(item);
+    const itemTokens = normItem.split(' ');
+
+    // Brand conflict check: if input specifies a brand not in this inventory item, skip
+    if (inputBrands.length > 0) {
+      const itemBrands = BRANDS.filter(b => normItem.includes(b));
+      if (itemBrands.length > 0 && !inputBrands.some(ib => itemBrands.includes(ib))) {
+        continue; // e.g., "Canon RF" input should never match "Sony" inventory item
       }
     }
-    const ratio = score / Math.max(inputTokens.length, itemTokens.length);
-    if (ratio > bestScore && ratio >= 0.4) {
-      bestScore = ratio;
+
+    let score = 0;
+    let specificMatches = 0; // non-generic token matches
+
+    for (const token of inputTokens) {
+      if (token.length < 2) continue; // skip tiny tokens like "a", "x"
+      const isSubstringMatch = (a: string, b: string) => {
+        const shorter = a.length <= b.length ? a : b;
+        const longer = a.length > b.length ? a : b;
+        return shorter.length >= 4 && longer.includes(shorter) && shorter.length / longer.length >= 0.6;
+      };
+      // Check token variants for model numbers (e.g., "a7iii" → "a7", "iii")
+      // Only expand input tokens to variants; match against original item tokens
+      // to prevent FX30's "fx" variant from matching FX3's "fx" variant
+      const variants = getTokenVariants(token);
+      if (itemTokens.some((t) => variants.some(v => t === v || isSubstringMatch(v, t)))) {
+        score++;
+        if (!GENERIC_TOKENS.has(token)) {
+          specificMatches++;
+        }
+      }
+    }
+
+    // Require at least 1 specific (non-generic) matching token
+    if (specificMatches === 0) continue;
+
+    // Require at least 2 matching tokens total
+    if (score < 2) continue;
+
+    // Use coverage of the INVENTORY item (shorter side) as primary metric.
+    // This handles long Hygglo titles matching short inventory names.
+    // Secondary: require at least 30% of the longer string to prevent pure noise matches.
+    const coverageRatio = score / Math.min(inputTokens.length, itemTokens.length);
+    const overlapRatio = score / Math.max(inputTokens.length, itemTokens.length);
+    if (coverageRatio > bestScore && coverageRatio >= 0.5 && overlapRatio >= 0.25) {
+      bestScore = coverageRatio;
       bestItem = item;
     }
   }
@@ -125,4 +278,31 @@ export const MASTER_INVENTORY: Record<string, number> = {
 
 export function getInventoryItemNames(): string[] {
   return Object.keys(MASTER_INVENTORY);
+}
+
+/**
+ * Check whether a listing title maps to a real inventory item.
+ * Returns the matched inventory item name, or null if this is
+ * a ghost / SEO listing with no physical stock.
+ */
+export function validateListingAgainstInventory(listingTitle: string): {
+  matched: boolean;
+  inventoryItem: string | null;
+  maxQuantity: number;
+} {
+  const inventoryNames = getInventoryItemNames();
+  const match = findBestMatch(listingTitle, inventoryNames);
+  if (match) {
+    return { matched: true, inventoryItem: match, maxQuantity: MASTER_INVENTORY[match] };
+  }
+  return { matched: false, inventoryItem: null, maxQuantity: 0 };
+}
+
+/**
+ * Extract the requested quantity from a listing title (e.g. "4x Anker F2000" → 4).
+ * Returns 1 if no quantity prefix is found.
+ */
+export function extractListingQuantity(listingTitle: string): number {
+  const match = listingTitle.match(/^(\d+)\s*x\s+/i);
+  return match ? parseInt(match[1], 10) : 1;
 }

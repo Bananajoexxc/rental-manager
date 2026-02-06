@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CalendarService } from '../calendar/calendar.service';
 import { PRICING_CATALOG } from '../data/pricing-catalog';
+import { getSpecHighlight } from '../data/item-specs';
 
 export interface BundleDefinition {
   name: string;
@@ -36,7 +38,10 @@ export class BundleIntelligenceService {
   private readonly logger = new Logger(BundleIntelligenceService.name);
   private bundles: BundleDefinition[] = [];
 
-  constructor(private prisma: PrismaService) {
+  constructor(
+    private prisma: PrismaService,
+    private calendarService: CalendarService,
+  ) {
     this.initializeBundles();
   }
 
@@ -356,6 +361,22 @@ export class BundleIntelligenceService {
         substitute: 'Nanlite Forza 300',
         difference: 'Forza 300 is less powerful (300W vs 500W output) but lighter',
       },
+      'Sony FX3': {
+        substitute: 'Sony A7 III',
+        difference: 'A7 III is a hybrid photo/video body (no pro video features like XLR/timecode, but excellent image quality)',
+      },
+      'Sony A7 III': {
+        substitute: 'Sony FX3',
+        difference: 'FX3 is a dedicated cinema camera (S-Cinetone, XLR audio, no photo mode)',
+      },
+      'BMPCC 6K Pro': {
+        substitute: 'BMPCC 6K Full Frame',
+        difference: 'Full Frame has a larger sensor (Super 35 vs Full Frame)',
+      },
+      'BMPCC 6K Full Frame': {
+        substitute: 'BMPCC 6K Pro',
+        difference: 'Pro has a Super 35 sensor and built-in ND filters',
+      },
     };
 
     for (const unavailableItem of unavailableItems) {
@@ -377,23 +398,104 @@ export class BundleIntelligenceService {
         const offerPrice = originalPrice;
         const maxPrice = originalPrice ? Math.round(originalPrice * 1.15) : undefined;
 
+        // Enrich difference with spec highlight if available
+        const subHighlight = getSpecHighlight(substitution.substitute);
+        const enrichedDiff = subHighlight
+          ? `${substitution.difference}. ${subHighlight}`
+          : substitution.difference;
+
         substitutions.push({
           original: unavailableItem,
           substitute: substitution.substitute,
-          difference: substitution.difference,
+          difference: enrichedDiff,
           originalPrice,
           substitutePrice,
           offerPrice,
           maxPrice,
         });
       } else {
-        // Try to find similar item (fuzzy match in inventory)
-        // For now, just log that we couldn't find substitution
-        this.logger.debug(`No substitution found for: ${unavailableItem}`);
+        // Try to find a same-category substitute from inventory
+        const categoryMatch = this.findCategorySubstitute(unavailableItem);
+        if (categoryMatch) {
+          const substituteEntry = PRICING_CATALOG.find(
+            p => p.item_name.toLowerCase() === categoryMatch.name.toLowerCase() && !p.is_bundle,
+          );
+          const originalEntry = PRICING_CATALOG.find(
+            p => p.item_name.toLowerCase() === unavailableItem.toLowerCase() && !p.is_bundle,
+          );
+          // Enrich with spec highlight
+          const catHighlight = getSpecHighlight(categoryMatch.name);
+          const enrichedReason = catHighlight
+            ? `${categoryMatch.reason}. ${catHighlight}`
+            : categoryMatch.reason;
+          substitutions.push({
+            original: unavailableItem,
+            substitute: categoryMatch.name,
+            difference: enrichedReason,
+            originalPrice: originalEntry?.daily_price_max,
+            substitutePrice: substituteEntry?.daily_price_max,
+            offerPrice: originalEntry?.daily_price_max,
+            maxPrice: originalEntry?.daily_price_max ? Math.round(originalEntry.daily_price_max * 1.15) : undefined,
+          });
+        } else {
+          this.logger.debug(`No substitution found for: ${unavailableItem}`);
+        }
       }
     }
 
     return substitutions;
+  }
+
+  /**
+   * Find a same-category substitute from inventory when no explicit mapping exists.
+   * Uses item categorization to suggest the closest alternative.
+   */
+  private findCategorySubstitute(itemName: string): { name: string; reason: string } | null {
+    const lower = itemName.toLowerCase();
+    const categoryAlternatives: Record<string, { items: string[]; reason: string }> = {
+      camera: {
+        items: ['Sony FX3', 'Sony A7 III', 'BMPCC 6K Pro'],
+        reason: 'Alternative camera body from our inventory',
+      },
+      lens: {
+        items: ['Sony GM 24-70mm f2.8', 'Sony GM 16-35mm f2.8', 'Sony GM 70-200mm f2.8'],
+        reason: 'Alternative lens with similar focal range',
+      },
+      audio: {
+        items: ['Rode Wireless Mic Pro set', 'DJI Wireless Mics', 'Rode Video Mic Pro Plus', 'Rode Video Mic Go', 'DJI Mic 2 wireless'],
+        reason: 'Alternative audio solution from our inventory',
+      },
+      lighting: {
+        items: ['LED light panels RGB', 'Nanlite Forza 300', 'Nanlite 500B', 'Nanlite Pavotube 30x II'],
+        reason: 'Alternative lighting option from our inventory',
+      },
+      gimbal: {
+        items: ['DJI RS3 Pro gimbal'],
+        reason: 'Our available gimbal/stabilizer',
+      },
+      monitor: {
+        items: ['Atomos Ninja V', 'Hollyland 7-inch monitor'],
+        reason: 'Alternative monitor option from our inventory',
+      },
+    };
+
+    // Determine item category
+    let category: string | null = null;
+    if (/\b(camera|fx3|a7|bmpcc|fuji)\b/i.test(lower)) category = 'camera';
+    else if (/\b(lens|mm|prime|zoom|anamorphic)\b/i.test(lower)) category = 'lens';
+    else if (/\b(mic|audio|wireless|rode|sennheiser)\b/i.test(lower)) category = 'audio';
+    else if (/\b(light|led|forza|pavotube|nanlite|softbox)\b/i.test(lower)) category = 'lighting';
+    else if (/\b(gimbal|stabilizer|rs3)\b/i.test(lower)) category = 'gimbal';
+    else if (/\b(monitor|screen|atomos|hollyland)\b/i.test(lower)) category = 'monitor';
+
+    if (!category || !categoryAlternatives[category]) return null;
+
+    const { items, reason } = categoryAlternatives[category];
+    // Find first item that isn't the unavailable one
+    const substitute = items.find(i => i.toLowerCase() !== lower);
+    if (!substitute) return null;
+
+    return { name: substitute, reason };
   }
 
   /**
@@ -418,11 +520,42 @@ export class BundleIntelligenceService {
   }
 
   /**
+   * Check availability for all items in a bundle.
+   * Returns a map of item name -> availability result.
+   */
+  private async checkBundleItemAvailability(
+    bundle: BundleDefinition,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<Map<string, { available: boolean; booked: number; maxQuantity: number }>> {
+    const availabilityMap = new Map<string, { available: boolean; booked: number; maxQuantity: number }>();
+
+    // Deduplicate items (some bundles list the same item multiple times, e.g. 2x LED panels)
+    const uniqueItems = [...new Set(bundle.items)];
+
+    const checks = await Promise.all(
+      uniqueItems.map(item => this.calendarService.checkAvailability(item, startDate, endDate)),
+    );
+
+    for (let i = 0; i < uniqueItems.length; i++) {
+      availabilityMap.set(uniqueItems[i], {
+        available: checks[i].available,
+        booked: checks[i].booked,
+        maxQuantity: checks[i].maxQuantity,
+      });
+    }
+
+    return availabilityMap;
+  }
+
+  /**
    * Generate bundle recommendation text for AI prompt
    */
   async generateBundleContext(
     message: string,
     mentionedItems: string[],
+    startDate?: Date,
+    endDate?: Date,
   ): Promise<string> {
     if (mentionedItems.length === 0) {
       return '';
@@ -443,13 +576,59 @@ export class BundleIntelligenceService {
       return '';
     }
 
+    // Filter by availability if dates are provided
+    let availableRecommendations = recommendations;
+    if (startDate && endDate) {
+      const filtered: BundleRecommendation[] = [];
+
+      for (const rec of recommendations) {
+        const availabilityMap = await this.checkBundleItemAvailability(rec.bundle, startDate, endDate);
+
+        // Identify which of the matched (requested) items are unavailable
+        const unavailableMatchedItems = rec.matchedItems.filter(item => {
+          const avail = availabilityMap.get(item);
+          return avail && !avail.available;
+        });
+
+        // If any of the key items the renter asked for are unavailable, skip this bundle
+        if (unavailableMatchedItems.length > 0) {
+          this.logger.debug(
+            `Skipping bundle "${rec.bundle.name}": unavailable items [${unavailableMatchedItems.join(', ')}] for ${startDate.toISOString().split('T')[0]} - ${endDate.toISOString().split('T')[0]}`,
+          );
+          continue;
+        }
+
+        // Also check if any bundle-only (bonus) items are unavailable -- note but don't disqualify
+        const unavailableBonusItems = rec.missingItems.filter(item => {
+          const avail = availabilityMap.get(item);
+          return avail && !avail.available;
+        });
+
+        if (unavailableBonusItems.length > 0) {
+          rec.reason += ` (note: ${unavailableBonusItems.join(', ')} may be unavailable for these dates)`;
+        }
+
+        filtered.push(rec);
+      }
+
+      availableRecommendations = filtered;
+    }
+
+    if (availableRecommendations.length === 0) {
+      return '';
+    }
+
     // Build context string
     let context = '\n\n--- BUNDLE RECOMMENDATIONS ---\n';
     context += `Renter mentioned: ${mentionedItems.join(', ')}\n`;
-    context += `Intent: ${intent.reasoning}\n\n`;
+    context += `Intent: ${intent.reasoning}\n`;
+    if (startDate && endDate) {
+      context += `Availability checked for: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}\n`;
+    }
+    context += '\n';
 
     // Include top 2-3 recommendations
-    const topRecommendations = recommendations.slice(0, 3);
+    const topRecommendations = availableRecommendations.slice(0, 3);
 
     for (const rec of topRecommendations) {
       context += `📦 ${rec.bundle.name} (£${rec.bundle.dailyPrice}/day)\n`;

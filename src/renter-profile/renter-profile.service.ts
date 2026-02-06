@@ -88,36 +88,40 @@ export class RenterProfileService {
         return { id: byVariant.id, isNew: false };
       }
 
-      // Try case-insensitive partial match (first name + last name)
+      // Try case-insensitive full name match (require BOTH first AND last name)
       const nameParts = renterName.trim().split(/\s+/);
       if (nameParts.length >= 2) {
-        const byFuzzy = await this.prisma.renter_profile.findFirst({
+        const firstName = nameParts[0];
+        const lastName = nameParts[nameParts.length - 1];
+        // Query profiles where name contains BOTH first and last name parts
+        const candidates = await this.prisma.renter_profile.findMany({
           where: {
-            OR: [
-              { name: { contains: nameParts[0], mode: 'insensitive' } },
-              { name_variants: { has: nameParts[0] } },
-            ],
+            name: { contains: firstName, mode: 'insensitive' },
           },
         });
+        const byFuzzy = candidates.find((profile) => {
+          const profileParts = profile.name.trim().split(/\s+/);
+          const profileFirst = profileParts[0]?.toLowerCase();
+          const profileLast = profileParts[profileParts.length - 1]?.toLowerCase();
+          return (
+            profileFirst === firstName.toLowerCase() &&
+            profileLast === lastName.toLowerCase()
+          );
+        });
         if (byFuzzy) {
-          // Only match if last name also matches (to avoid false positives)
-          const lastName = nameParts[nameParts.length - 1].toLowerCase();
-          const profileLastName = byFuzzy.name.split(/\s+/).pop()?.toLowerCase();
-          if (profileLastName === lastName) {
-            const variants = byFuzzy.name_variants || [];
-            if (!variants.includes(renterName)) {
-              await this.prisma.renter_profile.update({
-                where: { id: byFuzzy.id },
-                data: {
-                  name_variants: [...variants, renterName],
-                  hygglo_user_id: hyggloUserId || byFuzzy.hygglo_user_id,
-                  last_seen_at: new Date(),
-                },
-              });
-            }
-            this.logger.debug(`Found renter profile by fuzzy name match: ${byFuzzy.name} (${byFuzzy.id})`);
-            return { id: byFuzzy.id, isNew: false };
+          const variants = byFuzzy.name_variants || [];
+          if (!variants.includes(renterName)) {
+            await this.prisma.renter_profile.update({
+              where: { id: byFuzzy.id },
+              data: {
+                name_variants: [...variants, renterName],
+                hygglo_user_id: hyggloUserId || byFuzzy.hygglo_user_id,
+                last_seen_at: new Date(),
+              },
+            });
           }
+          this.logger.debug(`Found renter profile by full name match: ${byFuzzy.name} (${byFuzzy.id})`);
+          return { id: byFuzzy.id, isNew: false };
         }
       }
     }

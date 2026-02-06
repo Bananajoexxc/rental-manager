@@ -208,7 +208,8 @@ Otherwise, let it go. Don't be pushy.`,
   }
 
   /**
-   * Get conversation state from database
+   * Get conversation state from database.
+   * Uses DB-persisted stage when available; falls back to inference only for first-time setup.
    */
   async getConversationState(rentalId: string): Promise<ConversationState | null> {
     const rental = await this.prisma.rental.findUnique({
@@ -217,14 +218,18 @@ Otherwise, let it go. Don't be pushy.`,
 
     if (!rental) return null;
 
-    // Get conversation history to infer state
+    // Check for persisted stage in follow_up_state
+    const followUpState = await this.prisma.follow_up_state.findUnique({
+      where: { rental_id: rentalId },
+    });
+
+    // Get conversation history for context attributes
     const history = await this.prisma.conversation.findMany({
       where: { chat_id: `rental:${rentalId}` },
       orderBy: { created_at: 'asc' },
     });
 
     if (history.length === 0) {
-      // New conversation
       return {
         rentalId,
         currentStage: ConversationStage.INQUIRY,
@@ -239,14 +244,13 @@ Otherwise, let it go. Don't be pushy.`,
       };
     }
 
-    // Analyze conversation to determine state
     const messages = history.map(h => h.content.toLowerCase());
     const fullConversation = messages.join(' ');
 
     const state: ConversationState = {
       rentalId,
-      currentStage: ConversationStage.INQUIRY, // Will be updated
-      stageEnteredAt: history[0].created_at,
+      currentStage: ConversationStage.INQUIRY,
+      stageEnteredAt: followUpState?.stage_changed_at || history[0].created_at,
       itemsDiscussed: this.extractItems(fullConversation),
       priceQuoted: /£\d+|price|cost|how much/.test(fullConversation),
       datesDiscussed: /\d{4}-\d{2}-\d{2}|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week/.test(fullConversation),
@@ -256,10 +260,44 @@ Otherwise, let it go. Don't be pushy.`,
       messageCount: history.length,
     };
 
-    // Determine current stage based on conversation content
+    // Use DB-persisted stage if available; otherwise infer once and persist
+    if (followUpState?.conversation_stage) {
+      const dbStage = followUpState.conversation_stage as ConversationStage;
+      if (Object.values(ConversationStage).includes(dbStage)) {
+        state.currentStage = dbStage;
+        // Override with rental status for terminal states
+        if (rental.status === 'ongoing' || rental.status === 'upcoming') {
+          state.currentStage = ConversationStage.CONFIRMED;
+        }
+        return state;
+      }
+    }
+
+    // First-time: infer stage and persist it
     state.currentStage = this.inferStage(state, rental, fullConversation);
+    await this.persistStage(rentalId, state.currentStage);
 
     return state;
+  }
+
+  /**
+   * Persist stage to DB via follow_up_state.
+   */
+  private async persistStage(rentalId: string, stage: ConversationStage): Promise<void> {
+    try {
+      await this.prisma.follow_up_state.upsert({
+        where: { rental_id: rentalId },
+        update: { conversation_stage: stage, stage_changed_at: new Date() },
+        create: {
+          rental_id: rentalId,
+          conversation_stage: stage,
+          stage_changed_at: new Date(),
+          status: 'active',
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to persist stage for ${rentalId}: ${err.message}`);
+    }
   }
 
   /**
@@ -351,7 +389,8 @@ Otherwise, let it go. Don't be pushy.`,
   }
 
   /**
-   * Check if stage should transition based on latest message
+   * Check if stage should transition based on latest message.
+   * When a transition occurs, the new stage is persisted to DB.
    */
   async checkStageTransition(
     rentalId: string,
@@ -368,8 +407,10 @@ Otherwise, let it go. Don't be pushy.`,
     // Check if any transition trigger is met
     for (const trigger of currentDefinition.transitionTriggers) {
       if (this.matchesTrigger(messageLower, trigger)) {
-        // Determine new stage
         const newStage = this.getNextStage(state.currentStage);
+        // Persist the transition
+        await this.persistStage(rentalId, newStage);
+        this.logger.log(`Stage persisted: ${state.currentStage} → ${newStage} for rental ${rentalId}`);
         return {
           shouldTransition: true,
           newStage,
@@ -379,6 +420,14 @@ Otherwise, let it go. Don't be pushy.`,
     }
 
     return { shouldTransition: false };
+  }
+
+  /**
+   * Explicitly set conversation stage (for programmatic transitions like auto-accept, booking confirmed, etc.)
+   */
+  async setStage(rentalId: string, stage: ConversationStage): Promise<void> {
+    await this.persistStage(rentalId, stage);
+    this.logger.log(`Stage explicitly set to ${stage} for rental ${rentalId}`);
   }
 
   /**

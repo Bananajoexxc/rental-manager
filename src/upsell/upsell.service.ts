@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { CalendarService } from '../calendar/calendar.service';
+import { getSpecHighlight, findItemsByFeature, FEATURE_KEYWORD_MAP } from '../data/item-specs';
 
 interface UpsellRecommendation {
   items: string[];
@@ -115,7 +118,26 @@ export class UpsellService {
     },
   };
 
-  constructor(private prisma: PrismaService) {}
+  // Configurable thresholds (overridable via env)
+  private readonly MINIMUM_ORDER: number;
+  private readonly DISCOUNT_TIER_1: number;
+  private readonly DISCOUNT_TIER_1_PCT: number;
+  private readonly DISCOUNT_TIER_2: number;
+  private readonly DISCOUNT_TIER_2_PCT: number;
+  private readonly PLATFORM_FEE_RATE: number;
+
+  constructor(
+    private prisma: PrismaService,
+    private configService: ConfigService,
+    private calendarService: CalendarService,
+  ) {
+    this.MINIMUM_ORDER = Number(this.configService.get('UPSELL_MIN_ORDER', '25'));
+    this.DISCOUNT_TIER_1 = Number(this.configService.get('UPSELL_DISCOUNT_TIER_1', '250'));
+    this.DISCOUNT_TIER_1_PCT = Number(this.configService.get('UPSELL_DISCOUNT_TIER_1_PCT', '10'));
+    this.DISCOUNT_TIER_2 = Number(this.configService.get('UPSELL_DISCOUNT_TIER_2', '500'));
+    this.DISCOUNT_TIER_2_PCT = Number(this.configService.get('UPSELL_DISCOUNT_TIER_2_PCT', '17'));
+    this.PLATFORM_FEE_RATE = Number(this.configService.get('PLATFORM_FEE_RATE', '0.15'));
+  }
 
   /**
    * Analyze items and conversation to generate smart upsell recommendations
@@ -124,6 +146,8 @@ export class UpsellService {
     requestedItems: string[],
     conversationText: string,
     currentTotal: number,
+    startDate?: Date,
+    endDate?: Date,
   ): Promise<{
     recommendations: UpsellRecommendation;
     revenueContext: RevenueContext;
@@ -144,6 +168,35 @@ export class UpsellService {
       revenueContext,
       conversationText,
     );
+
+    // Filter out items that aren't available for the requested dates
+    if (startDate && endDate && recommendations.items.length > 0) {
+      const availableItems: string[] = [];
+      for (const item of recommendations.items) {
+        try {
+          const availability = await this.calendarService.checkAvailability(
+            item,
+            startDate,
+            endDate,
+          );
+          if (availability.available) {
+            availableItems.push(item);
+          } else {
+            this.logger.debug(
+              `Filtered out upsell recommendation "${item}": not available for ${startDate.toISOString().split('T')[0]} - ${endDate.toISOString().split('T')[0]} (${availability.booked}/${availability.maxQuantity} booked)`,
+            );
+          }
+        } catch (err) {
+          // If availability check fails, keep the item in recommendations
+          // rather than silently dropping it
+          this.logger.warn(
+            `Availability check failed for upsell item "${item}": ${err.message}`,
+          );
+          availableItems.push(item);
+        }
+      }
+      recommendations.items = availableItems;
+    }
 
     return { recommendations, revenueContext };
   }
@@ -215,7 +268,8 @@ export class UpsellService {
    * Analyze revenue and determine discount tiers
    */
   private analyzeRevenueContext(currentTotal: number): RevenueContext {
-    const isUnderMinimum = currentTotal < 25;
+    const isUnderMinimum = currentTotal < this.MINIMUM_ORDER;
+    const nearTier1Threshold = this.DISCOUNT_TIER_1 - 25; // e.g. £225
 
     let discountTier: RevenueContext['discountTier'] = 'none';
     let discountMessage: string | undefined;
@@ -223,28 +277,21 @@ export class UpsellService {
     let upsellUrgency: RevenueContext['upsellUrgency'] = 'gentle';
 
     if (isUnderMinimum) {
-      // CRITICAL: Under £25 minimum
       upsellUrgency = 'critical';
-      discountMessage = `Quick heads up - minimum rental is £25. Let me suggest some items to get you there`;
-    } else if (currentTotal >= 500) {
-      // At or above 17% discount tier
+      discountMessage = `This is a small order - suggest some relevant add-ons to increase the value`;
+    } else if (currentTotal >= this.DISCOUNT_TIER_2) {
       discountTier = '17_percent';
-      discountMessage = `Nice! You're at £${currentTotal} so you get 17% off the total`;
-    } else if (currentTotal >= 250 && currentTotal < 500) {
-      // Between 10% and 17% tier - upsell to 17%
+      discountMessage = `INTERNAL: Customer qualifies for top-tier discount (applied automatically at checkout)`;
+    } else if (currentTotal >= this.DISCOUNT_TIER_1 && currentTotal < this.DISCOUNT_TIER_2) {
       discountTier = '10_percent';
       nearDiscount = true;
       upsellUrgency = 'aggressive';
-      const needed = 500 - currentTotal;
-      discountMessage = `You're at £${currentTotal} (10% off). Add £${needed.toFixed(0)} more to unlock 17% off - that's an extra £${((currentTotal + needed) * 0.07).toFixed(0)} saved`;
-    } else if (currentTotal >= 225 && currentTotal < 250) {
-      // Close to 10% discount
+      discountMessage = `INTERNAL: Customer qualifies for a discount and is close to a bigger one — suggest adding items naturally`;
+    } else if (currentTotal >= nearTier1Threshold && currentTotal < this.DISCOUNT_TIER_1) {
       nearDiscount = true;
       upsellUrgency = 'aggressive';
-      const needed = 250 - currentTotal;
-      discountMessage = `You're at £${currentTotal}. Just £${needed.toFixed(0)} more gets you 10% off everything - save £${(250 * 0.1).toFixed(0)}`;
-    } else if (currentTotal >= 25 && currentTotal < 225) {
-      // Safe zone, gentle upselling
+      discountMessage = `INTERNAL: Customer is close to qualifying for a discount — suggest adding items naturally`;
+    } else if (currentTotal >= this.MINIMUM_ORDER && currentTotal < nearTier1Threshold) {
       upsellUrgency = 'moderate';
     }
 
@@ -256,6 +303,34 @@ export class UpsellService {
       discountMessage,
       upsellUrgency,
     };
+  }
+
+  /**
+   * Extract feature needs from conversation text and find spec-matched items.
+   * Only returns items NOT already in the renter's list.
+   */
+  private extractFeatureRecommendations(
+    conversationText: string,
+    requestedItems: string[],
+  ): { item_name: string; reason: string }[] {
+    const textLower = conversationText.toLowerCase();
+    const matchedKeywords: string[] = [];
+
+    for (const [trigger, searchTerms] of Object.entries(FEATURE_KEYWORD_MAP)) {
+      if (textLower.includes(trigger)) {
+        matchedKeywords.push(...searchTerms);
+      }
+    }
+
+    if (matchedKeywords.length === 0) return [];
+
+    const deduped = [...new Set(matchedKeywords)];
+    const matches = findItemsByFeature(deduped, requestedItems);
+
+    return matches.map(m => ({
+      item_name: m.item_name,
+      reason: m.highlight ? `${m.matchedFeature} — ${m.highlight}` : m.matchedFeature,
+    }));
   }
 
   /**
@@ -275,8 +350,8 @@ export class UpsellService {
     // CRITICAL: Under minimum - aggressive upsell
     if (revenueContext.isUnderMinimum) {
       priority = 'critical';
-      const needed = 25 - revenueContext.currentTotal;
-      reasoning = `Current total is £${revenueContext.currentTotal.toFixed(0)}, need £${needed.toFixed(0)} more to hit the £25 minimum. `;
+      const needed = this.MINIMUM_ORDER - revenueContext.currentTotal;
+      reasoning = `INTERNAL: Order value is low — suggest relevant add-ons naturally. NEVER mention minimums or thresholds to the renter. `;
 
       // Suggest contextual essentials - filters first for camera/lens rentals
       if (itemCategories.some(i => i.category === 'camera')) {
@@ -343,10 +418,10 @@ export class UpsellService {
       priority = priority === 'critical' ? 'critical' : 'high';
       if (revenueContext.discountTier === '10_percent') {
         // At 10%, push to 17%
-        const needed = 500 - revenueContext.currentTotal;
+        const needed = this.DISCOUNT_TIER_2 - revenueContext.currentTotal;
         const avgItemPrice = 40; // Conservative estimate
         const itemsNeeded = Math.ceil(needed / avgItemPrice);
-        reasoning += `Add ${itemsNeeded} more item${itemsNeeded > 1 ? 's' : ''} to hit 17% off (save an extra £${((revenueContext.currentTotal + needed) * 0.07).toFixed(0)}). `;
+        reasoning += `INTERNAL: Adding ${itemsNeeded} more item${itemsNeeded > 1 ? 's' : ''} would unlock a bigger discount for the customer. Suggest items naturally. `;
 
         if (!recommendations.includes('Rode Wireless Mic Pro set') && !itemCategories.some(i => i.category === 'audio')) {
           recommendations.unshift('Rode Wireless Mic Pro set');
@@ -355,10 +430,21 @@ export class UpsellService {
           recommendations.push('ND filter', 'Cinebloom filter mist');
         }
       } else {
-        // Close to 10%
-        const needed = 250 - revenueContext.currentTotal;
-        reasoning += `Just £${needed.toFixed(0)} more to unlock 10% off. `;
+        // Close to discount threshold
+        reasoning += `INTERNAL: Customer is close to qualifying for a discount. Suggest adding items naturally — NEVER mention specific thresholds. `;
         recommendations.push('Rode Wireless Mic Pro set', 'ND filter', 'Sony GM 24-70mm f2.8');
+      }
+    }
+
+    // Feature-aware recommendations: if renter mentions specific needs, find items that match
+    const requestedNames = itemCategories.map(i => i.name);
+    const featureMatches = this.extractFeatureRecommendations(conversationText, requestedNames);
+    if (featureMatches.length > 0) {
+      for (const match of featureMatches) {
+        if (!recommendations.includes(match.item_name) && recommendations.length < 5) {
+          recommendations.push(match.item_name);
+          reasoning += `${match.item_name} matches their needs (${match.reason}). `;
+        }
       }
     }
 
@@ -377,11 +463,15 @@ export class UpsellService {
     requestedItems: string[],
     conversationText: string,
     currentTotal: number,
+    startDate?: Date,
+    endDate?: Date,
   ): Promise<string> {
     const { recommendations, revenueContext } = await this.generateUpsellRecommendations(
       requestedItems,
       conversationText,
       currentTotal,
+      startDate,
+      endDate,
     );
 
     let message = '';
@@ -401,7 +491,10 @@ export class UpsellService {
         message += `Might also want:\n`;
       }
 
-      message += recommendations.items.slice(0, 3).map(item => `• ${item}`).join('\n');
+      message += recommendations.items.slice(0, 3).map(item => {
+        const highlight = getSpecHighlight(item);
+        return highlight ? `• ${item} — ${highlight}` : `• ${item}`;
+      }).join('\n');
 
       if (recommendations.reasoning) {
         message += `\n\n${recommendations.reasoning}`;
@@ -421,11 +514,12 @@ export class UpsellService {
    */
   shouldUpsell(currentTotal: number, itemCount: number): boolean {
     // Always upsell if under minimum
-    if (currentTotal < 25) return true;
+    if (currentTotal < this.MINIMUM_ORDER) return true;
 
     // Upsell if close to discount tiers
-    if ((currentTotal >= 225 && currentTotal < 250) ||
-        (currentTotal >= 250 && currentTotal < 500)) {
+    const nearTier1 = this.DISCOUNT_TIER_1 - 25;
+    if ((currentTotal >= nearTier1 && currentTotal < this.DISCOUNT_TIER_1) ||
+        (currentTotal >= this.DISCOUNT_TIER_1 && currentTotal < this.DISCOUNT_TIER_2)) {
       return true;
     }
 
@@ -433,5 +527,103 @@ export class UpsellService {
     if (itemCount <= 2) return true;
 
     return false;
+  }
+
+  /**
+   * Log an upsell attempt for tracking and autolearn analysis.
+   */
+  async logUpsellAttempt(data: {
+    rentalId: string;
+    itemsSuggested: string[];
+    revenueBefore: number;
+    priority: string;
+    useCaseDetected?: string;
+  }): Promise<string> {
+    const log = await this.prisma.upsell_log.create({
+      data: {
+        rental_id: data.rentalId,
+        items_suggested: data.itemsSuggested,
+        items_accepted: [],
+        revenue_before: data.revenueBefore,
+        upsell_priority: data.priority,
+        use_case_detected: data.useCaseDetected,
+        outcome: 'pending',
+      },
+    });
+    this.logger.debug(`Upsell logged for rental ${data.rentalId}: ${data.itemsSuggested.join(', ')}`);
+    return log.id;
+  }
+
+  /**
+   * Update an upsell log with the outcome.
+   */
+  async updateUpsellOutcome(
+    rentalId: string,
+    itemsAccepted: string[],
+    revenueAfter: number,
+  ): Promise<void> {
+    const latestLog = await this.prisma.upsell_log.findFirst({
+      where: { rental_id: rentalId, outcome: 'pending' },
+      orderBy: { created_at: 'desc' },
+    });
+    if (!latestLog) return;
+
+    const outcome = itemsAccepted.length === 0
+      ? 'ignored'
+      : itemsAccepted.length >= latestLog.items_suggested.length
+        ? 'accepted'
+        : 'partial';
+
+    await this.prisma.upsell_log.update({
+      where: { id: latestLog.id },
+      data: {
+        items_accepted: itemsAccepted,
+        revenue_after: revenueAfter,
+        outcome,
+      },
+    });
+    this.logger.log(`Upsell outcome: ${outcome} (${itemsAccepted.length}/${latestLog.items_suggested.length} items)`);
+  }
+
+  /**
+   * Get upsell conversion stats for the autolearn engine.
+   */
+  async getUpsellStats(days: number = 30): Promise<{
+    totalAttempts: number;
+    accepted: number;
+    partial: number;
+    ignored: number;
+    conversionRate: number;
+    avgRevenueIncrease: number;
+  }> {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const logs = await this.prisma.upsell_log.findMany({
+      where: {
+        created_at: { gte: since },
+        outcome: { not: 'pending' },
+      },
+    });
+
+    const accepted = logs.filter(l => l.outcome === 'accepted').length;
+    const partial = logs.filter(l => l.outcome === 'partial').length;
+    const ignored = logs.filter(l => l.outcome === 'ignored' || l.outcome === 'rejected').length;
+
+    const revenueIncreases = logs
+      .filter(l => l.revenue_after != null && l.revenue_after > l.revenue_before)
+      .map(l => l.revenue_after! - l.revenue_before);
+    const avgRevenueIncrease = revenueIncreases.length > 0
+      ? revenueIncreases.reduce((a, b) => a + b, 0) / revenueIncreases.length
+      : 0;
+
+    return {
+      totalAttempts: logs.length,
+      accepted,
+      partial,
+      ignored,
+      conversionRate: logs.length > 0 ? ((accepted + partial) / logs.length) * 100 : 0,
+      avgRevenueIncrease: Math.round(avgRevenueIncrease * 100) / 100,
+    };
   }
 }

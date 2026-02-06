@@ -208,16 +208,6 @@ export class CompletedScanService {
         },
       });
 
-      // Notify Daniel
-      await this.telegramService.sendProactiveMessage(
-        `🔄 *Completed Rental Reply*\n\n` +
-        `├ 📦 ${rental.title}\n` +
-        `├ 👤 ${rental.renterInfo || 'Unknown'}\n` +
-        `├ 💬 Their msg: "${lastMessage.content.substring(0, 100)}"\n` +
-        `├ 🤖 Reply: "${response.content.substring(0, 100)}"\n` +
-        `└ ${actionTaken.substring(0, 100)}`,
-      );
-
       this.logger.log(`Processed completed rental message: ${rental.title}`);
     } catch (error) {
       this.logger.error(`Error processing completed rental ${rental.title}: ${error.message}`);

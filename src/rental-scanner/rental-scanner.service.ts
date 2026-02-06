@@ -20,6 +20,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
   private scannerTimeout: NodeJS.Timeout | null = null;
   private scanCount = 0;
   private shuttingDown = false;
+  private failedBackfillRentals = new Set<string>(); // rental IDs where backfill returned 0 (unmatchable items)
 
   private readonly INITIAL_SCAN_INTERVAL: number;
   private readonly REDUCED_SCAN_INTERVAL: number;
@@ -76,18 +77,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       inactivityThreshold: this.INACTIVITY_THRESHOLD,
     });
 
-    // Send startup notification
-    const accounts = this.hyggloService.getAccounts();
-    const readOnly = process.env.READ_ONLY_MODE === 'true';
-    if (this.telegramService) {
-      this.telegramService.sendProactiveMessage(
-        `🚀 *Rental Manager Started*\n\n` +
-        `├ 👤 Accounts: ${accounts.map(a => a.label).join(', ') || 'None configured'}\n` +
-        `├ 🔒 Read-only: ${readOnly ? 'ON' : 'OFF'}\n` +
-        `├ ⏰ Interval: ${this.INITIAL_SCAN_INTERVAL / 1000}s\n` +
-        `└ 📡 First scan in 5s...`,
-      ).catch(() => { /* ignore startup notification errors */ });
-    }
+    this.logger.log(`Rental Manager started — accounts: ${this.hyggloService.getAccounts().map(a => a.label).join(', ')}, read-only: ${process.env.READ_ONLY_MODE === 'true'}`);
 
     this.scheduleNextScan();
   }
@@ -261,11 +251,13 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         });
 
         // Backfill: create bookings if this rental has dates/price but no bookings yet
+        // Check ALL statuses (confirmed + pending_review) to prevent re-creating overbooked items every scan
         const hasBookings = await this.prisma.booking.count({
-          where: { rental_id: existingRental.id, status: 'confirmed' },
+          where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review'] } },
         });
 
-        if (hasBookings === 0 && updatedRental.start_date && updatedRental.end_date) {
+        if (hasBookings === 0 && updatedRental.start_date && updatedRental.end_date
+            && !this.failedBackfillRentals.has(existingRental.id)) {
           try {
             // Get item names from _detail or use title
             const itemNames = this.extractItemNamesFromDetail(rental._detail, rental.title);
@@ -283,21 +275,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
             if (createdBookings.length > 0) {
               this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}`);
-              if (this.telegramService) {
-                const bookingLines = createdBookings.map(b => {
-                  const status = b.wasOverbooked ? '⚠️ OVERBOOKED' : '✅';
-                  const rev = b.revenue ? ` £${b.revenue}` : '';
-                  return `│  ${status} ${b.item_name} x${b.quantity}${rev}`;
-                });
-                this.telegramService.sendProactiveMessage(
-                  `📅 *Bookings Backfilled*\n\n` +
-                  `├ 📦 ${updatedRental.title}\n` +
-                  `├ 👤 ${updatedRental.renter_info || 'Unknown'}\n` +
-                  `├ 📅 ${updatedRental.start_date.toISOString().split('T')[0]} → ${updatedRental.end_date.toISOString().split('T')[0]}\n` +
-                  `├ 💰 £${rentalForBooking.rental_price || 0}\n` +
-                  `${bookingLines.join('\n')}`,
-                ).catch(() => {});
-              }
+            } else {
+              // No bookings created — items don't match inventory. Stop retrying.
+              this.failedBackfillRentals.add(existingRental.id);
+              this.logger.warn(`Backfill produced 0 bookings for "${rental.title}" — marked as unmatchable, won't retry`);
             }
           } catch (err) {
             this.logger.warn(`Backfill booking failed for ${rental.title}: ${err.message}`);
@@ -438,7 +419,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         );
 
         if (createdBookings.length > 0) {
-          const overbookedItems = createdBookings.filter(b => b.wasOverbooked);
+          const overbookedItems = createdBookings.filter(b => b.wasOverbooked && b.maxQuantity > 0);
           this.logger.log(`📅 Auto-created ${createdBookings.length} booking(s) for rental ${savedRental.title}`);
 
           // Send booking summary to Telegram
@@ -449,22 +430,20 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
               return `│  ${status} ${b.item_name} x${b.quantity}${rev}`;
             });
 
-            let bookingMsg = `📅 *Auto-Booked*\n\n` +
-              `├ 📦 ${savedRental.title}\n` +
-              `├ 👤 ${savedRental.renter_info || 'Unknown'}\n` +
-              `├ 📅 ${savedRental.start_date ? savedRental.start_date.toISOString().split('T')[0] : '?'} → ${savedRental.end_date ? savedRental.end_date.toISOString().split('T')[0] : '?'}\n` +
-              `├ 💰 £${savedRental.rental_price || 0}\n` +
-              `${bookingLines.join('\n')}`;
-
+            // Only notify owner if there's an availability conflict (overbooked items)
             if (overbookedItems.length > 0) {
-              bookingMsg += `\n\n🚨 *AVAILABILITY CONFLICT*\n` +
-                overbookedItems.map(b => `  ⚠️ ${b.item_name}: ${b.maxQuantity - b.availableSlots}/${b.maxQuantity} already booked`).join('\n');
+              const conflictMsg = `🚨 *AVAILABILITY CONFLICT*\n\n` +
+                `├ 📦 ${savedRental.title}\n` +
+                `├ 👤 ${savedRental.renter_info || 'Unknown'}\n` +
+                overbookedItems.map(b => `├ ⚠️ ${b.item_name}: ${b.maxQuantity - b.availableSlots}/${b.maxQuantity} already booked`).join('\n') +
+                `\n└ Manual review needed`;
+              this.telegramService.sendProactiveMessage(conflictMsg, 'Markdown', { force: true }).catch(err => {
+                this.logger.warn(`Failed to send conflict notification: ${err.message}`);
+              });
             }
-
-            this.telegramService.sendProactiveMessage(bookingMsg).catch(err => {
-              this.logger.warn(`Failed to send booking notification: ${err.message}`);
-            });
           }
+        } else {
+          this.logger.warn(`No valid inventory items matched for rental ${savedRental.title} — no bookings created`);
         }
       } catch (bookingErr) {
         this.logger.warn(`Auto-booking failed for rental ${savedRental.title}: ${bookingErr.message}`);
@@ -576,13 +555,11 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       `We can handle all of these right here — easier to coordinate and we might be able to offer a bundle deal. ` +
       `Shall I put everything together in this chat?`;
 
-    const readOnly = process.env.READ_ONLY_MODE === 'true';
-    if (!readOnly) {
-      try {
-        await this.hyggloService.sendMessage(primary.savedRental.listing_id, primaryMessage);
-      } catch (err) {
-        this.logger.warn(`Failed to send consolidation message for ${primary.savedRental.title}: ${err.message}`);
-      }
+    // sendMessage handles READ_ONLY_MODE gating internally (with per-rental exceptions)
+    try {
+      await this.hyggloService.sendMessage(primary.savedRental.listing_id, primaryMessage);
+    } catch (err) {
+      this.logger.warn(`Failed to send consolidation message for ${primary.savedRental.title}: ${err.message}`);
     }
 
     // Send redirect message in each secondary chat and mark as consolidated
@@ -592,12 +569,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         `I'll handle everything together in that chat to keep things simple. ` +
         `Head over there and we'll sort out all the items at once!`;
 
-      if (!readOnly) {
-        try {
-          await this.hyggloService.sendMessage(secondary.savedRental.listing_id, redirectMessage);
-        } catch (err) {
-          this.logger.warn(`Failed to send redirect message for ${secondary.savedRental.title}: ${err.message}`);
-        }
+      try {
+        await this.hyggloService.sendMessage(secondary.savedRental.listing_id, redirectMessage);
+      } catch (err) {
+        this.logger.warn(`Failed to send redirect message for ${secondary.savedRental.title}: ${err.message}`);
       }
 
       // Store ai_decision for audit trail on each secondary
@@ -609,9 +584,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             input_summary: `multi_item_secondary_closed: redirected to primary chat (${primary.savedRental.title})`,
             output_summary: `Renter sent ${sorted.length} separate requests. Consolidated into primary rental. Secondary closed.`,
             confidence: 1.0,
-            action_taken: readOnly
-              ? `BLOCKED (read-only). Would redirect to ${primary.savedRental.title}`
-              : `Sent redirect to primary chat: ${primary.savedRental.title}`,
+            action_taken: `Sent redirect to primary chat: ${primary.savedRental.title}`,
             notified: true,
           },
         });
@@ -640,18 +613,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Notify owner via Telegram
-    if (this.telegramService) {
-      const totalValue = sorted.reduce((sum, e) => sum + (e.savedRental.rental_price || 0), 0);
-      this.telegramService.sendProactiveMessage(
-        `📦 *Multi-Item Request Detected*\n\n` +
-        `├ 👤 ${renterName}\n` +
-        `├ 📋 ${sorted.length} separate requests:\n` +
-        sorted.map((e, i) => `│  ${i + 1}. ${e.savedRental.title} (£${e.savedRental.rental_price || 0})`).join('\n') + '\n' +
-        `├ 💰 Total value: £${totalValue}\n` +
-        `└ Consolidated into: ${primary.savedRental.title}`,
-      ).catch(() => {});
-    }
+    this.logger.log(`Multi-item request from ${renterName}: ${sorted.length} items consolidated into ${primary.savedRental.title}`);
 
     // Attach multi-item context to primary and trigger autonomous pipeline
     const multiItemContext = {

@@ -14,10 +14,16 @@ import { RevenueService } from '../revenue/revenue.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { MarketService } from '../market/market.service';
 import { HyggloService } from '../hygglo/hygglo.service';
-import { SentryService } from '../monitoring/sentry.service';
+import { ErrorLogService } from '../monitoring/error-log.service';
 import { DspyService } from '../dspy/dspy.service';
 import { ValidationService } from '../validation/validation.service';
+import { RepairService } from '../validation/repair.service';
+import { QualityScorerService } from '../evaluation/quality-scorer.service';
+import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
+import { RecommendationService } from '../recommendations/recommendation.service';
 import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
+import { AutolearnService } from '../autolearn/autolearn.service';
+import { CorrectionDetectorService } from '../autolearn/correction-detector.service';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -28,6 +34,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     active: false,
     account: null,
   };
+  private simConversationHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+  private improvementMode = false;
+  private recentRentalNotifications = new Map<number, number>(); // rental id → timestamp for dedup
+  private readonly NOTIFICATION_DEDUP_TTL_MS = 10 * 60 * 1000; // 10 minute dedup window
+
+  // --- Centralized notification dedup & rate limiting ---
+  private sentNotificationHashes = new Map<string, { ts: number; text: string }>(); // hash → { timestamp, preview }
+  private lastNotificationSentAt = 0;
+  private notificationsThisMinute = 0;
+  private minuteWindowStart = 0;
+  private readonly NOTIF_DEDUP_WINDOW_MS = 30 * 60 * 1000; // suppress identical notifications for 30 min
+  private readonly NOTIF_MIN_INTERVAL_MS = 1500; // min 1.5s between sends
+  private readonly NOTIF_MAX_PER_MINUTE = 5; // max 5 notifications per minute
+
+  // Unified renter chat state (replaces separate renter bot)
+  private renterChatHistories = new Map<string, { role: 'user' | 'assistant'; content: string }[]>();
+  private renterChatAccounts = new Map<string, 'dbcinema' | 'leo'>();
+  private renterImprovementModes = new Set<string>(); // chat IDs in improvement mode
 
   constructor(
     private configService: ConfigService,
@@ -43,15 +67,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private deliveryService: DeliveryService,
     @Inject(forwardRef(() => MarketService)) private marketService: MarketService,
     private hyggloService: HyggloService,
-    private sentryService: SentryService,
+    private errorLogService: ErrorLogService,
     private dspyService: DspyService,
     private validationService: ValidationService,
+    private repairService: RepairService,
+    private qualityScorerService: QualityScorerService,
+    private conversationStageService: ConversationStageService,
+    private recommendationService: RecommendationService,
+    @Inject(forwardRef(() => AutolearnService)) private autolearnService: AutolearnService,
+    @Inject(forwardRef(() => CorrectionDetectorService)) private correctionDetector: CorrectionDetectorService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
       throw new Error('TELEGRAM_BOT_TOKEN is not set in environment variables');
     }
-    this.bot = new TelegramBot(token, { polling: true });
+    // Start without polling — will enable after clearing stale connections in onModuleInit
+    this.bot = new TelegramBot(token, { polling: false });
     this.ownerChatId = this.configService.get<string>('OWNER_CHAT_ID') || '6634478551';
   }
 
@@ -60,27 +91,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    // Clear any stale webhook/polling before starting — prevents 409 conflict
+    try {
+      await this.bot.deleteWebHook({ drop_pending_updates: false });
+      this.logger.log('Cleared stale webhook — starting clean polling');
+    } catch (err) {
+      this.logger.warn(`Failed to clear webhook: ${err.message}`);
+    }
+
+    // Now start polling
+    await this.bot.startPolling();
+
     this.bot.on('polling_error', (err: any) => {
+      // Suppress 409 Conflict logs — they're transient during restart
+      if (err.message?.includes('409')) {
+        this.logger.warn('Telegram 409 conflict — another instance may be stopping. Will retry.');
+        return;
+      }
       this.logger.error('Telegram polling error: ' + err.message);
-      this.sentryService.captureError(new Error(`Telegram polling error: ${err.message}`), {
+      this.errorLogService.captureError(new Error(`Telegram polling error: ${err.message}`), {
         operation: 'telegram_polling',
       });
     });
 
     this.bot.on('message', (msg: any) => {
       this.logger.log(`Incoming message: "${msg.text}" from chat ${msg.chat.id}`);
-      this.sentryService.addBreadcrumb(
-        `Message: ${(msg.text || '').substring(0, 50)}`,
-        'telegram',
-        { chat_id: String(msg.chat.id) },
-      );
     });
 
     this.registerCommands();
     this.registerConversationHandler();
 
-    // Polling is already enabled in constructor via { polling: true }
-    this.logger.log('Telegram bot is polling for updates');
+    this.logger.log('Telegram bot is polling for updates (unified: owner + renter)');
   }
 
   async onModuleDestroy() {
@@ -89,118 +130,153 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   // --- Proactive messaging for autonomous pipeline ---
 
-  async sendProactiveMessage(text: string, parseMode = 'Markdown') {
-    try {
-      await this.bot.sendMessage(this.ownerChatId, text, { parse_mode: parseMode });
-    } catch (error) {
-      this.logger.error(`Failed to send proactive message: ${error.message}`);
-      this.sentryService.captureError(error, { operation: 'telegram_proactive_message' });
+  /**
+   * Hash notification text for dedup. Normalizes by stripping emojis, markdown,
+   * collapsing whitespace, and taking the first 200 chars.
+   */
+  private hashNotification(text: string): string {
+    const normalized = text
+      .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{2B55}\u{FE00}-\u{FE0F}\u{200D}]/gu, '') // strip emojis
+      .replace(/[*_`\[\]\\]/g, '') // strip markdown formatting
+      .replace(/\s+/g, ' ')
+      .trim()
+      .substring(0, 200);
+    let hash = 0;
+    for (let i = 0; i < normalized.length; i++) {
+      hash = ((hash << 5) - hash + normalized.charCodeAt(i)) | 0;
+    }
+    return hash.toString(36);
+  }
+
+  /**
+   * Cleanup stale entries from the notification dedup map.
+   */
+  private cleanupNotificationHashes(): void {
+    if (this.sentNotificationHashes.size < 50) return;
+    const cutoff = Date.now() - this.NOTIF_DEDUP_WINDOW_MS;
+    for (const [key, entry] of this.sentNotificationHashes) {
+      if (entry.ts < cutoff) this.sentNotificationHashes.delete(key);
     }
   }
 
-  async sendRentalNotification(rental: any, aiAnalysis: string, actionTaken: string) {
+  /**
+   * Central notification gateway. ALL owner notifications pass through here.
+   * Provides: content-hash dedup (30 min window) + rate limiting (5/min, 1.5s spacing).
+   * Pass force=true for critical alerts (scam, damage, blacklist) that must never be suppressed.
+   */
+  async sendProactiveMessage(text: string, parseMode = 'Markdown', options?: { force?: boolean }) {
+    // --- Content-hash dedup ---
+    if (!options?.force) {
+      const hash = this.hashNotification(text);
+      const existing = this.sentNotificationHashes.get(hash);
+      if (existing && Date.now() - existing.ts < this.NOTIF_DEDUP_WINDOW_MS) {
+        this.logger.debug(
+          `[NotifGateway] SUPPRESSED duplicate (sent ${Math.round((Date.now() - existing.ts) / 1000)}s ago): ${text.substring(0, 80)}...`,
+        );
+        return;
+      }
+      this.sentNotificationHashes.set(hash, { ts: Date.now(), text: text.substring(0, 100) });
+      this.cleanupNotificationHashes();
+    }
+
+    // --- Per-minute rate limiting ---
+    const now = Date.now();
+    if (now - this.minuteWindowStart > 60_000) {
+      this.minuteWindowStart = now;
+      this.notificationsThisMinute = 0;
+    }
+    if (!options?.force && this.notificationsThisMinute >= this.NOTIF_MAX_PER_MINUTE) {
+      this.logger.warn(
+        `[NotifGateway] RATE LIMITED (${this.notificationsThisMinute}/${this.NOTIF_MAX_PER_MINUTE} this minute): ${text.substring(0, 80)}...`,
+      );
+      return;
+    }
+
+    // --- Min interval spacing ---
+    const elapsed = now - this.lastNotificationSentAt;
+    if (elapsed < this.NOTIF_MIN_INTERVAL_MS) {
+      await new Promise(r => setTimeout(r, this.NOTIF_MIN_INTERVAL_MS - elapsed));
+    }
+
+    // --- Send ---
+    try {
+      await this.bot.sendMessage(this.ownerChatId, text, { parse_mode: parseMode });
+      this.lastNotificationSentAt = Date.now();
+      this.notificationsThisMinute++;
+    } catch (error) {
+      // Retry without Markdown if parsing failed
+      if (error.message?.includes("can't parse entities")) {
+        this.logger.warn('Markdown parse failed, retrying as plain text');
+        const plain = text.replace(/[*_`\[]/g, '');
+        await this.bot.sendMessage(this.ownerChatId, plain);
+        this.lastNotificationSentAt = Date.now();
+        this.notificationsThisMinute++;
+        return;
+      }
+      this.logger.error(`Failed to send proactive message: ${error.message}`);
+      this.errorLogService.captureError(error, { operation: 'telegram_proactive_message' });
+      throw error;
+    }
+  }
+
+  async sendRentalNotification(rental: any, _aiAnalysis: string, _actionTaken: string) {
+    // Dedup guard: prevent duplicate notifications for the same rental
+    const rentalId = rental.id;
+    if (rentalId) {
+      const lastSent = this.recentRentalNotifications.get(rentalId);
+      if (lastSent && Date.now() - lastSent < this.NOTIFICATION_DEDUP_TTL_MS) {
+        this.logger.warn(`Skipping duplicate rental notification for rental id=${rentalId} (${rental.title}) — sent ${Math.round((Date.now() - lastSent) / 1000)}s ago`);
+        return;
+      }
+      this.recentRentalNotifications.set(rentalId, Date.now());
+
+      // Cleanup stale entries
+      if (this.recentRentalNotifications.size > 100) {
+        const cutoff = Date.now() - this.NOTIFICATION_DEDUP_TTL_MS;
+        for (const [key, ts] of this.recentRentalNotifications) {
+          if (ts < cutoff) this.recentRentalNotifications.delete(key);
+        }
+      }
+    }
+
     // Account tag
     const accountLabel = this.getAccountLabel(rental.account);
     const accountTag = accountLabel ? `[${accountLabel}] ` : '';
 
-    // Build structured notification sections
-    const sections: string[] = [];
-
-    // Header
-    sections.push(`📦 ${accountTag}*New Rental Activity*`);
-
-    // Rental summary with dates
-    const startStr = rental.start_date ? new Date(rental.start_date).toLocaleDateString() : '?';
-    const endStr = rental.end_date ? new Date(rental.end_date).toLocaleDateString() : '?';
+    // Period
+    const startStr = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '?';
+    const endStr = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '?';
     const days = rental.start_date && rental.end_date
       ? Math.ceil((new Date(rental.end_date).getTime() - new Date(rental.start_date).getTime()) / (1000 * 60 * 60 * 24))
       : 0;
 
-    sections.push(
-      `📋 *Summary*\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ Status: ${rental.status}\n` +
-      `├ 👤 ${rental.renter_info || rental.renterInfo || 'N/A'}\n` +
-      (rental.start_date ? `├ 📅 ${startStr} - ${endStr} (${days} days)\n` : '') +
-      `└ ${rental.listing_url || rental.listingUrl || 'N/A'}`,
-    );
-
-    // Earnings info (shown at top of listing - fees already deducted)
-    const rentalPrice = rental.rental_price || rental.rentalPrice;
-    const pricePerDay = rental.price_per_day || rental.pricePerDay;
-    if (rentalPrice) {
-      const curr = rental.currency === 'SEK' ? 'kr' : '£';
-      let earningsText = `💰 *Earnings*\n└ ${curr}${rentalPrice}`;
-      if (pricePerDay) earningsText += ` (${curr}${pricePerDay}/day)`;
-      sections.push(earningsText);
-    }
-
-    // Timing info (pickup/return from bookings)
+    // Earnings: show owner earnings (after Hygglo fees), not renter total
+    const curr = rental.currency === 'SEK' ? 'kr' : '£';
+    let earningsStr = '?';
     try {
-      const bookings = await this.prisma.booking.findMany({
-        where: { rental_id: rental.id, status: 'confirmed' },
-        select: { item_name: true, pickup_time: true, return_time: true },
+      const bookingRevenue = await this.prisma.booking.aggregate({
+        where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
+        _sum: { revenue: true },
       });
-      const withTimes = bookings.filter(b => b.pickup_time || b.return_time);
-      if (withTimes.length > 0) {
-        const timeLines = withTimes.map(b => {
-          const times = [b.pickup_time ? `pickup ${b.pickup_time}` : null, b.return_time ? `return ${b.return_time}` : null].filter(Boolean).join(', ');
-          return `├ ${b.item_name}: ${times}`;
-        });
-        sections.push(`⏰ *Timing*\n${timeLines.join('\n')}`);
+      if (bookingRevenue._sum.revenue) {
+        earningsStr = `${curr}${bookingRevenue._sum.revenue}`;
+      } else {
+        // Fallback: estimate owner earnings as ~64% of renter total
+        const rentalPrice = rental.rental_price || rental.rentalPrice;
+        if (rentalPrice) earningsStr = `~${curr}${Math.round(rentalPrice * 0.64)}`;
       }
-    } catch { /* timing lookup optional */ }
-
-    // Availability check for items in this rental
-    try {
-      if (rental.start_date && rental.end_date) {
-        const bookings = await this.prisma.booking.findMany({
-          where: { rental_id: rental.id, status: 'confirmed' },
-          select: { item_name: true },
-        });
-        if (bookings.length > 0) {
-          const availLines: string[] = [];
-          for (const b of bookings) {
-            const avail = await this.calendarService.checkAvailability(
-              b.item_name,
-              new Date(rental.start_date),
-              new Date(rental.end_date),
-            );
-            if (avail.matchedItem) {
-              const status = avail.available ? '✅' : '⚠️ FULL';
-              availLines.push(`├ ${status} ${avail.matchedItem}: ${avail.booked}/${avail.maxQuantity} booked`);
-            }
-          }
-          if (availLines.length > 0) {
-            sections.push(`📊 *Availability*\n${availLines.join('\n')}`);
-          }
-        }
-      }
-    } catch { /* availability lookup optional */ }
-
-    // AI insights
-    if (aiAnalysis) {
-      sections.push(`🤖 *AI Insights*\n${aiAnalysis}`);
+    } catch {
+      const rentalPrice = rental.rental_price || rental.rentalPrice;
+      if (rentalPrice) earningsStr = `~${curr}${Math.round(rentalPrice * 0.64)}`;
     }
 
-    // Recommendations / Action
-    if (actionTaken) {
-      sections.push(`💡 *Recommendation*\n${actionTaken}`);
-    }
+    const lines = [
+      `📦 ${accountTag}*${rental.title}*`,
+      `👤 ${rental.renter_info || 'N/A'}`,
+      `💰 ${earningsStr} · 📅 ${startStr}–${endStr} (${days}d)`,
+    ];
 
-    // Warnings (blacklist, scheduling conflicts)
-    const warnings: string[] = [];
-    if (actionTaken && actionTaken.toLowerCase().includes('blacklist')) {
-      warnings.push('🚫 Renter may be blacklisted - review required');
-    }
-    if (actionTaken && actionTaken.toLowerCase().includes('blocked')) {
-      warnings.push('🔒 Message was blocked by read-only mode');
-    }
-    if (warnings.length > 0) {
-      sections.push(`⚠️ *Warnings*\n${warnings.map(w => `├ ${w}`).join('\n')}`);
-    }
-
-    await this.sendProactiveMessage(sections.join('\n\n'));
+    await this.sendProactiveMessage(lines.join('\n'));
   }
 
   private getAccountLabel(account?: string): string {
@@ -253,9 +329,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Alpha: Auth cycle test
       { command: 'testauthcycle', description: 'Test multi-account auth cycle' },
       // Monitoring & Optimization
-      { command: 'sentry', description: 'Sentry error monitoring status' },
+      { command: 'errorlog', description: 'Error monitoring status' },
       { command: 'dspy', description: 'DSPy optimization status' },
       { command: 'optimize', description: 'Run DSPy optimization: /optimize [rental|pricing|delivery]' },
+      // Improvement mode
+      { command: 'improve', description: 'Enter improvement mode — AI classifies each message as a rule' },
+      { command: 'endimprove', description: 'Exit improvement mode' },
+      // AutoLearn Engine
+      { command: 'autolearn', description: 'AutoLearn status: proposals, quality trend' },
+      { command: 'veto', description: 'Veto a proposal: /veto <id> [reason]' },
+      { command: 'autolearn_pause', description: 'Pause AutoLearn cycles' },
+      { command: 'autolearn_resume', description: 'Resume AutoLearn cycles' },
     ]);
 
     // Existing commands
@@ -307,9 +391,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.onText(/\/testauthcycle/, (msg: any) => this.handleTestAuthCycle(msg));
 
     // Monitoring & Optimization
-    this.bot.onText(/\/sentry/, (msg: any) => this.handleSentry(msg));
+    this.bot.onText(/\/errorlog/, (msg: any) => this.handleErrorLog(msg));
     this.bot.onText(/\/dspy/, (msg: any) => this.handleDspy(msg));
     this.bot.onText(/\/optimize(?:\s+(rental|pricing|delivery))?$/, (msg: any, match: any) => this.handleOptimize(msg, match));
+
+    // Improvement mode
+    this.bot.onText(/\/improve$/, (msg: any) => this.handleImprove(msg));
+    this.bot.onText(/\/endimprove/, (msg: any) => this.handleEndImprove(msg));
+
+    // AutoLearn Engine
+    this.bot.onText(/\/autolearn$/, (msg: any) => this.handleAutolearn(msg));
+    this.bot.onText(/\/veto\s+(\S+)(?:\s+(.+))?/, (msg: any, match: any) => this.handleVeto(msg, match));
+    this.bot.onText(/\/autolearn_pause/, (msg: any) => this.handleAutolearnPause(msg));
+    this.bot.onText(/\/autolearn_resume/, (msg: any) => this.handleAutolearnResume(msg));
+
+    // Renter commands (accessible to non-owner users)
+    this.bot.onText(/\/reset$/, (msg: any) => this.handleRenterReset(msg));
+    this.bot.onText(/\/account\s+(dbcinema|leo)/, (msg: any, match: any) => this.handleRenterAccount(msg, match));
   }
 
   // --- Conversation handler (non-command messages -> Claude) ---
@@ -317,18 +415,46 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private registerConversationHandler() {
     this.bot.on('message', async (msg: any) => {
       if (!msg.text || msg.text.startsWith('/')) return;
+
+      // Non-owner users get routed to renter conversation mode
       if (!this.isOwner(msg.chat.id)) {
-        await this.bot.sendMessage(msg.chat.id, 'Unauthorized. This bot is private.');
+        await this.handleRenterMessage(msg);
         return;
       }
 
-      // Simulation mode: treat owner messages as renter messages
+      // Owner: Improvement mode — classify message as a high-priority rule
+      if (this.improvementMode) {
+        await this.handleImprovementMessage(msg);
+        return;
+      }
+
+      // Owner: Simulation mode — treat owner messages as renter messages
       if (this.simulationMode.active) {
         await this.handleSimulatedConversation(msg);
         return;
       }
 
+      // Owner: Auto-detect roleplay requests and route through full renter pipeline
+      const roleplayMatch = this.detectRoleplayIntent(msg.text);
+      if (roleplayMatch) {
+        this.simulationMode = { active: true, account: roleplayMatch.account };
+        this.simConversationHistory = [];
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `Entering sim mode (${roleplayMatch.account}). Use /endsim when done.`,
+        );
+        // Strip the roleplay preamble and process the actual renter message
+        const renterText = roleplayMatch.renterMessage || msg.text;
+        await this.handleSimulatedConversation({ ...msg, text: renterText });
+        return;
+      }
+
       await this.handleConversation(msg);
+
+      // Passive correction detection (non-blocking)
+      this.correctionDetector.processMessage(msg.text, false).catch(err =>
+        this.logger.debug(`Correction detector: ${err.message}`),
+      );
     });
   }
 
@@ -405,7 +531,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Availability check failed: ${availErr.message}`);
       }
 
-      const response = await this.aiService.processComplex(userText, {
+      const response = await this.aiService.processRoutine(userText, {
         rules,
         memories,
         conversationHistory: history,
@@ -422,7 +548,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.bot.sendMessage(msg.chat.id, response.content);
     } catch (error) {
       this.logger.error(`Conversation error: ${error.message}`);
-      this.sentryService.captureError(error, {
+      this.errorLogService.captureError(error, {
         operation: 'telegram_conversation',
         chat_id: chatId,
         message_preview: userText.substring(0, 100),
@@ -431,114 +557,573 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async handleSimulatedConversation(msg: any) {
-    const userText = msg.text;
-    const account = this.simulationMode.account;
+  /**
+   * Core renter conversation logic shared by both simulation mode and the renter-facing bot.
+   * Returns { replyText, qualityInfo } so callers can format and send the response.
+   */
+  private async processRenterConversation(
+    userText: string,
+    account: 'dbcinema' | 'leo' | null,
+    conversationHistory: { role: 'user' | 'assistant'; content: string }[],
+  ): Promise<{ replyText: string; qualityInfo: string; rawContent: string } | null> {
+    // SCAM DETECTION
+    const scamResult = this.detectSimScamPattern(userText);
+    if (scamResult.isScam) {
+      return {
+        replyText: `🚨 SCAM DETECTED (${scamResult.severity})\nPatterns: ${scamResult.matchedPattern}\nScore: ${scamResult.score}\n\nIn production, this message would be auto-blocked and the renter blacklisted.`,
+        qualityInfo: '',
+        rawContent: '',
+      };
+    }
 
-    try {
-      const rules = await this.rulesService.getFormattedRules();
+      // CANCEL/RESCHEDULE DETECTION (from autonomous service)
+      const cancelReschedulePatterns = [
+        { pattern: /\b(cancel|cancellation)\b(?!.*\b(my other|my plans|everything else)\b)/i, type: 'cancel' as const },
+        { pattern: /\b(reschedule|change the date|move the booking|different date|postpone)\b/i, type: 'reschedule' as const },
+      ];
+      for (const { pattern, type } of cancelReschedulePatterns) {
+        if (pattern.test(userText)) {
+          const label = type === 'cancel' ? 'CANCELLATION' : 'RESCHEDULE';
+          return {
+            replyText: `Let me check on that for you - I'll get back to you shortly.`,
+            qualityInfo: `\n\n🚨 ${label} REQUEST detected — escalated to owner`,
+            rawContent: `Let me check on that for you - I'll get back to you shortly.`,
+          };
+        }
+      }
 
-      // Extract meaningful keywords (individual words, not full text)
+      // BLACKLIST CHECK: Only on first message (result is session-stable)
+      const isFirstMessage = conversationHistory.length === 0;
+      if (isFirstMessage) {
+        try {
+          const blacklist = await this.blacklistService.getFormattedBlacklist();
+          if (blacklist) {
+            const blacklistLower = blacklist.toLowerCase();
+            if (blacklistLower.includes('BLOCKED')) {
+              // Blacklist data available for AI awareness
+            }
+          }
+        } catch (blErr) {
+          this.logger.debug(`Blacklist check failed: ${blErr.message}`);
+        }
+      }
+
+      // INTENT DETECTION: Classify message intent for conditional context loading
+      const textLower = userText.toLowerCase();
+      const pricingTerms = /\b(price|pricing|cost|how much|rate|rates|quote|charge|fee|fees|per day|daily|weekly|budget|afford|expensive|cheap|discount|deal)\b/i;
+      const deliveryTerms = /\b(deliver|delivery|courier|ship|shipping|post|postcode|send it|drop off|dropoff|bring it|transport|how far|distance|collect from|too far|can you bring|come to me)\b/i;
+      const schedulingTerms = /\b(pickup|pick up|collect|return|drop off|time|slot|morning|evening|tomorrow|today|weekend|schedule|when can)\b/i;
+      const hasPricingIntent = pricingTerms.test(userText);
+      const hasDeliveryIntent = deliveryTerms.test(userText);
+      const hasSchedulingIntent = schedulingTerms.test(userText);
+      const sameDayPatterns = /\b(today|tonight|this evening|this afternoon|asap|right now|immediately|same[\s-]?day)\b/i;
+      const hasSameDayIntent = sameDayPatterns.test(userText);
+      const onMyWayPatterns = [
+        /\bon\s+my\s+way\b/i, /\bcoming\s+now\b/i, /\bheading\s+(there|over|to\s+you)\b/i,
+        /\bomw\b/i, /\bon\s+the\s+way\b/i, /\bnearly\s+there\b/i, /\balmost\s+there\b/i,
+        /\bleaving\s+now\b/i, /\bsetting\s+off\b/i, /\bon\s+route\b/i, /\ben\s+route\b/i,
+        /\bbe\s+there\s+(in|soon)\b/i, /\b(5|10|15|20|30)\s+min(ute)?s?\s+away\b/i,
+      ];
+      const hasOnMyWayIntent = onMyWayPatterns.some(p => p.test(userText));
+
+      // Extract meaningful keywords
       const words = userText
         .split(/[\s,.\-!?;:()]+/)
         .filter((w: string) => w.length > 2)
         .slice(0, 10);
 
-      // Detect pricing and delivery intent
-      const pricingTerms = /\b(price|pricing|cost|how much|rate|rates|quote|charge|fee|fees|per day|daily|weekly|budget|afford|expensive|cheap|discount|deal)\b/i;
-      const deliveryTerms = /\b(deliver|delivery|courier|ship|shipping|post|postcode|send it|drop off|dropoff|bring it|transport|how far|distance|collect from|too far|can you bring|come to me)\b/i;
-      const hasPricingIntent = pricingTerms.test(userText);
-      const hasDeliveryIntent = deliveryTerms.test(userText);
+      // Detect mentioned items (always needed for availability + compatibility)
+      const mentionedItems = words
+        .map((w: string) => findBestMatch(w, getInventoryItemNames()))
+        .filter(Boolean) as string[];
 
-      // Fetch memories — include pricing/delivery data when relevant
-      let memories: string;
-      if (hasPricingIntent || hasDeliveryIntent) {
-        const deliveryKeywords = hasDeliveryIntent ? ['Delivery Pricing Zones', 'Delivery Courier Framework', 'Delivery Rules', 'Delivery Mandatory'] : [];
-        const [generalMem, pricingMem, deliveryMem] = await Promise.all([
-          this.memoryService.getRelevantMemories(words),
-          hasPricingIntent ? this.memoryService.getPricingMemories() : Promise.resolve(''),
-          hasDeliveryIntent ? this.memoryService.getMinimalMemories(deliveryKeywords, 5) : Promise.resolve(''),
-        ]);
-        memories = [generalMem, pricingMem, deliveryMem].filter(Boolean).join('\n');
+      // Also scan conversation history for previously mentioned items
+      const historyItems: string[] = [];
+      for (const msg of conversationHistory.slice(-6)) {
+        const msgWords = msg.content.split(/[\s,.\-!?;:()]+/).filter((w: string) => w.length > 2);
+        for (const w of msgWords) {
+          const match = findBestMatch(w, getInventoryItemNames());
+          if (match && !mentionedItems.includes(match) && !historyItems.includes(match)) {
+            historyItems.push(match);
+          }
+        }
+      }
+      const allRelevantItems = [...mentionedItems, ...historyItems];
+
+      // COMPACT INVENTORY CONTEXT: AI-native — full inventory + bookings, AI reasons about availability
+      const inventoryContext = await this.calendarService.getCompactInventoryContext();
+
+      // RULES: Use compact format for routine, full for complex conversations
+      const rules = isFirstMessage || conversationHistory.length > 8
+        ? await this.rulesService.getFormattedRules()
+        : await this.rulesService.getCompactRules();
+
+      // PARALLEL FETCHES: Load always-needed + conditional data concurrently
+      const deliveryKeywords = hasDeliveryIntent ? ['Delivery Pricing Zones', 'Delivery Courier Framework', 'Delivery Rules', 'Delivery Mandatory', 'Fake Location Handling'] : [];
+
+      // Filter pricing catalog to relevant items when possible
+      const { PRICING_CATALOG } = await import('../data/pricing-catalog.js');
+      let pricingCatalogText: string;
+      if (allRelevantItems.length > 0 && !textLower.includes('what do you have') && !textLower.includes('what items') && !textLower.includes('full list')) {
+        // Filtered catalog: mentioned items + their bundles + same-category items
+        const relevantCategories = new Set<string>();
+        const relevantEntries: any[] = [];
+        for (const item of allRelevantItems) {
+          const entry = PRICING_CATALOG.find((p: any) => p.item_name.toLowerCase() === item.toLowerCase());
+          if (entry) {
+            relevantEntries.push(entry);
+            relevantCategories.add(entry.category);
+          }
+        }
+        // Add bundles containing mentioned items
+        for (const entry of PRICING_CATALOG) {
+          if (entry.is_bundle && entry.bundle_items?.some((bi: string) =>
+            allRelevantItems.some(ai => bi.toLowerCase().includes(ai.toLowerCase()) || ai.toLowerCase().includes(bi.toLowerCase()))
+          )) {
+            relevantEntries.push(entry);
+          }
+        }
+        // Add a few alternatives from same categories
+        for (const cat of relevantCategories) {
+          const catItems = PRICING_CATALOG.filter((p: any) => p.category === cat && !p.marketing_only && !relevantEntries.includes(p));
+          relevantEntries.push(...catItems.slice(0, 3));
+        }
+        // Deduplicate
+        const seen = new Set<string>();
+        const uniqueEntries = relevantEntries.filter(e => {
+          if (seen.has(e.item_name)) return false;
+          seen.add(e.item_name);
+          return true;
+        });
+        pricingCatalogText = '=== RELEVANT PRICING (filtered) ===\n' +
+          uniqueEntries.map((e: any) => {
+            const bundleTag = e.is_bundle && e.bundle_items ? ` (includes: ${e.bundle_items.join(' + ')})` : '';
+            return `${e.item_name}: £${e.daily_price_min}-${e.daily_price_max}/day${bundleTag}`;
+          }).join('\n') +
+          '\nMulti-day: 3d ~2.5x, 7d ~5x, month ~2.5 weeks. Full catalog available on request.';
       } else {
-        memories = await this.memoryService.getRelevantMemories(words);
+        pricingCatalogText = this.memoryService.getPricingCatalogContext();
       }
 
-      const persona = account === 'dbcinema'
-        ? 'You are Daniel from DB Cinema Rentals. Professional, concise, human tone.'
-        : 'You are Leo from Leo Adams. Human, kind, slightly chill tone.';
+      const [generalMem, pricingMem, deliveryMem] = await Promise.all([
+        this.memoryService.getRelevantMemories(words, 5),
+        hasPricingIntent ? this.memoryService.getPricingMemories() : Promise.resolve(''),
+        hasDeliveryIntent ? this.memoryService.getMinimalMemories(deliveryKeywords, 3) : Promise.resolve(''),
+      ]);
+
+      // Build memories with token budget awareness (~800 token cap for general memories)
+      let memories: string = [pricingCatalogText, generalMem, pricingMem, deliveryMem].filter(Boolean).join('\n');
+
+      // COMPATIBILITY + PRODUCT SPECS context (always when items are mentioned)
+      if (allRelevantItems.length > 0) {
+        const compatContext = this.memoryService.getCompatibilityContext(allRelevantItems);
+        if (compatContext) {
+          memories = [memories, compatContext].filter(Boolean).join('\n');
+        }
+        const specsContext = this.memoryService.getItemSpecsContext(allRelevantItems);
+        if (specsContext) {
+          memories = [memories, specsContext].filter(Boolean).join('\n');
+        }
+      }
+
+      // UNIFIED RECOMMENDATIONS — use ALL relevant items (current + history), not just current message
+      const { startDate: bundleStartDate, endDate: bundleEndDate } = this.parseDateReferences(textLower);
+      let estimatedTotal = 0;
+      for (const item of allRelevantItems) {
+        const catalogEntry = PRICING_CATALOG.find(
+          (p: any) => p.item_name.toLowerCase() === item.toLowerCase(),
+        );
+        estimatedTotal += catalogEntry ? catalogEntry.daily_price_max : 25;
+      }
+      if (estimatedTotal === 0) estimatedTotal = 25;
+
+      const recommendations = await this.recommendationService.generateRecommendations({
+        message: userText,
+        mentionedItems,
+        conversationText: userText,
+        estimatedTotal,
+        hasPricingIntent,
+        startDate: bundleStartDate,
+        endDate: bundleEndDate,
+      });
+
+      if (recommendations.bundleContext) {
+        memories = [memories, recommendations.bundleContext].filter(Boolean).join('\n');
+      } else {
+        const bundleSuggestionContext = this.memoryService.getBundleSuggestionContext(userText, mentionedItems);
+        if (bundleSuggestionContext) {
+          memories = [memories, bundleSuggestionContext].filter(Boolean).join('\n');
+        }
+      }
+
+      // DEMAND DATA: Fetch once, reuse for trends + upselling (saves duplicate DB query)
+      let topDemandItems: [string, number][] = [];
+      if (conversationHistory.length <= 4) {
+        try {
+          topDemandItems = await this.demandService.getTopRequestedItems(30);
+        } catch (demandErr) {
+          this.logger.debug(`Demand fetch failed: ${demandErr.message}`);
+        }
+      }
+
+      let upsellContext = recommendations.upsellContext || '';
+
+      // Demand-based upselling — first 3 messages, reuse already-fetched data
+      if ((upsellContext || hasPricingIntent) && topDemandItems.length > 0 && conversationHistory.length <= 4) {
+        const popularNotMentioned = topDemandItems
+          .filter(([item]) => !allRelevantItems.some(m => m.toLowerCase() === item.toLowerCase()))
+          .slice(0, 3);
+        if (popularNotMentioned.length > 0) {
+          const popularSuggestions = popularNotMentioned.map(([item, count]) => `${item} (${count})`).join(', ');
+          upsellContext += `\nPopular: ${popularSuggestions}`;
+        }
+      }
+
+      // ACCOUNT TEMPLATES — only first 3 messages (establishes tone, then persona context takes over)
+      const accountName = account || 'dbcinema';
+      if (conversationHistory.length <= 4) {
+        try {
+          const accountTemplates = await this.memoryService.getAccountTemplates(accountName as 'dbcinema' | 'leo');
+          if (accountTemplates) {
+            memories = [memories, `\n--- ACCOUNT TEMPLATES ---\n${accountTemplates}`].filter(Boolean).join('\n');
+          }
+        } catch (templateErr) {
+          this.logger.debug(`Account templates fetch failed: ${templateErr.message}`);
+        }
+      }
+
+      // Demand trends — first message only (~50 tokens)
+      if (isFirstMessage && topDemandItems.length > 0) {
+        const trendLines = topDemandItems.slice(0, 3).map(([item, count]) => `${item}: ${count}`).join(', ');
+        memories = [memories, `\n--- TRENDING ---\n${trendLines}`].filter(Boolean).join('\n');
+      }
+
+      // Revenue context REMOVED — wastes tokens, no renter-facing value, AI should never share it
+
+      // Market data REMOVED from renter chats — internal owner insight only
+
+      // DELIVERY QUOTE (only when delivery is discussed — with item specs from autonomous service)
+      let deliveryQuoteContext = '';
+      if (hasDeliveryIntent) {
+        try {
+          // Search current message AND conversation history for postcodes
+          const postcodeMatch = userText.match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i);
+          const historyText = conversationHistory.map(m => m.content).join(' ');
+          const historyPostcodeMatch = !postcodeMatch ? historyText.match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i) : null;
+          const postcode = postcodeMatch?.[1] || historyPostcodeMatch?.[1];
+
+          if (postcode) {
+            const itemsForQuote = mentionedItems.length > 0 ? mentionedItems : ['camera'];
+            const quote = await this.deliveryService.calculateQuote(postcode, itemsForQuote);
+            if (quote) {
+              deliveryQuoteContext = `\n--- CALCULATED DELIVERY QUOTE ---\n` +
+                `Postcode: ${postcode.toUpperCase()}\n` +
+                `Distance: ${quote.distance_km}km from pickup point\n` +
+                `Zone: ${quote.zone}\n` +
+                `Courier type: ${quote.vehicle_display}\n` +
+                `Reason: ${quote.courier_explanation}\n` +
+                (quote.price_min > 0 ? `One-way estimate: £${quote.price_min}-${quote.price_max}\nRound-trip estimate: £${Math.round(quote.price_min * 1.8)}-${Math.round(quote.price_max * 1.8)}\n` : '') +
+                // Include item dimension breakdown (from autonomous service)
+                (quote.items?.length > 0 ? `Item specs:\n${quote.items.map((item: any) => `  - ${item.name}: size ${item.size_score}/5, ${item.weight_kg}kg${item.is_heavy_large ? ' (heavy/large)' : ''}`).join('\n')}\n` : '') +
+                (quote.notes?.length > 0 ? `Notes: ${quote.notes.join('. ')}\n` : '') +
+                `Use this CALCULATED quote — do NOT guess. Delivery estimates are usually accurate within approximately 15%.`;
+            }
+          } else {
+            const vehicleItems = mentionedItems.length > 0 ? mentionedItems : ['camera'];
+            const vehicleInfo = await this.deliveryService.determineVehicle(vehicleItems);
+            deliveryQuoteContext = `\n--- DELIVERY VEHICLE DETERMINATION ---\n` +
+              `Courier type needed: ${vehicleInfo.vehicle_display}\n` +
+              `Reason: ${vehicleInfo.courier_explanation}\n` +
+              (vehicleInfo.items?.length > 0 ? `Item specs:\n${vehicleInfo.items.map((item: any) => `  - ${item.name}: size ${item.size_score}/5, ${item.weight_kg}kg${item.is_heavy_large ? ' (heavy/large)' : ''}`).join('\n')}\n` : '') +
+              `Ask the renter for their postcode to calculate the exact delivery price.`;
+          }
+        } catch (e) {
+          this.logger.debug(`Delivery quote failed: ${e.message}`);
+        }
+      }
+
+      // SCHEDULE — only when scheduling intent AND conversation is advanced (QUALIFIED+ stage) or on-my-way
+      let scheduleContext = '';
+      if ((hasSchedulingIntent && conversationHistory.length >= 4) || hasSameDayIntent || hasOnMyWayIntent) {
+        try {
+          const schedule = await this.calendarService.getFormattedSchedule(new Date());
+          if (schedule) {
+            scheduleContext = `\n--- TODAY'S SCHEDULE ---\n${schedule}`;
+          }
+        } catch (e) {
+          this.logger.debug(`Schedule load failed: ${e.message}`);
+        }
+      }
+
+      // ON MY WAY DETECTION
+      let onMyWayContext = '';
+      if (hasOnMyWayIntent) {
+        onMyWayContext = `\n--- ON MY WAY DETECTED ---\nRenter heading to pickup. Check booking is confirmed and verified before sharing address. If not confirmed, remind them to complete booking first. Only say "Central London (Trafalgar Square area)" until confirmed.`;
+      }
+
+      // MINIMUM FEE + UPSELL CONTEXT
+      let discountContext = '';
+      const MINIMUM_RENTAL_FEE = 25;
+      if (estimatedTotal < MINIMUM_RENTAL_FEE && allRelevantItems.length > 0) {
+        discountContext = `\n--- LOW VALUE RENTAL (est. £${estimatedTotal}) ---\nThis is below the £${MINIMUM_RENTAL_FEE} minimum. Naturally suggest relevant add-ons (batteries, memory cards, lenses, mics) that complement what they're renting. NEVER mention a minimum fee — just recommend useful extras.`;
+      } else if (estimatedTotal < 50 && allRelevantItems.length > 0) {
+        discountContext = `\n--- UPSELL OPPORTUNITY (est. £${estimatedTotal}) ---\nSmall order. Suggest relevant accessories naturally — lenses, lights, audio, batteries, cards. Frame as "most people also grab X for this kind of shoot".`;
+      } else if (estimatedTotal >= 500) {
+        discountContext = `\n--- DISCOUNT ---\nINTERNAL: Top-tier discount applies (auto at checkout). Do NOT reveal percentage.`;
+      } else if (estimatedTotal >= 250) {
+        discountContext = `\n--- DISCOUNT ---\nINTERNAL: Qualifies for discount, close to bigger tier. Suggest add-ons naturally.`;
+      } else if (estimatedTotal >= 225) {
+        discountContext = `\n--- DISCOUNT ---\nINTERNAL: Close to qualifying. Suggest add-ons naturally.`;
+      }
+
+      // SAME-DAY DETECTION
+      let sameDayContext = '';
+      if (hasSameDayIntent) {
+        sameDayContext = estimatedTotal >= 40
+          ? `\n--- SAME-DAY ---\nHigh-value (est. £${estimatedTotal}). Escalate to Daniel. Ask pickup time.`
+          : `\n--- SAME-DAY ---\nLower-value (est. £${estimatedTotal}). Suggest add-ons first, then escalate.`;
+      }
+
+      // ENHANCED STAGE TRACKING (8-stage funnel from autonomous service, inline detection)
+      // Check BOTH conversation history AND current message for stage signals
+      let stageContext = '';
+      const msgCount = conversationHistory.length / 2;
+      const allContent = [...conversationHistory.map(m => m.content), userText]; // Include current message
+      const hasPricingDiscussed = allContent.some(c => c && /\b(£\d|price|cost|rate|quote|how much|per day)\b/i.test(c));
+      const hasDeliveryDiscussed = allContent.some(c => c && /\b(deliver|pickup|collect|postcode)\b/i.test(c));
+      // Stage detection — tightened patterns to prevent false triggers
+      // "confirmed" must be in booking-confirmation context, not "I confirmed the price" or "item confirmed available"
+      const hasConfirmedItems = conversationHistory.some(m => m.role === 'assistant' &&
+        /\b(booking confirmed|booking is confirmed|reservation confirmed|your booking|rental confirmed)\b/i.test(m.content));
+      const hasBookingRequest = conversationHistory.some(m => m.content && /\b(send a request|booking request|book it|go ahead|let'?s do it|i'?ve booked|just booked)\b/i.test(m.content));
+      // Verification must be in identity-verification context, not just mentioning "ID" or "verify availability"
+      const hasVerificationMention = allContent.some(c => c && /\b(identity verif|id verif|verify your identity|upload.*id|passport.*verif|driving licen|verification required|needs? verif)\b/i.test(c));
+      const hasGoneQuiet = msgCount > 3 && conversationHistory.slice(-2).every(m => m.role === 'assistant');
+
+      if (hasGoneQuiet) {
+        stageContext = `\n--- STAGE: DEAD ---\nRenter has gone quiet. Do NOT send follow-ups (handled automatically). If they re-engage, welcome them back warmly.`;
+      } else if (hasConfirmedItems) {
+        stageContext = `\n--- STAGE: CONFIRMED ---\nFinal details only. Focus on pickup/return logistics.`;
+      } else if (hasVerificationMention) {
+        stageContext = `\n--- STAGE: AWAITING_VERIFICATION ---\nGuide renter through verification. Be helpful and reassuring.`;
+      } else if (hasBookingRequest) {
+        stageContext = `\n--- STAGE: BOOKING_SENT ---\nBooking requested. Confirm details, mention verification if needed.`;
+      } else if (hasPricingDiscussed && hasDeliveryDiscussed && !hasConfirmedItems) {
+        stageContext = `\n--- STAGE: BOOKING_READY ---\nPricing AND delivery discussed. IMPORTANT: Guide renter to submit a booking request through Hygglo. Tell them exactly how to proceed.`;
+      } else if (hasPricingDiscussed && !hasDeliveryDiscussed && !hasConfirmedItems) {
+        stageContext = `\n--- STAGE: QUALIFIED ---\nPricing discussed. Push to booking — ask about dates, pickup/delivery preference.`;
+      } else if (msgCount === 0) {
+        stageContext = `\n--- STAGE: INQUIRY ---\nFirst message. Welcome warmly, confirm needs, ask about their shoot. MUST ask what the project is for to give better recommendations.`;
+      } else if (msgCount <= 2 && !hasPricingDiscussed) {
+        stageContext = `\n--- STAGE: INTEREST ---\nExploring options. Give pricing proactively, suggest bundles. Ask about their shoot/project.`;
+      }
+
+      // SMART CONVERSATION HISTORY: Keep first msg + last 4 exchanges + summarize middle
+      let smartHistory: { role: 'user' | 'assistant'; content: string }[] | undefined;
+      if (conversationHistory.length > 0) {
+        if (conversationHistory.length <= 10) {
+          smartHistory = conversationHistory;
+        } else {
+          const first2 = conversationHistory.slice(0, 2); // First exchange (establishes context)
+          const last8 = conversationHistory.slice(-8); // Last 4 exchanges
+          // Summarize dropped middle as context note
+          const droppedCount = conversationHistory.length - 10;
+          const summaryMsg: { role: 'user' | 'assistant'; content: string } = {
+            role: 'assistant',
+            content: `[${droppedCount} earlier messages omitted. Key topics covered: ${hasPricingDiscussed ? 'pricing, ' : ''}${hasDeliveryDiscussed ? 'delivery, ' : ''}items discussed: ${allRelevantItems.slice(0, 5).join(', ') || 'general inquiry'}]`,
+          };
+          smartHistory = [...first2, summaryMsg, ...last8];
+        }
+      }
+
+      // BUILD ADDITIONAL CONTEXT: Only dynamic, per-message data (no duplicated rules)
+      const persona = accountName === 'leo'
+        ? 'You are Leo Adams — a real person, NOT a business. OVERRIDE: The rule "Never say my gear/items/equipment" does NOT apply here. That rule is for DB Cinema only. As Leo, you MUST say "I\'ve got", "my gear", "my kit", "I can deliver". NEVER say "we" or "our". Example: "Yeah I\'ve got the FX3 available, my gear is all based in Central London." Be warm, personable, and slightly chill.'
+        : 'You are Daniel from DB Cinema Rentals. Professional, concise, human tone. Use "we" and "our" — never "my gear".';
+      const businessName = accountName === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals';
 
       const pricingInstruction = hasPricingIntent
-        ? `4) The renter is asking about pricing. Use the listing price data in your memories to give an estimate. Say "approximately £X/day based on our current listings". Mention Hygglo adds a service fee at checkout. Mention multi-day discounts for longer rentals. If a bundle covers their needs, recommend it. CRITICAL: Quote the INDIVIDUAL item price for single items — never confuse bundle prices with individual prices (e.g. a single Sony GM lens is £14-22/day, NOT the bundle price). NEVER reveal margins or commission rates. Do NOT tell them to send a rental request just to get a quote. `
+        ? `The renter is asking about pricing. Reference the pricing catalog to give an accurate estimate. ` +
+          `Say "approximately £X/day based on our current listings". ` +
+          `When quoting daily prices, use the standard single-day rate (the higher rate). The lower rate only applies to multi-day discounted bookings. ` +
+          `Always quote the ONE-DAY price and mention multi-day discounts are available for longer rentals. ` +
+          `Present as ESTIMATES. If a relevant bundle exists, suggest it as better value. ` +
+          `CRITICAL: Quote INDIVIDUAL item price for single items — never confuse with bundle prices. ` +
+          `NEVER reveal owner margins or commission rates. Do NOT require a rental request just for a quote.`
         : '';
 
       const deliveryInstruction = hasDeliveryIntent
-        ? `5) The renter is asking about delivery. Give them a delivery price estimate DIRECTLY from the delivery pricing zones in your memories. Ask for their postcode if not provided, then quote the zone-based price range. Do NOT require a booking request before giving a delivery quote. Do NOT send the full delivery booking form yet — just give the price estimate first. Only ask for full details after they agree. `
+        ? `The renter is asking about delivery. We only deliver within London (max 30km from our pickup point). ` +
+          `Give a delivery price estimate DIRECTLY based on the delivery pricing zones. ` +
+          `Tell them which courier type their items need (motorcycle, car, or van) and briefly explain why. ` +
+          `Ask for their postcode if not provided. Do NOT require a booking request before giving a quote. ` +
+          `Delivery estimates are usually accurate within approximately 15%.`
         : '';
 
-      // Fetch live availability data
-      let availabilityContext = '';
-      try {
-        const availData = await this.getAvailabilityForMessage(userText);
-        if (availData) {
-          availabilityContext = `\n\n${availData}`;
-        }
-      } catch (availErr) {
-        this.logger.warn(`Simulation availability check failed: ${availErr.message}`);
-      }
+      const additionalParts = [
+        inventoryContext,
+        pricingInstruction,
+        deliveryInstruction,
+        scheduleContext,
+        deliveryQuoteContext,
+        upsellContext,
+        onMyWayContext,
+        discountContext,
+        sameDayContext,
+        // CRITICAL BEHAVIORAL RULES (merged from autonomous service)
+        `CRITICAL — CONTEXTUAL RECOMMENDATIONS: If the renter has NOT mentioned what they are shooting, you MUST ask what the project is for (e.g., "What's the shoot for?"). This is essential for recommending the right gear. Once you know the use case, actively suggest complementary items.`,
+        `CRITICAL — NO DOWNSELLING: NEVER tell a renter they have "enough", are "set", are "all good", or "don't need" something. If they ask what else they might need, suggest relevant accessories — do NOT dismiss the question.`,
+        `CRITICAL — RETURNING RENTERS: If conversation history shows familiarity, skip generic welcome. Say "Welcome back!" and get straight to confirming items and dates.`,
+        `CRITICAL — WRITING STYLE: Keep messages concise and scannable. Use short paragraphs (2-3 sentences max). Lead with the answer, then add context. Make prices and key info easy to spot.`,
+        `CRITICAL — LOCATION EXCUSES: If the renter asks why an item is not at the advertised listing location, FIRST apologise, THEN use a natural excuse. NEVER reveal all items are at the same place.`,
+        accountName === 'leo'
+          ? `CRITICAL — LANGUAGE (HIGHEST PRIORITY): You are Leo. ALWAYS use "I" and "my" — say "I've got", "my gear", "my kit", "I can". NEVER say "we" or "our". You are one person, not a business.`
+          : `CRITICAL — LANGUAGE (HIGHEST PRIORITY): You are Daniel from DB Cinema Rentals. NEVER say "my gear", "my items", "my equipment". Use "our", "the gear", "the equipment", "we have".`,
+        `CRITICAL — SUBSTITUTIONS: When an exact item is unavailable but a close alternative exists, explain the difference simply and naturally.`,
+        `CRITICAL — BUNDLE VALUE: ALWAYS check if a bundle/kit exists that includes the items the renter wants. If a bundle is CHEAPER than renting items individually, you MUST suggest it and show the savings. Example: "The Wedding Full Kit includes everything you need at £110-150/day — that's better value than renting separately." If renter mentions a use case (wedding, documentary, music video, etc.), check for matching named kits.`,
+      ].filter(Boolean).join('\n');
 
-      const response = await this.aiService.processComplex(userText, {
-        rules,
-        memories,
-        additionalContext:
-          `SIMULATION MODE: A renter is messaging on the ${account === 'dbcinema' ? 'DB Cinema Rentals' : 'Leo Adams'} account. ` +
-          `${persona} ` +
-          `Reply as you would to a real renter. Follow all business rules. ` +
-          `IMPORTANT REMINDERS: ` +
-          `1) When a renter enquires about items, pricing, or delivery, just give them the information directly. Do NOT tell them to send a rental request just to get information or a quote — a request is only needed when they want to actually book. ` +
-          `2) Always tell renters right away that all items are based in Central London (Trafalgar Square area) and collection is from there. ` +
-          `3) If the renter mentions their location and it is far from central London (20km+), proactively inform them they are eligible for a 10% travel distance discount. If that is the only discount they qualify for, still mention it. ` +
-          `CRITICAL — LOCATION: Do NOT share any specific street address, building name, or postcode. Before booking is confirmed, ONLY say "Central London (Trafalgar Square area)". If they ask for the exact address, say you will share the meetup point once the booking is confirmed. ` +
-          `CRITICAL — AVAILABILITY: When live availability data is provided below, you MUST use it to answer accurately. Do NOT state static inventory counts — check the live data for actual bookings. If an item is booked for the requested dates, tell the renter it is unavailable. ` +
-          `CRITICAL — DISCLOSURE: Never mention AI, bots, automated systems, Claude, or scanning. Never reveal margins, platform fees, or pricing formulas. Never reveal that DB Cinema and Leo Adams are the same business. ` +
-          `CRITICAL — FORMATTING: Do NOT use markdown formatting (no bold, no bullet points, no headers). Write plain text only. ` +
-          `CRITICAL — LANGUAGE: Never say "my gear", "my items", "my equipment", or "my stuff". Say "our items", "the gear", "the equipment", or "items available". You represent the business, not personal ownership. ` +
-          `CRITICAL — NO DOWNSELLING: NEVER tell a renter they have "enough" of any item or say they "don't need" something. Do NOT say included batteries are "usually enough". If they want more, help them add it. Facilitate and upsell, never downsell. ` +
-          `CRITICAL — PICKUP PRIORITY: ALWAYS offer the 10am pickup slot FIRST. Day-before evening pickup: FREE for rentals over £40 total, +30% surcharge for rentals under £40. Never suggest as default. Morning slots (10am-12pm) before evening slots (7pm-9pm). ` +
-          `CRITICAL — RETURN PRIORITY: Always suggest the earliest possible return slot. Morning-after return: FREE for over £40, +30% for under £40. Evening next day = always a full extra day. Half-day grace ONLY for 1-day rentals. Both day-before pickup AND morning-after return = full extra day regardless of value. ` +
-          `CRITICAL — BMPCC BATTERIES: BMPCC 6K Pro comes with 5x LP-E6NH batteries. BMPCC 6K Full Frame comes with 5x LP-E6NH batteries. NEVER say 2x or 3x. The number is FIVE (5). ` +
-          `CRITICAL — LOCATION LOCK: The renter location established at the START of the conversation is authoritative. If they mention a different location later, do NOT update your assumption. ` +
-          `CRITICAL — V-MOUNT: V-mount battery rentals include all necessary plates, adapters, and cables. Never say "via plate" or imply renters need separate accessories. ` +
-          `CRITICAL — CONTEXTUAL: If the renter has not mentioned what they are shooting, naturally ask what the project is to recommend the right gear. ` +
-          `CRITICAL — DJ + SPEAKERS: Delivery is MANDATORY for DJ deck + speakers together. Never allow self-pickup for this combination. ` +
-          `CRITICAL — SAME-DAY RENTALS: NEVER auto-approve same-day rentals. Ask for pickup time, then check with Daniel before confirming. ` +
-          `CRITICAL — TIMING: When calendar data is available, suggest pickup/return times that align with other existing bookings to minimize Daniel's trips. ` +
-          `CRITICAL — NO PRICE NEGOTIATION: NEVER offer custom discounts or negotiate prices. Only standard discount tiers apply. Escalate price requests to Daniel. ` +
-          `CRITICAL — ADDRESS: NEVER share a specific street address before booking is confirmed. Only say "Central London (Trafalgar Square area)". ` +
-          pricingInstruction +
-          deliveryInstruction +
-          availabilityContext,
+      // DSPy disabled for renter conversations — it bypasses persona, stage tracking, and context pipeline
+      // DSPy can be re-enabled once it supports account-aware modules
+      const dspyResponse: any = null;
+
+      // Build rental context for persona + stage (uses dedicated system prompt section for stronger signal)
+      const rentalContextStr =
+        `ACTIVE ACCOUNT: ${businessName} — respond ONLY as this account.\n` +
+        `${persona}\n` +
+        `${stageContext}\n` +
+        `This is message #${msgCount + 1} in the conversation. ${conversationHistory.length > 0 ? 'IMPORTANT: Reference items and details from the conversation history above.' : ''}\n` +
+        `Reply as a direct message to the renter. Plain text only. Start with the reply text (no preamble).`;
+
+      // For Leo account, prefix the AI message with persona reminder (Haiku needs this for reliable persona switching)
+      const aiUserMessage = accountName === 'leo'
+        ? `[Respond as Leo Adams — use "I" and "my", never "we" or "our"]\n${userText}`
+        : userText;
+
+      // Adaptive token budget based on query complexity signals
+      const tokenBudget = this.calculateTokenBudget({
+        hasPricingIntent,
+        hasDeliveryIntent,
+        itemCount: allRelevantItems.length,
+        estimatedTotal,
+        messageCount: conversationHistory.length,
       });
 
-      // Validate response before sending
+      const response = dspyResponse?.response
+        ? { content: dspyResponse.response, memories: [], model: 'dspy-optimized', inputTokens: 0, outputTokens: 0 }
+        : await this.aiService.processRoutine(aiUserMessage, {
+        rules,
+        memories,
+        conversationHistory: smartHistory,
+        rentalContext: rentalContextStr,
+        additionalContext: additionalParts,
+        maxTokens: tokenBudget,
+      });
+
+      // Validate response before sending — pass sim context for accurate validation
       const validationResult = await this.validationService.validateResponse(
         response.content,
-        { responseType: 'customer_message' },
+        {
+          responseType: 'customer_message',
+          context: {
+            rental: {
+              account,
+              title: mentionedItems.join(', ') || 'Simulation',
+              items: mentionedItems,
+            },
+            message: { content: userText },
+          },
+        },
       );
+
+      // QUALITY SCORING: Compute quality metrics for sim feedback
+      let qualityInfo = '';
+      try {
+        const qualityScore = await this.qualityScorerService.scoreResponse(
+          response.content,
+          {
+            account: account || undefined,
+            messageType: hasPricingIntent ? 'pricing' : hasDeliveryIntent ? 'delivery' : 'message',
+            hasPricing: hasPricingIntent,
+          },
+          validationResult,
+        );
+
+        const emoji = qualityScore.overallQuality >= 0.85 ? '🟢' : qualityScore.overallQuality >= 0.7 ? '🟡' : '🔴';
+        qualityInfo = `\n\n${emoji} Quality: ${(qualityScore.overallQuality * 100).toFixed(0)}% | Compliance: ${(qualityScore.ruleCompliance * 100).toFixed(0)}% | Tone: ${(qualityScore.toneMatch * 100).toFixed(0)}% | Concise: ${(qualityScore.conciseness * 100).toFixed(0)}%` +
+          (qualityScore.pricingAccuracy !== undefined ? ` | Pricing: ${(qualityScore.pricingAccuracy * 100).toFixed(0)}%` : '') +
+          ` | Confidence: ${(qualityScore.computedConfidence * 100).toFixed(0)}%`;
+      } catch (qualityErr) {
+        this.logger.debug(`Quality scoring failed in sim: ${qualityErr.message}`);
+      }
 
       let replyText = response.content;
       if (validationResult.blocked) {
-        replyText = `[BLOCKED by validation: ${validationResult.violations.join(', ')}]\n\nOriginal: ${response.content}`;
+        // Attempt deterministic repair
+        const repairResult = this.repairService.attemptRepair(response.content, validationResult, { account: account || undefined });
+        if (repairResult.repaired) {
+          const revalidation = await this.validationService.validateResponse(
+            repairResult.content, { responseType: 'customer_message', context: { rental: { account }, message: { content: userText } } },
+          );
+          if (!revalidation.blocked) {
+            replyText = repairResult.content;
+            validationResult.blocked = false;
+          }
+        }
+        if (validationResult.blocked) {
+          replyText = `[BLOCKED by validation: ${validationResult.violations.join(', ')}]\n\nOriginal: ${response.content}`;
+        }
       }
 
-      // Don't store simulation conversations to memory
+      // Track conversation history for multi-turn awareness
+      conversationHistory.push(
+        { role: 'user', content: userText },
+        { role: 'assistant', content: response.content },
+      );
+
+      return { replyText, qualityInfo, rawContent: response.content };
+  }
+
+  /**
+   * Adaptive token budget: gives more tokens when query complexity warrants it.
+   */
+  private calculateTokenBudget(signals: {
+    hasPricingIntent: boolean;
+    hasDeliveryIntent: boolean;
+    itemCount: number;
+    estimatedTotal: number;
+    messageCount: number;
+  }): number {
+    let budget = 256; // default for simple queries
+
+    if (signals.hasPricingIntent) budget = Math.max(budget, 320);
+    if (signals.hasDeliveryIntent) budget = Math.max(budget, 320);
+    if (signals.itemCount >= 3) budget = Math.max(budget, 384);
+    if (signals.estimatedTotal > 300) budget = Math.max(budget, 384);
+    if (signals.messageCount > 8) budget = Math.max(budget, 320);
+
+    // Combination bonus: pricing + delivery + multi-item
+    const complexSignals = [signals.hasPricingIntent, signals.hasDeliveryIntent, signals.itemCount >= 3].filter(Boolean).length;
+    if (complexSignals >= 2) budget = Math.max(budget, 448);
+
+    return budget;
+  }
+
+  private async handleSimulatedConversation(msg: any) {
+    const userText = msg.text;
+    const account = this.simulationMode.account;
+
+    try {
+      const result = await this.processRenterConversation(userText, account, this.simConversationHistory);
+      if (!result) return;
+
       await this.bot.sendMessage(
         msg.chat.id,
-        `[SIM:${account}] ${replyText}`,
+        `[SIM:${account}] ${result.replyText}${result.qualityInfo}`,
       );
     } catch (error) {
       this.logger.error(`Simulation error: ${error.message}`);
-      this.sentryService.captureError(error, {
+      this.errorLogService.captureError(error, {
         operation: 'telegram_simulation',
         account: this.simulationMode.account,
         message_preview: userText.substring(0, 100),
@@ -591,9 +1176,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // Fetch upcoming bookings once (used in both branches)
+    const upcomingBookings = await this.calendarService.getAllUpcomingBookings(7);
+
     if (detectedItems.length === 0) {
-      // No specific items detected — provide general upcoming bookings snapshot
-      const upcomingBookings = await this.calendarService.getAllUpcomingBookings(7);
       return upcomingBookings;
     }
 
@@ -606,9 +1192,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       startDate,
       endDate,
     );
-
-    // Also add upcoming bookings for context
-    const upcomingBookings = await this.calendarService.getAllUpcomingBookings(7);
 
     return [availabilitySummary, upcomingBookings].filter(Boolean).join('\n\n');
   }
@@ -690,15 +1273,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const chatId = msg.chat.id;
     this.logger.log(`/start from ${msg.from?.first_name} (chat ${chatId})`);
 
-    const isAuth = this.isOwner(chatId) ? ' (Owner verified)' : '';
-    await this.bot.sendMessage(
-      chatId,
-      `*Bananajoe Rental Manager*${isAuth}\n\nI autonomously manage your Hygglo rentals with AI.\n\nUse /help to see available commands, or just chat with me.`,
-      { parse_mode: 'Markdown' },
-    );
+    if (this.isOwner(chatId)) {
+      await this.bot.sendMessage(
+        chatId,
+        `*Bananajoe Rental Manager* (Owner verified)\n\nI autonomously manage your Hygglo rentals with AI.\n\nUse /help to see available commands, or just chat with me.`,
+        { parse_mode: 'Markdown' },
+      );
+    } else {
+      // Renter-facing welcome
+      const chatKey = String(chatId);
+      const account = this.renterChatAccounts.get(chatKey) || 'dbcinema';
+      const name = account === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals';
+      await this.bot.sendMessage(
+        chatId,
+        `Hey! Welcome to the rental enquiry chat.\n\n` +
+        `Just message me like you would on the platform — ask about gear, pricing, availability, delivery, anything.\n\n` +
+        `This uses the exact same AI, rules, and logic as the real bot on Hygglo.\n\n` +
+        `Commands:\n` +
+        `/reset — clear conversation history\n` +
+        `/account dbcinema — switch to DB Cinema\n` +
+        `/account leo — switch to Leo Adams\n` +
+        `/improve — enter improvement mode (each message becomes a high-priority rule)\n` +
+        `/endimprove — exit improvement mode\n\n` +
+        `Currently chatting as: ${name}`,
+      );
+    }
   }
 
   private async handleHelp(msg: any) {
+    if (!this.isOwner(msg.chat.id)) {
+      // Renter help
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `*Rental Enquiry Chat*\n\n` +
+        `Just message me about gear, pricing, availability, delivery — anything.\n\n` +
+        `Commands:\n` +
+        `/reset — clear conversation history\n` +
+        `/account dbcinema — switch to DB Cinema\n` +
+        `/account leo — switch to Leo Adams\n` +
+        `/improve — enter improvement mode\n` +
+        `/endimprove — exit improvement mode`,
+        { parse_mode: 'Markdown' },
+      );
+      return;
+    }
+
     await this.bot.sendMessage(
       msg.chat.id,
       '*Available Commands*\n\n' +
@@ -739,10 +1358,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '*Simulation*\n' +
       '/simulate <dbcinema|leo> - Enter sim mode\n' +
       '/endsim - Exit sim mode\n\n' +
+      '*Improvement*\n' +
+      '/improve - Enter improvement mode (each message becomes a rule)\n' +
+      '/endimprove - Exit improvement mode\n\n' +
       '*Monitoring & Optimization*\n' +
-      '/sentry - Sentry error monitoring status\n' +
+      '/errorlog - Error monitoring status\n' +
       '/dspy - DSPy prompt optimization status\n' +
       '/optimize [rental|pricing|delivery] - Run DSPy optimization\n\n' +
+      '*AutoLearn*\n' +
+      '/autolearn - AutoLearn status & quality trend\n' +
+      '/veto <id> [reason] - Veto a pending proposal\n' +
+      '/autolearn\\_pause - Pause analysis cycles\n' +
+      '/autolearn\\_resume - Resume analysis cycles\n\n' +
       '*Chat*\nJust send any message to chat with AI about your rentals.\n' +
       'I also learn from our conversations automatically.',
       { parse_mode: 'Markdown' },
@@ -1472,6 +2099,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     const account = match[1] as 'dbcinema' | 'leo';
     this.simulationMode = { active: true, account };
+    this.simConversationHistory = []; // Reset history for new sim session
 
     const persona = account === 'dbcinema' ? 'DB Cinema Rentals (Daniel)' : 'Leo Adams (Leo)';
     await this.bot.sendMessage(
@@ -1497,7 +2125,255 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.simulationMode = { active: false, account: null };
+    this.simConversationHistory = []; // Clear sim history
     await this.bot.sendMessage(msg.chat.id, 'Simulation mode ended. Back to normal.');
+  }
+
+  // --- Improvement mode handlers ---
+
+  private async handleImprove(msg: any) {
+    const chatKey = String(msg.chat.id);
+
+    if (this.isOwner(msg.chat.id)) {
+      // Owner improvement mode (global)
+      this.improvementMode = true;
+    } else {
+      // Non-owner: per-chat improvement mode
+      this.renterImprovementModes.add(chatKey);
+    }
+
+    await this.bot.sendMessage(
+      msg.chat.id,
+      `🛠 *Improvement Mode Active*\n\n` +
+      `Each message you send will be AI-classified and stored as a high-priority rule.\n\n` +
+      `Examples:\n` +
+      `├ "Never offer discounts below 10%"\n` +
+      `├ "Always mention battery count for BMPCC"\n` +
+      `└ "When quoting V-mounts, mention both sizes"\n\n` +
+      `Use /endimprove to exit.`,
+      { parse_mode: 'Markdown' },
+    );
+  }
+
+  private async handleEndImprove(msg: any) {
+    const chatKey = String(msg.chat.id);
+
+    if (this.isOwner(msg.chat.id)) {
+      if (!this.improvementMode) {
+        await this.bot.sendMessage(msg.chat.id, 'Not in improvement mode.');
+        return;
+      }
+      this.improvementMode = false;
+    } else {
+      if (!this.renterImprovementModes.has(chatKey)) {
+        await this.bot.sendMessage(msg.chat.id, 'Not in improvement mode.');
+        return;
+      }
+      this.renterImprovementModes.delete(chatKey);
+    }
+
+    await this.bot.sendMessage(msg.chat.id, 'Improvement mode ended. Rules saved.');
+  }
+
+  private async handleImprovementMessage(msg: any) {
+    const text = msg.text;
+
+    try {
+      // Use AI to classify the improvement into a category and rule name
+      const classificationPrompt =
+        `Classify the following improvement instruction into a category and a short rule name.\n\n` +
+        `Instruction: "${text}"\n\n` +
+        `Available categories: communication, pricing, delivery, inventory, verification, scheduling, upselling, safety, general\n\n` +
+        `Respond in EXACTLY this format (no other text):\n` +
+        `CATEGORY: <category>\n` +
+        `NAME: <short_rule_name_with_underscores>\n\n` +
+        `Example:\n` +
+        `CATEGORY: communication\n` +
+        `NAME: always_mention_battery_count`;
+
+      const response = await this.aiService.processExtraction(classificationPrompt);
+      const lines = response.content.trim().split('\n');
+
+      let category = 'general';
+      let name = 'improvement_rule';
+
+      for (const line of lines) {
+        const categoryMatch = line.match(/^CATEGORY:\s*(.+)/i);
+        if (categoryMatch) category = categoryMatch[1].trim().toLowerCase();
+        const nameMatch = line.match(/^NAME:\s*(.+)/i);
+        if (nameMatch) name = nameMatch[1].trim().toLowerCase().replace(/\s+/g, '_');
+      }
+
+      // Add timestamp suffix to name for uniqueness
+      const uniqueName = `${name}_${Date.now().toString(36)}`;
+
+      await this.rulesService.addRule(category, uniqueName, text, 8);
+
+      // Log explicit teaching signal in AutoLearn audit trail
+      this.correctionDetector.processMessage(text, true).catch(err =>
+        this.logger.debug(`Correction detector (explicit): ${err.message}`),
+      );
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `✅ Rule stored\n\n` +
+        `├ Category: ${category}\n` +
+        `├ Name: ${uniqueName}\n` +
+        `├ Priority: 8 (high)\n` +
+        `└ Content: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      this.logger.error(`Improvement classification failed: ${error.message}`);
+      // Fallback: store as general rule without AI classification
+      const fallbackName = `improvement_${Date.now().toString(36)}`;
+      try {
+        await this.rulesService.addRule('general', fallbackName, text, 8);
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `✅ Rule stored (fallback)\n├ Category: general\n└ Name: ${fallbackName}`,
+        );
+      } catch (fallbackErr) {
+        await this.bot.sendMessage(msg.chat.id, `Failed to store rule: ${fallbackErr.message}`);
+      }
+    }
+  }
+
+  // --- AutoLearn Engine commands ---
+
+  private async handleAutolearn(msg: any) {
+    try {
+      const status = await this.autolearnService.getStatus();
+      const stateEmoji = status.paused ? '⏸️' : (status.enabled ? '✅' : '❌');
+      const stateText = status.paused ? 'Paused' : (status.enabled ? 'Active' : 'Disabled');
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `*AutoLearn Engine* ${stateEmoji}\n\n` +
+        `Status: ${stateText}\n` +
+        `Proposals today: ${status.todayProposals}\n` +
+        `Pending: ${status.pendingProposals}\n` +
+        `Reworking: ${status.reworkingProposals}\n` +
+        `Failed (needs review): ${status.failedProposals}\n` +
+        `Quality (24h): ${status.qualityTrend?.toFixed(2) || 'N/A'}\n\n` +
+        `Commands:\n` +
+        `/veto <id> [reason] - Veto a proposal\n` +
+        `/autolearn\\_pause - Pause cycles\n` +
+        `/autolearn\\_resume - Resume cycles`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err) {
+      await this.bot.sendMessage(msg.chat.id, `AutoLearn status error: ${err.message}`);
+    }
+  }
+
+  private async handleVeto(msg: any, match: any) {
+    const shortId = match[1];
+    const reason = match[2] || undefined;
+
+    try {
+      const result = await this.autolearnService.vetoProposal(shortId, reason);
+      await this.bot.sendMessage(msg.chat.id, result);
+    } catch (err) {
+      await this.bot.sendMessage(msg.chat.id, `Veto failed: ${err.message}`);
+    }
+  }
+
+  private async handleAutolearnPause(msg: any) {
+    await this.autolearnService.pause();
+    await this.bot.sendMessage(msg.chat.id, 'AutoLearn paused. Use /autolearn\\_resume to resume.');
+  }
+
+  private async handleAutolearnResume(msg: any) {
+    await this.autolearnService.resume();
+    await this.bot.sendMessage(msg.chat.id, 'AutoLearn resumed.');
+  }
+
+  // --- Unified renter message handling (replaces separate renter bot) ---
+
+  private async handleRenterMessage(msg: any) {
+    const chatKey = String(msg.chat.id);
+    const userText = msg.text;
+
+    // Improvement mode for non-owner users
+    if (this.renterImprovementModes.has(chatKey)) {
+      await this.handleRenterImprovementMessage(msg);
+      return;
+    }
+
+    // Get or create per-chat conversation history
+    if (!this.renterChatHistories.has(chatKey)) {
+      this.renterChatHistories.set(chatKey, []);
+    }
+    const history = this.renterChatHistories.get(chatKey)!;
+    const account = this.renterChatAccounts.get(chatKey) || 'dbcinema';
+
+    try {
+      const result = await this.processRenterConversation(userText, account, history);
+      if (!result) return;
+
+      // Send clean response (no quality info — just the raw reply)
+      await this.bot.sendMessage(msg.chat.id, result.rawContent);
+    } catch (error) {
+      this.logger.error(`Renter message error: ${error.message}`);
+      await this.bot.sendMessage(msg.chat.id, 'Sorry, something went wrong. Try again.');
+    }
+  }
+
+  private async handleRenterReset(msg: any) {
+    if (this.isOwner(msg.chat.id)) return; // Owner has own /reset
+    const chatKey = String(msg.chat.id);
+    this.renterChatHistories.delete(chatKey);
+    await this.bot.sendMessage(msg.chat.id, 'Conversation reset. Send a new message to start fresh.');
+  }
+
+  private async handleRenterAccount(msg: any, match: any) {
+    if (this.isOwner(msg.chat.id)) return; // Owner uses /simulate
+    const chatKey = String(msg.chat.id);
+    const account = match[1] as 'dbcinema' | 'leo';
+    this.renterChatAccounts.set(chatKey, account);
+    this.renterChatHistories.delete(chatKey); // Reset history on account switch
+    const name = account === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals';
+    await this.bot.sendMessage(msg.chat.id, `Switched to ${name}. Conversation reset.`);
+  }
+
+  private async handleRenterImprovementMessage(msg: any) {
+    const text = msg.text;
+    try {
+      const classificationPrompt =
+        `Classify the following improvement instruction into a category and a short rule name.\n\n` +
+        `Instruction: "${text}"\n\n` +
+        `Available categories: communication, pricing, delivery, inventory, verification, scheduling, upselling, safety, general\n\n` +
+        `Respond in EXACTLY this format (no other text):\n` +
+        `CATEGORY: <category>\n` +
+        `NAME: <short_rule_name_with_underscores>`;
+
+      const response = await this.aiService.processExtraction(classificationPrompt);
+      const lines = response.content.trim().split('\n');
+      let category = 'general';
+      let name = 'improvement_rule';
+      for (const line of lines) {
+        const categoryMatch = line.match(/^CATEGORY:\s*(.+)/i);
+        if (categoryMatch) category = categoryMatch[1].trim().toLowerCase();
+        const nameMatch = line.match(/^NAME:\s*(.+)/i);
+        if (nameMatch) name = nameMatch[1].trim().toLowerCase().replace(/\s+/g, '_');
+      }
+      const uniqueName = `${name}_${Date.now().toString(36)}`;
+      await this.rulesService.addRule(category, uniqueName, text, 8);
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `✅ Rule stored\n\nCategory: ${category}\nName: ${uniqueName}\nPriority: 8 (high)\nContent: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`,
+      );
+    } catch (error) {
+      this.logger.error(`Improvement classification failed: ${error.message}`);
+      const fallbackName = `improvement_${Date.now().toString(36)}`;
+      try {
+        await this.rulesService.addRule('general', fallbackName, text, 8);
+        await this.bot.sendMessage(msg.chat.id, `✅ Rule stored (fallback)\nCategory: general\nName: ${fallbackName}`);
+      } catch (fallbackErr) {
+        await this.bot.sendMessage(msg.chat.id, `Failed to store rule: ${fallbackErr.message}`);
+      }
+    }
   }
 
   // --- Phase 4: Delivery + Market command handlers ---
@@ -1607,22 +2483,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   // --- Monitoring & Optimization commands ---
 
-  private async handleSentry(msg: any) {
+  private async handleErrorLog(msg: any) {
     if (!this.isOwner(msg.chat.id)) {
       await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
       return;
     }
 
     try {
-      const sentryDsn = process.env.SENTRY_DSN;
-      const sentryEnabled = !!sentryDsn;
-      const environment = process.env.NODE_ENV || 'production';
-
-      // Get recent error count from AI decisions (proxy for system health)
       const oneDayAgo = new Date();
       oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-      const [totalDecisions, recentErrors] = await Promise.all([
+      const [
+        totalDecisions,
+        blockedDecisions,
+        totalErrors,
+        exceptions,
+        qualityWarnings,
+        validationFailures,
+        slowApis,
+        pendingAnalysis,
+      ] = await Promise.all([
         this.prisma.ai_decision.count({
           where: { created_at: { gte: oneDayAgo } },
         }),
@@ -1632,24 +2512,45 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             action_taken: { contains: 'BLOCKED', mode: 'insensitive' },
           },
         }),
+        this.prisma.error_log.count({
+          where: { created_at: { gte: oneDayAgo } },
+        }),
+        this.prisma.error_log.count({
+          where: { created_at: { gte: oneDayAgo }, error_type: 'exception' },
+        }),
+        this.prisma.error_log.count({
+          where: { created_at: { gte: oneDayAgo }, error_type: 'quality_warning' },
+        }),
+        this.prisma.error_log.count({
+          where: { created_at: { gte: oneDayAgo }, error_type: 'validation_failure' },
+        }),
+        this.prisma.error_log.count({
+          where: { created_at: { gte: oneDayAgo }, error_type: 'slow_api' },
+        }),
+        this.prisma.error_log.count({
+          where: { feedback_analyzed: false },
+        }),
       ]);
 
-      const errorRate = totalDecisions > 0 ? ((recentErrors / totalDecisions) * 100).toFixed(1) : '0';
+      const errorRate = totalDecisions > 0 ? ((blockedDecisions / totalDecisions) * 100).toFixed(1) : '0';
 
       await this.bot.sendMessage(
         msg.chat.id,
-        `*Sentry Monitoring*\n\n` +
-        `├ Status: ${sentryEnabled ? 'Active' : 'Not configured (set SENTRY\\_DSN)'}\n` +
-        `├ Environment: ${environment}\n` +
-        `├ Traces sample rate: 10%\n` +
-        `├ Profiles sample rate: 10%\n\n` +
-        `*Last 24h:*\n` +
-        `├ AI decisions: ${totalDecisions}\n` +
-        `├ Blocked responses: ${recentErrors}\n` +
-        `└ Error rate: ${errorRate}%\n\n` +
-        (sentryEnabled
-          ? '_Errors and performance data being sent to Sentry dashboard._'
-          : '_Set SENTRY\\_DSN in .env to enable error tracking._'),
+        `*Error Monitoring*\n\n` +
+        `*Last 24h — AI Decisions:*\n` +
+        `├ Total: ${totalDecisions}\n` +
+        `├ Blocked: ${blockedDecisions}\n` +
+        `└ Block rate: ${errorRate}%\n\n` +
+        `*Last 24h — Application Errors:*\n` +
+        `├ Total: ${totalErrors}\n` +
+        `├ Exceptions: ${exceptions}\n` +
+        `├ Quality warnings: ${qualityWarnings}\n` +
+        `├ Validation failures: ${validationFailures}\n` +
+        `└ Slow API calls: ${slowApis}\n\n` +
+        `*Pipeline:*\n` +
+        `├ Pending analysis: ${pendingAnalysis}\n` +
+        `└ Status: ${pendingAnalysis > 50 ? 'Backlog building' : 'Healthy'}\n\n` +
+        `_Errors stored locally in error\\_log table. Analyzed daily at 2 AM._`,
         { parse_mode: 'Markdown' },
       );
     } catch (error) {
@@ -1754,7 +2655,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         { parse_mode: 'Markdown' },
       );
     } catch (error) {
-      this.sentryService.captureError(error, {
+      this.errorLogService.captureError(error, {
         operation: 'dspy_optimization',
         module_type: moduleType,
       });
@@ -1822,5 +2723,89 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `🔑 *Auth Cycle Results*\n\n${results.join('\n')}`,
       { parse_mode: 'Markdown' },
     );
+  }
+
+  // --- Roleplay detection for auto-entering simulation mode ---
+
+  private detectRoleplayIntent(text: string): { account: 'dbcinema' | 'leo'; renterMessage: string | null } | null {
+    const lower = text.toLowerCase();
+
+    // Detect "roleplay as leo/daniel", "you are leo/daniel", "pretend you're leo", "simulate leo", etc.
+    const leoPatterns = /(?:roleplay|role.?play|pretend|act|simulate|you\s*(?:are|'re)\s+leo|as\s+leo)/i;
+    const danielPatterns = /(?:roleplay|role.?play|pretend|act|simulate|you\s*(?:are|'re)\s+daniel|as\s+daniel|as\s+db\s*cinema)/i;
+
+    let account: 'dbcinema' | 'leo' | null = null;
+
+    if (leoPatterns.test(text)) {
+      account = 'leo';
+    } else if (danielPatterns.test(text)) {
+      account = 'dbcinema';
+    }
+
+    if (!account) return null;
+
+    // Try to extract the actual renter message after the preamble
+    // e.g. "roleplay you are leo and I'm a renter, I want 1x ND filter Saturday"
+    const renterMsgMatch = text.match(/(?:i\s*(?:want|need|'m\s*(?:looking|interested|after))|my\s*name\s*is|can\s*i|do\s*you\s*have|is\s*the|how\s*much)(.*)/is);
+    const renterMessage = renterMsgMatch
+      ? renterMsgMatch[0].trim()
+      : null;
+
+    return { account, renterMessage };
+  }
+
+  // --- Scam detection for simulation mode ---
+
+  private detectSimScamPattern(message: string): {
+    isScam: boolean;
+    matchedPattern?: string;
+    severity?: string;
+    score?: number;
+  } {
+    const text = message.toLowerCase();
+    let totalScore = 0;
+    const matchedPatterns: string[] = [];
+
+    const confirmedScamPatterns = [
+      { pattern: /we\s+are\s+the\s+hygglo\s+security/i, label: 'hygglo security impersonation' },
+      { pattern: /security\s+team\s+requires/i, label: 'security team impersonation' },
+      { pattern: /verification\s+payment\s+required/i, label: 'verification payment scam' },
+      { pattern: /platform\s+requires\s+you\s+to\s+pay/i, label: 'platform payment scam' },
+      { pattern: /crypto\s+payment/i, label: 'crypto payment' },
+      { pattern: /gift\s+card/i, label: 'gift card scam' },
+      { pattern: /wire\s+transfer/i, label: 'wire transfer' },
+      { pattern: /click\s+this\s+link\s+to\s+(pay|verify)/i, label: 'suspicious link' },
+    ];
+
+    for (const { pattern, label } of confirmedScamPatterns) {
+      if (pattern.test(text)) {
+        totalScore += 10;
+        matchedPatterns.push(label);
+      }
+    }
+
+    const likelyScamPatterns = [
+      { pattern: /send\s+payment/i, label: 'send payment' },
+      { pattern: /pay\s+via(?!\s+(hygglo|the\s+platform|the\s+app|fat\s+llama))/i, label: 'pay via (off-platform)' },
+      { pattern: /transfer\s+money/i, label: 'transfer money' },
+      { pattern: /bank\s+details\s+needed/i, label: 'bank details needed' },
+      { pattern: /pay\s+(me|us)\s+directly/i, label: 'pay directly' },
+    ];
+
+    for (const { pattern, label } of likelyScamPatterns) {
+      if (pattern.test(text)) {
+        totalScore += 5;
+        matchedPatterns.push(label);
+      }
+    }
+
+    if (totalScore === 0) return { isScam: false };
+
+    return {
+      isScam: totalScore >= 5,
+      matchedPattern: matchedPatterns.join(', '),
+      severity: totalScore >= 10 ? 'confirmed_scam' : 'likely_scam',
+      score: totalScore,
+    };
   }
 }

@@ -1,12 +1,67 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
+import { PRICING_CATALOG } from '../data/pricing-catalog';
+import { DELIVERY_SPECS } from '../data/delivery-specs';
 
 @Injectable()
-export class CalendarService {
+export class CalendarService implements OnModuleInit {
   private readonly logger = new Logger(CalendarService.name);
 
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Startup validation: cross-check PRICING_CATALOG and DELIVERY_SPECS against MASTER_INVENTORY.
+   * Logs warnings for mismatches so they can be fixed.
+   */
+  async onModuleInit() {
+    const inventoryNames = getInventoryItemNames();
+    let issues = 0;
+
+    // Check PRICING_CATALOG items exist in MASTER_INVENTORY
+    for (const entry of PRICING_CATALOG) {
+      if (entry.is_bundle || entry.marketing_only) continue;
+      const matched = findBestMatch(entry.item_name, inventoryNames);
+      if (!matched) {
+        this.logger.error(
+          `DATA MISMATCH: Pricing catalog item "${entry.item_name}" not found in MASTER_INVENTORY`,
+        );
+        issues++;
+      }
+    }
+
+    // Check bundle items exist in MASTER_INVENTORY
+    for (const entry of PRICING_CATALOG) {
+      if (!entry.is_bundle || !entry.bundle_items) continue;
+      for (const bundleItem of entry.bundle_items) {
+        const matched = findBestMatch(bundleItem, inventoryNames);
+        if (!matched) {
+          this.logger.error(
+            `DATA MISMATCH: Bundle "${entry.item_name}" references "${bundleItem}" not in MASTER_INVENTORY`,
+          );
+          issues++;
+        }
+      }
+    }
+
+    // Check DELIVERY_SPECS individual items exist in MASTER_INVENTORY
+    for (const spec of DELIVERY_SPECS) {
+      if (spec.category === 'bundle') continue;
+      const matched = findBestMatch(spec.item_name, inventoryNames);
+      if (!matched) {
+        this.logger.warn(
+          `DATA MISMATCH: Delivery spec "${spec.item_name}" not found in MASTER_INVENTORY`,
+        );
+        issues++;
+      }
+    }
+
+    if (issues > 0) {
+      this.logger.error(`Startup validation: ${issues} data mismatch(es) detected — review logs above`);
+    } else {
+      this.logger.log('Startup validation: all data sources consistent');
+    }
+  }
 
   async createBooking(data: {
     item_name: string;
@@ -192,6 +247,98 @@ export class CalendarService {
     return `UPCOMING BOOKINGS (next ${days} days):\n${lines.join('\n')}`;
   }
 
+  /**
+   * Check if a proposed pickup or return time for a specific item conflicts with
+   * adjacent bookings on the same day, respecting a 1-hour buffer between rentals.
+   * Returns { conflict: true, reason } if there's a conflict, { conflict: false } otherwise.
+   */
+  async checkTimeConflict(
+    itemName: string,
+    date: Date,
+    proposedTime: string,
+    type: 'pickup' | 'return',
+    excludeRentalId?: string,
+  ): Promise<{ conflict: boolean; reason?: string }> {
+    const matched = findBestMatch(itemName, getInventoryItemNames());
+    if (!matched) return { conflict: false };
+
+    const maxQuantity = MASTER_INVENTORY[matched] || 1;
+
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(date);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    // Parse proposed time to minutes since midnight
+    const [propHours, propMinutes] = proposedTime.split(':').map(Number);
+    const proposedMinutes = propHours * 60 + propMinutes;
+    const bufferMinutes = 60; // 1-hour buffer
+
+    if (type === 'pickup') {
+      // For pickup: find bookings for the same item whose end_date falls on this day
+      // Check if any return_time is within 60 min of proposed pickup
+      const returnsOnDay = await this.prisma.booking.findMany({
+        where: {
+          item_name: matched,
+          status: 'confirmed',
+          end_date: { gte: dayStart, lte: dayEnd },
+          return_time: { not: null },
+          ...(excludeRentalId ? { rental_id: { not: excludeRentalId } } : {}),
+        },
+      });
+
+      // Count how many units are occupied at that time
+      let conflictingUnits = 0;
+      for (const b of returnsOnDay) {
+        if (!b.return_time) continue;
+        const [rH, rM] = b.return_time.split(':').map(Number);
+        const returnMinutes = rH * 60 + rM;
+        // Conflict if pickup is within 60 min of another return
+        if (Math.abs(proposedMinutes - returnMinutes) < bufferMinutes) {
+          conflictingUnits += b.quantity;
+        }
+      }
+
+      if (conflictingUnits >= maxQuantity) {
+        return {
+          conflict: true,
+          reason: `${matched} has a return scheduled within 1 hour of ${proposedTime} — need a buffer between rentals`,
+        };
+      }
+    } else {
+      // For return: find bookings for the same item whose start_date falls on this day
+      // Check if any pickup_time is within 60 min of proposed return
+      const pickupsOnDay = await this.prisma.booking.findMany({
+        where: {
+          item_name: matched,
+          status: 'confirmed',
+          start_date: { gte: dayStart, lte: dayEnd },
+          pickup_time: { not: null },
+          ...(excludeRentalId ? { rental_id: { not: excludeRentalId } } : {}),
+        },
+      });
+
+      let conflictingUnits = 0;
+      for (const b of pickupsOnDay) {
+        if (!b.pickup_time) continue;
+        const [pH, pM] = b.pickup_time.split(':').map(Number);
+        const pickupMinutes = pH * 60 + pM;
+        if (Math.abs(proposedMinutes - pickupMinutes) < bufferMinutes) {
+          conflictingUnits += b.quantity;
+        }
+      }
+
+      if (conflictingUnits >= maxQuantity) {
+        return {
+          conflict: true,
+          reason: `${matched} has a pickup scheduled within 1 hour of ${proposedTime} — need a buffer between rentals`,
+        };
+      }
+    }
+
+    return { conflict: false };
+  }
+
   async updateBookingTimes(rentalId: string, pickupTime?: string, returnTime?: string): Promise<any> {
     // Find bookings linked to this rental
     const bookings = await this.prisma.booking.findMany({
@@ -242,16 +389,23 @@ export class CalendarService {
 
     for (const rawItem of extractedItems) {
       const matched = findBestMatch(rawItem, getInventoryItemNames());
-      const itemName = matched || rawItem;
-      if (seen.has(itemName)) continue;
-      seen.add(itemName);
-      matchedItems.push({ name: itemName, quantity: 1 });
+      if (!matched) {
+        this.logger.warn(`Skipping unrecognized item "${rawItem}" — not in MASTER_INVENTORY`);
+        continue;
+      }
+      if (seen.has(matched)) continue;
+      seen.add(matched);
+      matchedItems.push({ name: matched, quantity: 1 });
     }
 
-    // If no items extracted, create a single booking with the rental title
+    // If no items extracted, try matching the rental title to inventory
     if (matchedItems.length === 0) {
       const matched = findBestMatch(rental.title, getInventoryItemNames());
-      matchedItems.push({ name: matched || rental.title, quantity: 1 });
+      if (!matched) {
+        this.logger.warn(`Cannot create bookings for rental ${rental.id}: title "${rental.title}" does not match any inventory item`);
+        return [];
+      }
+      matchedItems.push({ name: matched, quantity: 1 });
     }
 
     // Distribute revenue across items
@@ -265,12 +419,12 @@ export class CalendarService {
     const account = rental.account || 'dbcinema';
 
     for (const item of matchedItems) {
-      // Check if a booking already exists for this rental + item
+      // Check if a booking already exists for this rental + item (any status)
       const existing = await this.prisma.booking.findFirst({
         where: {
           rental_id: rental.id,
           item_name: item.name,
-          status: 'confirmed',
+          status: { in: ['confirmed', 'pending_review'] },
         },
       });
 
@@ -285,6 +439,9 @@ export class CalendarService {
       const itemRevenue = Math.round(perItemRevenue * 100) / 100;
       const itemFee = Math.round(itemRevenue * platformFeeRate * 100) / 100;
 
+      // Auto-block overbooked items: set status to 'pending_review' instead of 'confirmed'
+      const bookingStatus = availability.available ? 'confirmed' : 'pending_review';
+
       const booking = await this.prisma.booking.create({
         data: {
           item_name: item.name,
@@ -297,12 +454,16 @@ export class CalendarService {
           revenue: itemRevenue > 0 ? itemRevenue : null,
           platform_fee: itemFee > 0 ? itemFee : null,
           net_profit: itemRevenue > 0 ? Math.round((itemRevenue - itemFee) * 100) / 100 : null,
+          status: bookingStatus,
+          notes: !availability.available
+            ? `AUTO-BLOCKED: ${item.name} overbooked (${availability.booked}/${availability.maxQuantity} already booked)`
+            : null,
         },
       });
 
       this.logger.log(
         `Auto-booked: ${item.name} for ${renterName} (${rental.start_date.toISOString().split('T')[0]} - ${rental.end_date.toISOString().split('T')[0]})` +
-        (!availability.available ? ' [OVERBOOKED]' : '') +
+        (!availability.available ? ' [OVERBOOKED - BLOCKED]' : '') +
         (itemRevenue > 0 ? ` [£${itemRevenue}]` : ''),
       );
 
@@ -426,5 +587,121 @@ export class CalendarService {
     }
 
     return lines.join('\n');
+  }
+
+  // Compact inventory context cache (5-minute TTL)
+  private compactInventoryCache: string | null = null;
+  private compactInventoryCacheTime = 0;
+  private static readonly COMPACT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+  /**
+   * Generate a compact inventory + availability context for the AI.
+   * Groups items by category, lenses by mount system, includes current bookings.
+   * Cached for 5 minutes to avoid repeated DB queries.
+   */
+  async getCompactInventoryContext(): Promise<string> {
+    const now = Date.now();
+    if (this.compactInventoryCache && (now - this.compactInventoryCacheTime) < CalendarService.COMPACT_CACHE_TTL) {
+      return this.compactInventoryCache;
+    }
+
+    // Categorize inventory items
+    const categories: Record<string, string[]> = {
+      'CAMERAS': [],
+      'LENSES (Sony E-mount)': [],
+      'LENSES (Canon EF mount)': [],
+      'ANAMORPHIC LENSES': [],
+      'MOUNT ADAPTERS': [],
+      'LIGHTS': [],
+      'AUDIO': [],
+      'MONITORS & TRANSMITTERS': [],
+      'GIMBALS & SUPPORT': [],
+      'DRONES & ACTION CAMS': [],
+      'POWER': [],
+      'ACCESSORIES': [],
+    };
+
+    const categorize = (name: string, qty: number): void => {
+      const n = name.toLowerCase();
+      const entry = qty > 1 ? `${name} ×${qty}` : name;
+
+      // Min-quantity rules baked in
+      if (name === 'Nanlite Pavotube 30x II') {
+        categories['LIGHTS'].push(`${name} ×${qty} (min 2, sets of 2 or 4)`);
+        return;
+      }
+
+      if (n.includes('anamorphic') || n.includes('blazar') || n.includes('great joy')) {
+        categories['ANAMORPHIC LENSES'].push(entry);
+      } else if (n.includes('canon ef')) {
+        categories['LENSES (Canon EF mount)'].push(entry);
+      } else if (n.includes('sony gm') || n.includes('sony 28-70') || n.includes('sony 11mm')) {
+        categories['LENSES (Sony E-mount)'].push(entry);
+      } else if (n.includes('pl to') || n.includes('mount')) {
+        categories['MOUNT ADAPTERS'].push(entry);
+      } else if (n.includes('fx3') || n.includes('a7 ') || n.includes('fujifilm') || n.includes('bmpcc')) {
+        categories['CAMERAS'].push(entry);
+      } else if (n.includes('nanlite') || n.includes('led') || n.includes('softbox') || n.includes('light') || n.includes('reflector') || n.includes('ambitful')) {
+        categories['LIGHTS'].push(entry);
+      } else if (n.includes('mic') || n.includes('rode') || n.includes('sennheiser') || n.includes('audio') || n.includes('boom') || n.includes('jbl wireless mic')) {
+        categories['AUDIO'].push(entry);
+      } else if (n.includes('monitor') || n.includes('atomos') || n.includes('hollyland') || n.includes('transmitter')) {
+        categories['MONITORS & TRANSMITTERS'].push(entry);
+      } else if (n.includes('gimbal') || n.includes('rs3') || n.includes('tripod') || n.includes('slider') || n.includes('monopod') || n.includes('shoulder') || n.includes('c-stand') || n.includes('follow focus') || n.includes('nucleus')) {
+        categories['GIMBALS & SUPPORT'].push(entry);
+      } else if (n.includes('drone') || n.includes('mavic') || n.includes('mini 4') || n.includes('gopro') || n.includes('osmo') || n.includes('action') || n.includes('suction')) {
+        categories['DRONES & ACTION CAMS'].push(entry);
+      } else if (n.includes('v-mount') || n.includes('npf') || n.includes('battery') || n.includes('anker') || n.includes('power')) {
+        categories['POWER'].push(entry);
+      } else {
+        categories['ACCESSORIES'].push(entry);
+      }
+    };
+
+    for (const [name, qty] of Object.entries(MASTER_INVENTORY)) {
+      categorize(name, qty);
+    }
+
+    // Build inventory section
+    const lines: string[] = ['--- OUR COMPLETE INVENTORY (with current bookings) ---'];
+    for (const [category, items] of Object.entries(categories)) {
+      if (items.length > 0) {
+        lines.push(`${category}: ${items.join(', ')}`);
+      }
+    }
+
+    // Fetch confirmed bookings for next 14 days
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 14);
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        end_date: { gte: new Date() },
+        start_date: { lte: futureDate },
+      },
+      orderBy: { start_date: 'asc' },
+    });
+
+    if (bookings.length > 0) {
+      lines.push('\nCURRENTLY BOOKED:');
+      for (const b of bookings) {
+        const start = b.start_date.toISOString().split('T')[0];
+        const end = b.end_date.toISOString().split('T')[0];
+        lines.push(`- ${b.item_name} ×${b.quantity}: ${start} to ${end} (${b.renter_name})`);
+      }
+    } else {
+      lines.push('\nCURRENTLY BOOKED: None — all items available.');
+    }
+
+    lines.push(
+      '\nRULES: This is ALL we stock. If renter asks for something NOT on this list, say "we don\'t currently stock [item]" and suggest the closest alternative from this list. NEVER confirm items not listed above.',
+      'For lenses, note the mount system (Sony E-mount, Canon EF mount) — different mounts are NOT interchangeable. We do NOT stock Canon RF lenses.',
+      'NEVER offer to source, procure, or find additional units beyond what is listed — our inventory is fixed.',
+    );
+
+    const result = lines.join('\n');
+    this.compactInventoryCache = result;
+    this.compactInventoryCacheTime = now;
+    return result;
   }
 }

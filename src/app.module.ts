@@ -34,6 +34,7 @@ import { RenterProfileModule } from './renter-profile/renter-profile.module';
 import { FollowUpModule } from './follow-up/follow-up.module';
 import { VerificationModule } from './verification/verification.module';
 import { CompletedScanModule } from './completed-scan/completed-scan.module';
+import { AutolearnModule } from './autolearn/autolearn.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { CompletedScanModule } from './completed-scan/completed-scan.module';
     FollowUpModule,
     VerificationModule,
     CompletedScanModule,
+    AutolearnModule,
   ],
   controllers: [AppController],
   providers: [AppService],

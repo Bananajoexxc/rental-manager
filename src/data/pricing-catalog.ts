@@ -1284,6 +1284,56 @@ export function getOneDayPrice(itemName: string): number | null {
   return entry ? entry.daily_price_max : null;
 }
 
+/** Format filtered catalog for mentioned items + bundles containing them + same-category alternatives */
+export function formatFilteredPricingForAI(mentionedItems: string[]): string {
+  if (mentionedItems.length === 0) return '';
+
+  const lowerMentioned = mentionedItems.map(i => i.toLowerCase());
+  const matched = new Set<PricingEntry>();
+
+  for (const entry of PRICING_CATALOG) {
+    if (entry.marketing_only) continue;
+    const lowerName = entry.item_name.toLowerCase();
+
+    // Direct match
+    if (lowerMentioned.some(m => lowerName.includes(m) || m.includes(lowerName))) {
+      matched.add(entry);
+      continue;
+    }
+
+    // Bundle containing a mentioned item
+    if (entry.is_bundle && entry.bundle_items) {
+      const bundleItemsLower = entry.bundle_items.map(b => b.toLowerCase());
+      if (lowerMentioned.some(m => bundleItemsLower.some(b => b.includes(m) || m.includes(b)))) {
+        matched.add(entry);
+      }
+    }
+  }
+
+  // Add same-category alternatives for matched items
+  const matchedCategories = new Set(Array.from(matched).map(e => e.category));
+  for (const entry of PRICING_CATALOG) {
+    if (entry.marketing_only || entry.is_bundle) continue;
+    if (matchedCategories.has(entry.category)) {
+      matched.add(entry);
+    }
+  }
+
+  if (matched.size === 0) return '';
+
+  const parts: string[] = ['=== RELEVANT PRICING (filtered) ==='];
+  for (const e of matched) {
+    const bundleTag = e.is_bundle && e.bundle_items ? ` (includes: ${e.bundle_items.join(' + ')})` : '';
+    parts.push(`- ${e.item_name}: £${e.daily_price_max}/day (range £${e.daily_price_min}-${e.daily_price_max})${bundleTag}`);
+  }
+  parts.push(
+    '\nPRICING RULES: One-day price = highest listed price. ' +
+    'Multi-day discounts: 3 days ~2.5x daily, 7 days ~5x daily, 1 month ~2.5 weeks. ' +
+    'NEVER mention platform fees to renters.',
+  );
+  return parts.join('\n');
+}
+
 /** Format full catalog as text for AI context */
 export function formatPricingCatalogForAI(): string {
   const categories = new Map<string, PricingEntry[]>();
@@ -1305,7 +1355,7 @@ export function formatPricingCatalogForAI(): string {
   parts.push(
     '\nPRICING RULES: One-day price = highest listed price shown above. ' +
     'Multi-day discounts auto-applied: 3 days ~2.5x daily, 7 days ~5x daily, 1 month ~2.5 weeks. ' +
-    'Renter pays: listed price + Hygglo ~15% service fee (added at checkout). ' +
+    'NEVER mention platform fees, service fees, or Hygglo fees to renters. ' +
     'Always validate item availability against master inventory before confirming.',
   );
   return parts.join('\n');

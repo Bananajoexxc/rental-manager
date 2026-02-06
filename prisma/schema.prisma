@@ -77,21 +77,25 @@ model conversation {
 }
 
 model ai_decision {
-  id            String   @id @default(uuid())
-  rental_id     String?
-  decision_type String   // 'approve', 'reject', 'message', 'escalate', 'analyze'
-  input_summary String   @db.Text
-  output_summary String  @db.Text
-  confidence    Float?
-  action_taken  String?  @db.Text
-  notified      Boolean  @default(false)
-  created_at    DateTime @default(now())
-  rental        rental?  @relation(fields: [rental_id], references: [id], onDelete: SetNull)
+  id                String   @id @default(uuid())
+  rental_id         String?
+  decision_type     String   // 'approve', 'reject', 'message', 'escalate', 'analyze'
+  input_summary     String   @db.Text
+  output_summary    String   @db.Text
+  confidence        Float?
+  action_taken      String?  @db.Text
+  notified          Boolean  @default(false)
+  was_sent          Boolean? // true = sent, false = blocked, null = legacy/internal
+  feedback_analyzed Boolean  @default(false) // has the feedback loop processed this row?
+  created_at        DateTime @default(now())
+  rental            rental?  @relation(fields: [rental_id], references: [id], onDelete: SetNull)
 
   @@index([rental_id])
   @@index([decision_type])
   @@index([created_at])
   @@index([created_at, confidence])
+  @@index([was_sent])
+  @@index([feedback_analyzed])
 }
 
 model rule {
@@ -241,6 +245,22 @@ model market_report {
   @@index([created_at])
 }
 
+// === Error Log (local monitoring, replaces external Sentry) ===
+
+model error_log {
+  id                String   @id @default(uuid())
+  error_type        String   // 'exception', 'quality_warning', 'validation_failure', 'slow_api'
+  operation         String   // 'telegram_polling', 'vision_analysis', etc.
+  message           String   @db.Text
+  stack_trace       String?  @db.Text
+  context           Json?
+  feedback_analyzed Boolean  @default(false)
+  created_at        DateTime @default(now())
+
+  @@index([feedback_analyzed])
+  @@index([created_at])
+}
+
 // === Intelligence & Safety Improvements ===
 
 model validation_log {
@@ -343,6 +363,116 @@ model rental_renter_link {
   @@index([renter_profile_id])
 }
 
+// === Postcode Cache ===
+
+model postcode_cache {
+  id          String   @id @default(uuid())
+  postcode    String   @unique
+  latitude    Float
+  longitude   Float
+  distance_km Float
+  zone        String
+  cached_at   DateTime @default(now())
+
+  @@index([postcode])
+  @@index([cached_at])
+}
+
+// === Upsell Tracking ===
+
+model upsell_log {
+  id                String   @id @default(uuid())
+  rental_id         String
+  items_suggested   String[]
+  items_accepted    String[]
+  revenue_before    Float
+  revenue_after     Float?
+  upsell_priority   String   // 'critical', 'high', 'medium', 'low'
+  use_case_detected String?
+  outcome           String   @default("pending") // 'pending', 'accepted', 'partial', 'rejected', 'ignored'
+  created_at        DateTime @default(now())
+
+  @@index([rental_id])
+  @@index([outcome])
+  @@index([created_at])
+}
+
+// === Revenue Tracking ===
+
+model revenue_metric {
+  id              String   @id @default(uuid())
+  rental_id       String?
+  metric_type     String   // 'booking_revenue', 'upsell_revenue', 'discount_applied', 'delivery_fee', 'platform_fee'
+  amount          Float
+  account         String?  // 'dbcinema' or 'leo'
+  metadata        Json?
+  period_start    DateTime?
+  period_end      DateTime?
+  created_at      DateTime @default(now())
+
+  @@index([metric_type])
+  @@index([account])
+  @@index([created_at])
+  @@index([rental_id])
+}
+
+// === AutoLearn Engine ===
+
+model autolearn_proposal {
+  id              String    @id @default(uuid())
+  cycle_id        String
+  analyzer        String    // 'violation'|'quality'|'conversion'|'token'|'correction'
+  change_type     String    // 'rule_add'|'rule_edit'|'rule_deactivate'|'prompt_edit'|'threshold_adjust'
+  target_entity   String    // e.g. 'rule:pricing:Bundle_Rec' or 'prompt:communication_style'
+  description     String    @db.Text
+  change_payload  Json      // { before, after, metadata }
+  shadow_result   Json?     // { replayed, improved, degraded, neutral, avgQualityDelta }
+  status          String    @default("pending") // pending|approved|vetoed|applied|rolled_back|expired|rework|failed
+  veto_deadline   DateTime
+  vetoed_by       String?
+  veto_reason     String?
+  applied_at      DateTime?
+  rolled_back_at  DateTime?
+  rework_count    Int       @default(0)
+  parent_id       String?
+  rework_reason   String?   @db.Text
+  failed_shadow   Json?
+  created_at      DateTime  @default(now())
+
+  @@index([status])
+  @@index([veto_deadline])
+  @@index([cycle_id])
+  @@index([analyzer])
+  @@index([created_at])
+}
+
+model autolearn_log {
+  id              String    @id @default(uuid())
+  proposal_id     String?
+  event_type      String    // cycle_start|cycle_end|applied|vetoed|rollback|daily_summary
+  details         Json?
+  quality_before  Float?
+  quality_after   Float?
+  created_at      DateTime  @default(now())
+
+  @@index([event_type])
+  @@index([proposal_id])
+  @@index([created_at])
+}
+
+model autolearn_snapshot {
+  id              String    @id @default(uuid())
+  proposal_id     String
+  entity_type     String    // 'rule'|'prompt_component'|'bot_config'
+  entity_id       String
+  snapshot_data   Json
+  created_at      DateTime  @default(now())
+
+  @@index([proposal_id])
+  @@index([entity_type])
+  @@index([created_at])
+}
+
 model follow_up_state {
   id                    String    @id @default(uuid())
   rental_id             String    @unique
@@ -360,6 +490,17 @@ model follow_up_state {
   availability_verified Boolean   @default(false)
   discount_eligible     Boolean   @default(false)
   discount_applied      Boolean   @default(false)
+  conversation_stage    String    @default("inquiry") // inquiry, interest, qualified, booking_ready, booking_sent, awaiting_verification, confirmed, dead
+  stage_changed_at      DateTime?
+  time_request_sent        Boolean   @default(false)
+  time_request_sent_at     DateTime?
+  time_followup_count      Int       @default(0)
+  last_time_followup_at    DateTime?
+  times_status             String    @default("none")  // none|tentative|confirmed|auto_assigned
+  times_auto_assigned      Boolean   @default(false)
+  times_auto_assigned_at   DateTime?
+  conversation_summary     String?   @db.Text
+  rejected_suggestions     String?   // comma-separated list of items the renter declined
   status                String    @default("active") // 'active', 'completed', 'paused', 'auto_accepted'
   created_at            DateTime  @default(now())
   updated_at            DateTime  @updatedAt

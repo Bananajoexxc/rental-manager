@@ -5,6 +5,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { MemoryService } from '../memory/memory.service';
 import { RevenueService } from '../revenue/revenue.service';
+import { HyggloService } from '../hygglo/hygglo.service';
 
 @Injectable()
 export class RemindersService {
@@ -22,6 +23,7 @@ export class RemindersService {
     private calendarService: CalendarService,
     private memoryService: MemoryService,
     private revenueService: RevenueService,
+    private hyggloService: HyggloService,
   ) {}
 
   // Every minute: check for upcoming pickups and late returns
@@ -204,5 +206,190 @@ export class RemindersService {
 
   async getTodayScheduleFormatted(): Promise<string> {
     return this.calendarService.getFormattedSchedule(new Date());
+  }
+
+  // Hourly: auto-assign missing pickup/return times for bookings starting tomorrow
+  @Cron('0 * * * *')
+  async autoAssignMissingTimes() {
+    try {
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
+      const tomorrowEnd = new Date(tomorrow);
+      tomorrowEnd.setHours(23, 59, 59, 999);
+
+      // Find confirmed bookings starting tomorrow with missing times
+      const bookingsNoTimes = await this.prisma.booking.findMany({
+        where: {
+          status: 'confirmed',
+          start_date: { gte: tomorrow, lte: tomorrowEnd },
+          OR: [
+            { pickup_time: null },
+            { return_time: null },
+          ],
+        },
+        include: { rental: true },
+      });
+
+      if (bookingsNoTimes.length === 0) return;
+
+      // Check follow_up_state: only auto-assign if stage is confirmed and not already auto-assigned
+      const rentalIds = [...new Set(bookingsNoTimes.map(b => b.rental_id).filter(Boolean))] as string[];
+      const followUpStates = await this.prisma.follow_up_state.findMany({
+        where: {
+          rental_id: { in: rentalIds },
+          conversation_stage: 'confirmed',
+          times_auto_assigned: false,
+        },
+      });
+      const eligibleRentalIds = new Set(followUpStates.map(s => s.rental_id));
+
+      // Get ALL bookings for tomorrow (with times) for trip optimization
+      const allTomorrowBookings = await this.prisma.booking.findMany({
+        where: {
+          status: 'confirmed',
+          start_date: { gte: tomorrow, lte: tomorrowEnd },
+        },
+      });
+
+      // Find the most popular pickup time cluster
+      const pickupClusters = new Map<string, number>();
+      const returnClusters = new Map<string, number>();
+      for (const b of allTomorrowBookings) {
+        if (b.pickup_time) pickupClusters.set(b.pickup_time, (pickupClusters.get(b.pickup_time) || 0) + 1);
+        if (b.return_time) returnClusters.set(b.return_time, (returnClusters.get(b.return_time) || 0) + 1);
+      }
+
+      // Find most popular times (or defaults)
+      const bestPickup = this.findMostPopularTime(pickupClusters) || '10:00';
+      const bestReturn = this.findMostPopularTime(returnClusters) || '19:00';
+
+      for (const booking of bookingsNoTimes) {
+        if (!booking.rental_id || !eligibleRentalIds.has(booking.rental_id)) continue;
+
+        const assignPickup = !booking.pickup_time;
+        const assignReturn = !booking.return_time;
+
+        let pickupTime = booking.pickup_time || bestPickup;
+        let returnTime = booking.return_time || bestReturn;
+
+        // Validate cluster time, fall back to alternatives if conflict
+        if (assignPickup) {
+          pickupTime = await this.findSafeTimeSlot(
+            booking.item_name, booking.start_date, bestPickup, 'pickup', booking.rental_id,
+          );
+        }
+
+        if (assignReturn) {
+          const returnDate = booking.end_date || booking.start_date;
+          returnTime = await this.findSafeTimeSlot(
+            booking.item_name, returnDate, bestReturn, 'return', booking.rental_id,
+          );
+        }
+
+        // Update booking
+        const updateData: any = {};
+        if (assignPickup) updateData.pickup_time = pickupTime;
+        if (assignReturn) updateData.return_time = returnTime;
+
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: updateData,
+        });
+
+        this.logger.log(`Auto-assigned times for ${booking.item_name} (${booking.renter_name}): pickup=${pickupTime}, return=${returnTime}`);
+
+        // Notify Daniel
+        await this.telegramService.sendProactiveMessage(
+          `⏰ *Auto-Assigned Times*\n\n` +
+          `├ 📦 ${booking.item_name}\n` +
+          `├ 👤 ${booking.renter_name}\n` +
+          `├ 📅 ${booking.start_date.toISOString().split('T')[0]}\n` +
+          `├ ⏰ Pickup: ${pickupTime}\n` +
+          `├ ⏰ Return: ${returnTime}\n` +
+          `└ Renter will be notified`,
+        );
+
+        // Notify renter via Hygglo
+        if (booking.rental?.listing_id) {
+          try {
+            await this.hyggloService.sendMessage(
+              booking.rental.listing_id,
+              `Since the rental starts tomorrow, I've set pickup for ${pickupTime} and return for ${returnTime}. Let me know if you need to adjust!`,
+            );
+          } catch (sendErr) {
+            this.logger.warn(`Failed to notify renter about auto-assigned times: ${sendErr.message}`);
+          }
+        }
+      }
+
+      // Update follow_up_state for all processed rentals
+      for (const rentalId of eligibleRentalIds) {
+        const hasBooking = bookingsNoTimes.some(b => b.rental_id === rentalId);
+        if (!hasBooking) continue;
+
+        await this.prisma.follow_up_state.updateMany({
+          where: { rental_id: rentalId },
+          data: {
+            times_status: 'auto_assigned',
+            times_auto_assigned: true,
+            times_auto_assigned_at: new Date(),
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.error(`autoAssignMissingTimes cron error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Find the most popular time from a cluster map.
+   */
+  private findMostPopularTime(clusters: Map<string, number>): string | null {
+    if (clusters.size === 0) return null;
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [time, count] of clusters) {
+      if (count > bestCount) {
+        best = time;
+        bestCount = count;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Find a safe time slot that doesn't conflict with other bookings.
+   * Tries the preferred time first, then falls back to alternatives.
+   */
+  private async findSafeTimeSlot(
+    itemName: string,
+    date: Date,
+    preferredTime: string,
+    type: 'pickup' | 'return',
+    excludeRentalId?: string,
+  ): Promise<string> {
+    // Try preferred time
+    const check = await this.calendarService.checkTimeConflict(
+      itemName, date, preferredTime, type, excludeRentalId,
+    );
+    if (!check.conflict) return preferredTime;
+
+    // Fallback times: work backward from evening for pickup, forward from morning for return
+    const fallbacks = type === 'pickup'
+      ? ['10:00', '11:00', '12:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00']
+      : ['19:00', '18:00', '17:00', '16:00', '15:00', '14:00', '12:00', '11:00', '10:00'];
+
+    for (const fallback of fallbacks) {
+      if (fallback === preferredTime) continue;
+      const fbCheck = await this.calendarService.checkTimeConflict(
+        itemName, date, fallback, type, excludeRentalId,
+      );
+      if (!fbCheck.conflict) return fallback;
+    }
+
+    // Ultimate fallback: return the preferred time anyway (best effort)
+    return preferredTime;
   }
 }

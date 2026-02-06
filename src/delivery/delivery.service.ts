@@ -132,16 +132,89 @@ export class DeliveryService implements OnModuleInit {
     this.logger.log('Delivery pricing consistency validated');
   }
 
+  /**
+   * Retry a function up to `maxRetries` times with exponential backoff.
+   * Delays between attempts: 1s, 2s, 4s (baseDelayMs * 2^attempt).
+   */
+  private async retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    baseDelayMs: number = 1000,
+  ): Promise<T> {
+    let lastError: Error;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries) {
+          const delayMs = baseDelayMs * Math.pow(2, attempt);
+          this.logger.warn(
+            `Retry attempt ${attempt + 1}/${maxRetries} after ${delayMs}ms delay: ${error.message}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+    throw lastError!;
+  }
+
   async getDistanceFromTrafalgarSquare(postcode: string): Promise<{ distance_km: number; zone: string } | null> {
+    const normalizedPostcode = postcode.replace(/\s+/g, '').toUpperCase();
+
+    // 1. Check DB cache (24h TTL)
     try {
-      const resp = await axios.get(`https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`);
+      const cached = await this.prisma.postcode_cache.findUnique({
+        where: { postcode: normalizedPostcode },
+      });
+      if (cached) {
+        const ageMs = Date.now() - cached.cached_at.getTime();
+        const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+        if (ageMs < TTL_MS) {
+          this.logger.debug(`Postcode cache hit: ${normalizedPostcode} → ${cached.distance_km}km`);
+          return { distance_km: cached.distance_km, zone: cached.zone };
+        }
+      }
+    } catch {
+      // Cache miss or DB error — continue to API
+    }
+
+    // 2. Call postcodes.io API with retry + exponential backoff
+    try {
+      const resp = await this.retryWithBackoff(
+        () => axios.get(`https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`),
+      );
       if (resp.data.status !== 200) return null;
 
       const { latitude, longitude } = resp.data.result;
       const distance = this.haversine(this.ORIGIN_LAT, this.ORIGIN_LNG, latitude, longitude);
       const zone = this.getZone(distance);
+      const result = { distance_km: Math.round(distance * 10) / 10, zone };
 
-      return { distance_km: Math.round(distance * 10) / 10, zone };
+      // 3. Cache the result
+      try {
+        await this.prisma.postcode_cache.upsert({
+          where: { postcode: normalizedPostcode },
+          create: {
+            postcode: normalizedPostcode,
+            latitude,
+            longitude,
+            distance_km: result.distance_km,
+            zone: result.zone,
+          },
+          update: {
+            latitude,
+            longitude,
+            distance_km: result.distance_km,
+            zone: result.zone,
+            cached_at: new Date(),
+          },
+        });
+      } catch {
+        // Non-critical: cache write failure
+      }
+
+      return result;
     } catch (error) {
       this.logger.warn(`Postcode lookup failed for ${postcode}: ${error.message}`);
       return null;
@@ -194,10 +267,17 @@ export class DeliveryService implements OnModuleInit {
         ? await this.prisma.item_spec.findFirst({ where: { item_name: matched } })
         : null;
 
+      const sizeScore = deliverySpec?.size_score ?? dbSpec?.size_score;
+      const weightKg = deliverySpec?.weight_kg ?? dbSpec?.weight_kg;
+      if (sizeScore == null || weightKg == null) {
+        this.logger.warn(
+          `No delivery spec found for "${matched || name}" — using conservative default (size_score=3, weight_kg=2.0)`,
+        );
+      }
       itemSpecs.push({
         name: matched || name,
-        size_score: deliverySpec?.size_score || dbSpec?.size_score || 2,
-        weight_kg: deliverySpec?.weight_kg || dbSpec?.weight_kg || 1.0,
+        size_score: sizeScore ?? 3, // conservative default: assume car-needed
+        weight_kg: weightKg ?? 2.0, // conservative default
         is_heavy_large: deliverySpec?.is_heavy_large || false,
       });
     }
