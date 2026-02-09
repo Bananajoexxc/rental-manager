@@ -35,6 +35,10 @@ import { FollowUpModule } from './follow-up/follow-up.module';
 import { VerificationModule } from './verification/verification.module';
 import { CompletedScanModule } from './completed-scan/completed-scan.module';
 import { AutolearnModule } from './autolearn/autolearn.module';
+import { LostRevenueModule } from './lost-revenue/lost-revenue.module';
+import { CompetitorIntelModule } from './competitor-intel/competitor-intel.module';
+import { CouponModule } from './coupon/coupon.module';
+import { ItemMatcherAiModule } from './item-matcher-ai/item-matcher-ai.module';
 
 @Module({
   imports: [
@@ -74,6 +78,10 @@ import { AutolearnModule } from './autolearn/autolearn.module';
     VerificationModule,
     CompletedScanModule,
     AutolearnModule,
+    LostRevenueModule,
+    CompetitorIntelModule,
+    CouponModule,
+    ItemMatcherAiModule,
   ],
   controllers: [AppController],
   providers: [AppService],

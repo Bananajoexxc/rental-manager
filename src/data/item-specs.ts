@@ -106,15 +106,15 @@ export const ITEM_SPECS: ItemSpec[] = [
   // ANAMORPHIC LENSES — GREAT JOY
   // ──────────────────────────────────────────
   {
-    item_name: 'Anamorphic Great Joy 35mm',
+    item_name: 'Anamorphic Great Joy lens 35mm',
     specs: '1.8x squeeze, T2.9 max aperture. 18 elements/14 groups, 11 aperture blades. BLUE FLARE variant — produces subtle blue horizontal streaks with direct light sources, more restrained than the 50mm. Slightly warm/neutral color tone. Oval bokeh. Covers 33x24mm full-frame. 1.19kg. Min focus 70cm. Available in EF/E/L/PL/RF/MFT mounts. Best for: cinematic widescreen look with classic blue anamorphic character. The 35mm flare is more subtle/controlled than the 50mm — less streak, cleaner highlight handling.',
   },
   {
-    item_name: 'Anamorphic Great Joy 50mm',
+    item_name: 'Anamorphic Great Joy lens 50mm',
     specs: '1.8x squeeze, T2.9 max aperture. 11 aperture blades. BLUE FLARE variant — produces beautiful soft blue horizontal streaks, the most pronounced anamorphic flare of the set. Oval bokeh with soft fall-off. Covers full-frame. Min focus 85cm. ~1.1kg. EF/E/L/PL/RF/MFT mounts. Stepless aperture T2.9-T22. Best for: the hero anamorphic lens — strongest blue flare character, ideal for music videos, narrative, fashion. 50mm is the most "classic anamorphic" of the three.',
   },
   {
-    item_name: 'Anamorphic Great Joy 85mm',
+    item_name: 'Anamorphic Great Joy lens 85mm',
     specs: '1.8x squeeze, T2.9 max aperture. 11 aperture blades. BLUE FLARE variant — blue horizontal streaks similar to the 50mm. Beautiful compressed oval bokeh for portrait work. Covers full-frame. Min focus ~100cm. ~1.2kg. EF/E/L/PL/RF/MFT mounts. Stepless aperture T2.9-T22. Best for: anamorphic portrait/close-up work, interview shots with cinematic scope. Tightest framing + strongest background separation of the set.',
   },
 
@@ -352,6 +352,10 @@ export const ITEM_SPECS: ItemSpec[] = [
   {
     item_name: 'JBL Club 120 speaker',
     specs: 'JBL Club 120 — 160W portable Bluetooth party speaker, dual 5.25" woofers + 2.25" tweeters. 12hr battery, IPX4 splash-proof. Dual mic + guitar 6.35mm inputs. AI Sound Boost, built-in lightshow. JBL Auracast multi-speaker linking. Best for: on-set music playback, wrap parties, events. Consumer-grade party speaker, not a studio monitor.',
+  },
+  {
+    item_name: 'DJ RX3 Pioneer controller',
+    specs: 'Pioneer XDJ-RX3 — 2-channel all-in-one DJ system. 10.1" touchscreen (largest on any Pioneer all-in-one). Club-grade 24-bit audio, 110dB SNR, <0.003% distortion. 14 Beat FX (Echo, Ping Pong, Filter) + 6 Sound Color FX (Space, Crush). 2x phono/line inputs, 2x mic (combo XLR/6.35mm), 3.5mm aux. Dual USB-A for thumb drives + USB-B for rekordbox/Serato. 72.9x11.8x47cm, 9.3kg. Works standalone (no laptop needed) or with rekordbox/Serato DJ Pro. Best for: house parties, events, weddings — professional standalone DJ setup without needing separate mixer/CDJs.',
   },
 ];
 

@@ -7,6 +7,7 @@ import { TelegramModule } from '../telegram/telegram.module';
 import { HyggloModule } from '../hygglo/hygglo.module';
 import { AiModule } from '../ai/ai.module';
 import { CalendarModule } from '../calendar/calendar.module';
+import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { CalendarModule } from '../calendar/calendar.module';
     HyggloModule,
     AiModule,
     CalendarModule,
+    ConversationStageModule,
   ],
   providers: [FollowUpService],
   exports: [FollowUpService],

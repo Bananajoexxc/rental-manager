@@ -7,6 +7,8 @@ import { AiModule } from '../ai/ai.module';
 import { RulesModule } from '../rules/rules.module';
 import { MemoryModule } from '../memory/memory.module';
 import { RenterProfileModule } from '../renter-profile/renter-profile.module';
+import { CalendarModule } from '../calendar/calendar.module';
+import { RevenueModule } from '../revenue/revenue.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { RenterProfileModule } from '../renter-profile/renter-profile.module';
     RulesModule,
     MemoryModule,
     RenterProfileModule,
+    CalendarModule,
+    RevenueModule,
   ],
   providers: [CompletedScanService],
   exports: [CompletedScanService],

@@ -29,6 +29,7 @@ export class AiService {
   private client: Anthropic;
   private modelRoutine: string;
   private modelComplex: string;
+  private modelLightweight: string;
 
   constructor(
     private configService: ConfigService,
@@ -41,6 +42,7 @@ export class AiService {
     this.client = new Anthropic({ apiKey: apiKey || '' });
     this.modelRoutine = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20250514';
     this.modelComplex = this.configService.get<string>('CLAUDE_MODEL_COMPLEX') || 'claude-sonnet-4-20250514';
+    this.modelLightweight = this.configService.get<string>('CLAUDE_MODEL_LIGHTWEIGHT') || 'claude-3-haiku-20240307';
   }
 
   private enrichContext(context: AiContext): { context: AiContext; temporalBlock: string } {
@@ -109,22 +111,48 @@ export class AiService {
       parts.push(`\n--- ADDITIONAL CONTEXT ---\n${context.additionalContext}`);
     }
 
-    // Slim FINAL ENFORCEMENT — only highest-risk rules that must never be violated
-    parts.push(
-      '\n--- FINAL ENFORCEMENT (HIGHEST PRIORITY) ---\n' +
-      'OUTPUT: Plain text only. No markdown, no bold, no bullets, no headers. Write like a person texting.\n' +
-      'PLATFORM FEES (ABSOLUTE BAN): The words "platform fee", "service fee", "checkout fee", "Hygglo fee", "platform charges" MUST NEVER appear in your response — not even to deny them. Instead say: "The price you see when you book is the total — no hidden charges." If asked about fees, deflect to the total price.\n' +
-      'HALLUCINATION BAN: The INVENTORY section above lists EVERY item we stock. If the renter asks for something NOT on that list, it does NOT exist. Say "we don\'t currently stock [item]" and suggest the closest alternative FROM THE LIST. For lenses, note the mount system (Sony E-mount, Canon EF mount) — different mounts are NOT interchangeable. We do NOT have Canon RF lenses. NEVER confirm availability for unlisted items or fabricate prices.\n' +
-      'ADDRESS: NEVER share a specific address before booking is confirmed. Only say "Central London (Trafalgar Square area)".\n' +
-      'LOCATION: NEVER say "all our gear is in Central London" or reveal items are centralised. Treat each listing location as real. Use excuses if asked.\n' +
-      'NEVER DOWNSELL: Do NOT say a renter has "enough" or "doesn\'t need" something. Facilitate and upsell.\n' +
-      'DISCOUNT SECRECY: NEVER reveal discount thresholds, percentages, or tiers. Never say "above £X you get Y% off". Say "longer rentals and bigger orders can work out cheaper" if asked. Never use the word "threshold".',
-    );
-
-    // ACTIVE IDENTITY — placed last for maximum signal strength (recency bias)
+    // ACTIVE IDENTITY — placed BEFORE enforcement as context framing (not override)
     if (context.rentalContext) {
-      parts.push(`\n--- ACTIVE IDENTITY (OVERRIDE ALL ABOVE) ---\n${context.rentalContext}`);
+      parts.push(`\n--- CURRENT RENTAL CONTEXT ---\n${context.rentalContext}`);
     }
+
+    // AUTHORITY & ENFORCEMENT — placed LAST for maximum signal strength (recency bias)
+    // This is the AI's "constitution" — it defines what the AI CAN and CANNOT do.
+    // Everything above is context. This section is LAW.
+    parts.push(
+      '\n--- YOUR AUTHORITY (READ THIS LAST — THIS OVERRIDES EVERYTHING ABOVE) ---\n' +
+      'You REPRESENT Daniel\'s rental business. You are NOT Daniel. You do NOT have Daniel\'s authority to make business decisions.\n\n' +
+
+      'THINGS YOU CAN DO (autonomously):\n' +
+      '- Answer questions about items in MASTER_INVENTORY using ONLY facts provided to you\n' +
+      '- Quote prices that appear in the booking/rental context above\n' +
+      '- Suggest complementary gear based on the renter\'s stated project\n' +
+      '- Confirm pickup at "Central London (Trafalgar Square area)" — no specific address until booking confirmed\n' +
+      '- Offer 10am-12pm pickup FIRST, then 7pm-9pm as alternative\n' +
+      '- Guide renters through identity verification when needed\n' +
+      '- Mention that longer rentals work out cheaper (without revealing thresholds)\n' +
+      '- Say "we don\'t currently stock that" for items not in MASTER_INVENTORY\n\n' +
+
+      'THINGS YOU MUST ESCALATE TO DANIEL (say "Let me check with Daniel and get back to you"):\n' +
+      '- ANY price negotiation, discount request, or "too expensive" complaint\n' +
+      '- ANY request for free items, compensation, or fee waiver\n' +
+      '- Same-day rental approval\n' +
+      '- Anything outside normal booking flow (refunds, complaints about service, policy exceptions)\n' +
+      '- Technical specs you don\'t have data for\n\n' +
+
+      'THINGS YOU CANNOT DO (hard constraints — violation = system block):\n' +
+      '- Fabricate facts: NO made-up specs, runtimes, distances, prices, or item names\n' +
+      '- Break lens mount physics: Sony cameras = Sony E-mount ONLY. Blackmagic = Canon EF ONLY. These are physically incompatible.\n' +
+      '- Mention platform fees, service fees, Hygglo, or any platform name — not even to deny them\n' +
+      '- Share specific address/postcode before booking confirmed\n' +
+      '- Reveal items are centralised or that listing locations are approximate\n' +
+      '- Reveal discount thresholds, percentages, or qualification criteria\n' +
+      '- Reveal that DB Cinema and Leo Adams are the same business\n' +
+      '- Use markdown formatting (bold, bullets, headers) — plain text only, like texting\n' +
+      '- Add signatures, sign-offs, or "Cheers, Daniel" — just end naturally\n' +
+      '- Downsell: never say renter has "enough" or "doesn\'t need" something\n' +
+      '- Offer distance discount when the renter is NOT being redirected from a non-central listing. The discount is an apology for redirecting from a distant listing location (Hackney, Shoreditch, Croydon, etc.) to central. It does NOT apply for central-zone listings (SE1, SW1, WC2, EC1, W1, E1 areas) where Trafalgar Square is already nearby.\n',
+    );
 
     return parts.join('\n');
   }
@@ -179,12 +207,12 @@ export class AiService {
     let signals = 0;
 
     // Complaint or frustration signals — strong signal, counts as 2
-    if (/\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund|compensat|escalat)\b/i.test(message)) {
+    if (/\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund|compensat|escalat|annoying|ridiculous|rip.?off)\b/i.test(message)) {
       signals += 2;
     }
 
     // Price negotiation attempts (not simple "do you do discounts?" which has a canned answer)
-    if (/\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for)\b/i.test(message)) {
+    if (/\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for|feels? steep|saw.*cheaper|over.?priced)\b/i.test(message)) {
       signals += 2;
     }
 
@@ -201,11 +229,28 @@ export class AiService {
     }
 
     // Multiple items or bundles being discussed simultaneously
-    const itemMentions = (message.match(/\b(fx3|a7|bmpcc|gimbal|lens|camera|drone|light|mic|monitor|slider|tripod|nanlite|atomos|rode|dji|sony|blackmagic)\b/gi) || []).length;
+    const itemMentions = (message.match(/\b(fx3|fx6|a7|bmpcc|pocket|gimbal|lens|camera|drone|light|mic|monitor|slider|tripod|nanlite|atomos|rode|dji|sony|blackmagic|wireless|v.?mount|battery|batteries)\b/gi) || []).length;
     const bundleMentions = (message.match(/\b(bundle|package|kit|combo|set)\b/gi) || []).length;
     if (itemMentions >= 3 || bundleMentions >= 2) {
       signals += 2;
     } else if (itemMentions >= 2) {
+      signals += 1;
+    }
+
+    // Multi-part questions — renter asking about 2+ different topics
+    const questionMarks = (message.match(/\?/g) || []).length;
+    const alsoActually = /\b(also|actually|and also|plus|as well|another thing)\b/i.test(message);
+    if (questionMarks >= 2 || (questionMarks >= 1 && alsoActually)) {
+      signals += 1;
+    }
+
+    // Adding items to existing booking (logistics reasoning needed)
+    if (/\b(add|adding|throw in|include|can you also|want to get)\b/i.test(message) && itemMentions >= 1) {
+      signals += 1;
+    }
+
+    // Delivery with postcode (requires distance calculation reasoning)
+    if (hasDelivery && /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(message)) {
       signals += 1;
     }
 
@@ -214,15 +259,20 @@ export class AiService {
       signals += 2;
     }
 
-    // Very long messages (likely complex multi-part questions)
-    if (message.length > 800) {
+    // Location complaints or pickup issues
+    if (/\b(too far|not convenient|wrong location|different location|why.*not at)\b/i.test(message)) {
       signals += 2;
-    } else if (message.length > 500) {
+    }
+
+    // Very long messages (likely complex multi-part questions)
+    if (message.length > 600) {
+      signals += 2;
+    } else if (message.length > 350) {
       signals += 1;
     }
 
     // Conversation history is deep (complex ongoing negotiation)
-    if (context.conversationHistory && context.conversationHistory.length > 16) {
+    if (context.conversationHistory && context.conversationHistory.length > 6) {
       signals += 1;
     }
 
@@ -230,14 +280,36 @@ export class AiService {
   }
 
   /**
-   * Lightweight extraction method - uses Haiku with minimal system prompt.
-   * For structured data extraction only (times, dates, item names, etc.)
+   * Lightweight extraction/classification — uses Claude 3 Haiku (4x cheaper).
+   * For structured data extraction, intent classification, summaries — NOT renter-facing.
    */
   async processExtraction(
     userMessage: string,
     context: Omit<AiContext, 'rules' | 'memories'> = {},
   ): Promise<AiResponse> {
-    return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined }, this.modelRoutine);
+    return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined }, this.modelLightweight);
+  }
+
+  /**
+   * Sonnet-grade extraction — for tasks where Haiku lacks nuance (e.g. time negotiation context).
+   * Strips rules/memories like processExtraction, but uses Sonnet with generous token budget.
+   */
+  async processExtractionComplex(
+    userMessage: string,
+    context: Omit<AiContext, 'rules' | 'memories'> = {},
+  ): Promise<AiResponse> {
+    return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, maxTokens: 1024 }, this.modelComplex);
+  }
+
+  /**
+   * Lightweight internal analysis — uses Claude 3 Haiku for non-renter-facing tasks.
+   * Market reports, memory classification, internal summaries.
+   */
+  async processLightweight(
+    userMessage: string,
+    context: AiContext = {},
+  ): Promise<AiResponse> {
+    return this.callClaude(userMessage, context, this.modelLightweight);
   }
 
   /**
@@ -298,7 +370,7 @@ export class AiService {
       this.logger.debug(`Calling Claude (${model}) with ${messages.length} messages`);
 
       // Dynamic max_tokens: use context override or lean defaults
-      const maxTokens = context.maxTokens || (model === this.modelComplex ? 512 : 256);
+      const maxTokens = context.maxTokens || (model === this.modelComplex ? 800 : 500);
 
       // Use prompt caching for the static system prompt portion
       const response = await this.client.messages.create({

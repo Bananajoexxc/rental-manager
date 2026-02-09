@@ -127,7 +127,7 @@ export class BundleIntelligenceService {
       {
         name: 'Great Joy Anamorphic Set',
         description: '35mm + 50mm + 85mm Great Joy anamorphic lenses',
-        items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm'],
+        items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm'],
         category: 'lens_set',
         dailyPrice: 99,
         account: 'both',

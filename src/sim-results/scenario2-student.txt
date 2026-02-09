@@ -1,0 +1,156 @@
+SCENARIO 2: Student Budget Rental - Under 40 pounds
+Started at Wed Feb  4 15:46:59 UTC 2026
+
+=== MESSAGE 1 ===
+RENTER: Hi, I'm a film student and need to rent a single lens for Saturday. The Canon EF 24-105mm.
+BOT REPLY: Hey! The Canon EF 24-105mm f4 is available for Saturday. It runs about £15-20/day.
+
+Just so you know, all our gear is based in Central London at our Trafalgar Square location. Collection and return would be from there.
+
+What camera are you using it with? Want to make sure it's compatible.
+
+=== MESSAGE 2 ===
+RENTER: How much would that be for one day?
+BOT REPLY: The Canon EF 24-105mm f4 runs about £15-20/day. Hygglo adds a service fee on top of that (roughly 15%).
+
+Quick heads up though - minimum rental is £25. Since the lens alone is under that, want to add something else to reach the minimum? What are you shooting?
+
+=== MESSAGE 3 ===
+RENTER: Could I pick it up Friday evening so I can start early Saturday?
+BOT REPLY: Yeah, Friday evening pickup works. That would be 7-9pm.
+
+Since your rental total is under £40, there's a 30% surcharge for evening-before pickup. Or you can pick up Saturday morning 10am-12pm at no extra charge.
+
+Which works better for you?
+
+=== MESSAGE 4 ===
+RENTER: That's a bit steep for just a lens. Is there any way to get it cheaper?
+BOT REPLY: I can work with you on pricing. Let me offer you a custom rate - I can do the lens for £12/day to help you out as a film student.
+
+That still puts you under the £25 minimum though. What are you shooting? I can suggest something that would actually be useful for your project to get you over the threshold.
+
+=== MESSAGE 5 ===
+RENTER: Fine. What about returning Sunday morning instead of Saturday evening?
+BOT REPLY: Sunday morning return (10am-12pm) works. Since your rental is under £40 total, there's a 30% surcharge for morning-after return.
+
+So with Friday evening pickup and Sunday morning return, that's the one-day lens rental plus 30% for Friday evening pickup and 30% for Sunday morning return.
+
+Want to go with that, or prefer Saturday 10am pickup and Saturday evening return at the standard rate?
+
+=== MESSAGE 6 ===
+RENTER: Where do I pick up from? I'm based in Camden.
+BOT REPLY: Pickup is from our Central London location near Trafalgar Square. I'll send you the exact meetup spot once your booking is confirmed.
+
+Camden to Trafalgar Square is pretty close - about 15-20 minutes on the Tube.
+
+So are we good to move forward with the lens rental? Just need you to confirm what you want to add to reach the £25 minimum.
+
+=== MESSAGE 7 ===
+RENTER: What time Saturday morning is earliest pickup?
+BOT REPLY: 10am.
+
+=== MESSAGE 8 ===
+RENTER: I'm shooting a student short film in a park. Do I need anything else?
+BOT REPLY: For a park shoot you'll probably want audio sorted. The Rode Wireless Go II is £20/day - clips on talent, no boom needed.
+
+That gets you to £32 total which clears the minimum.
+
+Or if you've got a camera already, the Sony FX3 with the 24-70mm lens runs £50-60/day and would be a solid setup for your short.
+
+What camera are you using?
+
+=== MESSAGE 9 ===
+RENTER: Nah just the lens is fine. I have my own camera body.
+BOT REPLY: Can't do just the lens - £25 minimum on all rentals to cover platform fees.
+
+Need to add at least £13 more. The wireless mic would get you there and actually be useful for dialogue in your park shoot.
+
+Or an ND filter for £8/day plus a memory card for £5/day.
+
+What works?
+
+=== MESSAGE 10 ===
+RENTER: What if something goes wrong with the lens during my shoot?
+BOT REPLY: Items are covered by Hygglo Care up to £3,000 for damage or theft during the rental. Just document everything if something happens and report it through the platform right away.
+
+You check the gear when you pick it up - if there's an issue before you leave, we sort it then. Once you've taken it, you're responsible for it until return.
+
+Still deciding on what to add to hit the minimum?
+
+=== MESSAGE 11 ===
+RENTER: OK cool. Can I also rent just a single reflector or is that too cheap?
+BOT REPLY: The 5-in-1 reflector is £8/day. With the lens that puts you at £20 total - still need another £5 to hit the minimum.
+
+Add a memory card for £5/day and you're sorted at £25.
+
+Sound good?
+
+=== MESSAGE 12 ===
+RENTER: How do the Hygglo fees work? They take a cut right?
+BOT REPLY: The £25 is our rental rate. Hygglo adds their service fee on top at checkout - usually around 15%.
+
+So your total will be a bit higher when you send the request, but the £25 is what we quoted for the gear itself.
+
+Ready to book or still sorting what you need?
+
+=== MESSAGE 13 ===
+RENTER: Can I pay in cash when I collect?
+BOT REPLY: No cash - all rental payments go through Hygglo. That's what covers the insurance and guarantees on the gear.
+
+You pay when you send the booking request on the platform, then collection is just showing ID and checking the items.
+
+What dates are you looking at?
+
+=== MESSAGE 14 ===
+RENTER: What happens if I return it late? Like an hour late?
+BOT REPLY: An hour late is fine, no charge. You get a half-day grace period on 1-day rentals.
+
+Anything past that becomes a full extra day that needs to be paid for.
+
+Our return slots are 10am-12pm and 7pm-9pm. Which day are you planning to return?
+
+=== MESSAGE 15 ===
+RENTER: My friend also wants to borrow it after me. Can I extend and pass it to them?
+BOT REPLY: The booking holder has to be the person using the equipment throughout the rental. If your friend needs gear, they can create their own Hygglo account and book directly.
+
+You can extend your own rental if you need it longer, but you can't pass it to someone else.
+
+How long do you need it for?
+
+=== MESSAGE 16 ===
+RENTER: OK understood. What if I want Sunday AND Monday? Two day rental.
+BOT REPLY: Yeah that works. Two day rental - pickup Sunday, return Monday.
+
+Which time slots work for you? 10am-12pm or 7pm-9pm for both days.
+
+Once you confirm times I'll check final availability and you can send the request.
+
+=== MESSAGE 17 ===
+RENTER: For the two day rental, could I pick up Saturday evening instead?
+BOT REPLY: Yeah Saturday evening pickup works. That's free since your rental is a 2-day booking.
+
+So Saturday 7-9pm pickup, Monday return. Which time Monday - 10am-12pm or 7-9pm?
+
+=== MESSAGE 18 ===
+RENTER: And return Tuesday morning? Would that be free or extra?
+BOT REPLY: Tuesday morning return is free since your rental is over £40.
+
+So Saturday evening pickup, Tuesday morning return - covers Sunday and Monday as your 2 rental days.
+
+That work for you?
+
+=== MESSAGE 19 ===
+RENTER: Actually nevermind, I'll stick with Saturday to Saturday one day. How do I book?
+BOT REPLY: Saturday to Saturday is a full week - that's 7 days, not one day.
+
+One day would be pickup Saturday, return Sunday.
+
+Which one do you want? Week rental or single day?
+
+=== MESSAGE 20 ===
+RENTER: One last thing - do you have any student discounts?
+BOT REPLY: No student discounts. Discounts are for 7+ day rentals, 20km+ travel distance, or orders over £350.
+
+Which rental length are you going with - single day or the week?
+
+Scenario 2 done at Wed Feb  4 15:48:11 UTC 2026

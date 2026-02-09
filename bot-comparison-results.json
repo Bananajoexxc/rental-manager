@@ -1,0 +1,109 @@
+{
+  "tests": [
+    {
+      "test_num": 1,
+      "issue": "Pricing Accuracy",
+      "prompt": "How much is the Sony FX3 per day?",
+      "reply": "FX3 runs around 40-50 a day. Comes with 3x batteries and 128GB card.\n\nLonger rentals work out cheaper per day.",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 2,
+      "issue": "Pricing Accuracy",
+      "prompt": "What's the price for renting the BMPCC 6K Pro for 3 days?",
+      "reply": "BMPCC 6K Pro for 3 days runs around 90-100 total.\n\nComes with 5x LP-E6NH batteries and 1TB card included.",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 3,
+      "issue": "Pricing Accuracy",
+      "prompt": "Can I get a quote for the DJI RS3 Pro gimbal and a V-mount battery?",
+      "reply": "DJI RS3 Pro gimbal runs about 30-40 a day. V-mount battery 95mAh is around 15-20 a day, or the 150mAh is 25-35 a day.\n\nV-mount rental includes all the plates, adapters and cables you need.\n\nWhat dates are you looking at?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 4,
+      "issue": "Availability and Schedule",
+      "prompt": "Is the Sony FX3 available this weekend?",
+      "reply": "Let me check that for you.\n\nWhat dates exactly - pickup and return?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 5,
+      "issue": "Availability and Schedule",
+      "prompt": "I need the Atomos Ninja V tomorrow, can I pick it up at 10am?",
+      "reply": "Need to check with Daniel first for same-day rentals.\n\nWhat date is your return?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 6,
+      "issue": "Availability and Schedule",
+      "prompt": "What gear do you have available for next Monday to Wednesday?",
+      "reply": "Got most of our inventory available for those dates. What are you shooting? That helps me suggest what would work best.\n\nWe've got cinema cameras (FX3, BMPCC 6K Pro, A7 III), lenses (Sony GM 24-70, 70-200, 16-35), gimbals, wireless mics, LED lights, drones, tripods, monitors - pretty much full kit.\n\nWhat's the project?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 7,
+      "issue": "Bundle Intelligence and Upselling",
+      "prompt": "I'm shooting a short film this weekend, I need a cinema camera",
+      "reply": "For a short film I'd recommend the BMPCC 6K Pro - shoots in RAW with incredible color science, runs about 30-40 a day. Comes with 5x LP-E6NH batteries and 1TB card.\n\nFX3 is also great - more versatile, better low light, around 40-50 a day. Includes 3x NP-FZ100 batteries and 128GB card.\n\nWhat exact dates for the weekend - pickup and return?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 8,
+      "issue": "Bundle Intelligence and Upselling",
+      "prompt": "I want the Sony FX3, do you have any lenses that go with it?",
+      "reply": "Yeah, got several Sony GM lenses that work perfectly with the FX3:\n\nSony GM 24-70mm f2.8 - most versatile, covers wide to portrait. Around 30-40 a day.\n\nSony GM 70-200mm f2.8 - telephoto zoom, great for interviews and tighter shots. About 50-60 a day.\n\nSony GM 16-35mm f2.8 - wide angle for establishing shots and tight spaces. Around 35-45 a day.\n\nSony GM 90mm f2.8 - portrait prime, beautiful bokeh. About 20-30 a day.\n\nFor a short film the 24-70mm is usually the workhorse lens - covers most situations.\n\nWhat dates do you need them for?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 9,
+      "issue": "Bundle Intelligence and Upselling",
+      "prompt": "I'll take the FX3 and the 24-70mm lens, anything else I might need?",
+      "reply": "For a short film you'll likely want audio and stabilization:\n\nAudio - Rode Wireless Mic Pro set is solid for dialogue, runs about 25-30 a day. Or DJI Wireless Mics if you need something simpler, around 15-20 a day.\n\nStabilization - DJI RS3 Pro gimbal for smooth movement shots, about 30-40 a day.\n\nAnd since you're doing narrative work, mist filters can give you that cinematic look - Cinebloom filter runs about 10-15 a day.\n\nWhat dates are you looking at for pickup and return?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 10,
+      "issue": "Rule Compliance",
+      "prompt": "Where exactly are you located? Can I get the address?",
+      "reply": "All items are based in Central London, Trafalgar Square area. The exact meetup spot gets sent once your booking is confirmed and verified.\n\nJust to move forward - what dates do you need the FX3 and 24-70mm for? And are you adding any of those extras (wireless mic, gimbal, mist filter)?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 11,
+      "issue": "Rule Compliance",
+      "prompt": "Are there any platform fees on top of the rental price?",
+      "reply": "The price shown when you book is the total.\n\nSo which dates work for your shoot? And just the FX3 + 24-70mm or adding anything else?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 12,
+      "issue": "Rule Compliance",
+      "prompt": "How many batteries come with the BMPCC 6K Pro?",
+      "reply": "BMPCC 6K Pro comes with 5x LP-E6NH batteries.\n\nStill interested in the FX3 + 24-70mm? What dates do you need them for?",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 13,
+      "issue": "Delivery and Complex Queries",
+      "prompt": "Can you deliver to East London? I'm in E14",
+      "reply": "Yeah, delivery to E14 is fine. That'll need a motorcycle courier - runs about 15-20 each way, so around 30-40 total for delivery and collection.\n\nWhat dates are you booking for? Once I know the dates I can confirm exact availability and lock in the total price for you.",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 14,
+      "issue": "Delivery and Complex Queries",
+      "prompt": "I need the DJ deck and speakers delivered to SW1A 1AA",
+      "reply": "DJ deck + speakers together requires delivery - no self-pickup option due to weight and size. SW1A 1AA is close, so that'll need a van courier. Runs about 40-50 each way, so around 80-100 total for delivery and collection.\n\nWhat dates do you need them for? I'll check availability and confirm the total.",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "test_num": 15,
+      "issue": "Delivery and Complex Queries",
+      "prompt": "I want to add the Rode Wireless mic to my existing order, will delivery change?",
+      "reply": "Nope, delivery stays the same. The Rode Wireless Mic is small and light, so it fits with what you've already got without needing a bigger courier.\n\nI'll add it to your order. What dates are you looking at for everything?",
+      "model": "claude-sonnet-4-5-20250929"
+    }
+  ]
+}

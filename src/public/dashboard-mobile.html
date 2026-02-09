@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Rental Manager - Mobile</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117; color: #e4e6eb; line-height: 1.4;
+      -webkit-text-size-adjust: 100%;
+    }
+    a { color: #6ea8fe; text-decoration: none; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; background: #1a1d27; border-bottom: 1px solid #2a2d3a;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .header h1 { font-size: 16px; font-weight: 600; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block; margin-right: 6px; }
+    .status-dot.healthy { background: #22c55e; }
+    .header-controls { display: flex; gap: 8px; align-items: center; }
+    .header select, .header button {
+      background: #2a2d3a; border: 1px solid #3a3d4a; color: #e4e6eb;
+      padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    }
+
+    .main { padding: 12px; }
+
+    /* Stat cards - 2 per row on mobile */
+    .stats-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;
+    }
+    .stat-card {
+      background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 8px; padding: 10px 12px;
+    }
+    .stat-card .label { font-size: 10px; color: #8b8fa3; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card .value { font-size: 22px; font-weight: 700; color: #e4e6eb; }
+    .stat-card .sub { font-size: 10px; color: #8b8fa3; margin-top: 1px; }
+    .stat-card .value.green { color: #22c55e; }
+    .stat-card .value.amber { color: #f59e0b; }
+    .stat-card .value.blue { color: #6ea8fe; }
+    .stat-card .value.red { color: #ef4444; }
+    .stat-card.lost-revenue-card { border-left: 3px solid #ef4444; }
+
+    /* Collapsible sections */
+    .section {
+      background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 8px;
+      margin-bottom: 10px; overflow: hidden;
+    }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; font-size: 13px; font-weight: 600; color: #e4e6eb;
+      cursor: pointer; user-select: none;
+    }
+    .section-header::after {
+      content: '\25BC'; font-size: 10px; color: #8b8fa3; transition: transform 0.2s;
+    }
+    .section-header.collapsed::after { transform: rotate(-90deg); }
+    .section-body { padding: 0 14px 12px; }
+    .section-body.hidden { display: none; }
+    .section-header select {
+      background: #2a2d3a; border: 1px solid #3a3d4a; color: #e4e6eb;
+      padding: 3px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;
+    }
+
+    /* Tables */
+    table { width: 100%; font-size: 11px; border-collapse: collapse; }
+    th { text-align: left; padding: 4px 6px; color: #8b8fa3; border-bottom: 1px solid #2a2d3a; font-weight: 500; }
+    td { padding: 4px 6px; border-bottom: 1px solid #1e2130; }
+    th:not(:first-child), td:not(:first-child) { text-align: right; }
+
+    /* Activity feed */
+    .activity-item {
+      padding: 8px 0; border-bottom: 1px solid #1e2130; font-size: 12px;
+    }
+    .activity-item:last-child { border-bottom: none; }
+    .activity-time { color: #6b6f82; font-size: 10px; }
+
+    /* Loading */
+    .loading { text-align: center; padding: 16px; color: #8b8fa3; font-size: 12px; }
+    .spinner { width: 20px; height: 20px; border: 2px solid #2a2d3a; border-top: 2px solid #6ea8fe; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Desktop link */
+    .desktop-link {
+      text-align: center; padding: 16px; font-size: 12px; color: #8b8fa3;
+    }
+
+    /* Edit mode */
+    .edit-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:49; }
+    .edit-overlay.active { display:block; }
+    body.edit-mode .main { position:relative; z-index:50; }
+    .panel-wrapper { position:relative; transition: transform 0.15s; }
+    .panel-wrapper.dragging { opacity:0.5; }
+    .panel-wrapper.drag-over { border-top:3px solid #6ea8fe; }
+    .panel-edit-bar {
+      display:none; align-items:center; justify-content:space-between;
+      padding:6px 10px; background:#2a2d3a; border-radius:8px 8px 0 0;
+      border:1px solid #3a3d4a; border-bottom:none; margin-bottom:-1px;
+      cursor:grab; user-select:none; -webkit-user-select:none;
+    }
+    body.edit-mode .panel-edit-bar { display:flex; }
+    .panel-edit-bar .panel-label { font-size:11px; color:#e4e6eb; font-weight:500; display:flex; align-items:center; gap:6px; }
+    .panel-edit-bar .drag-handle { color:#6b6f82; font-size:14px; }
+    .panel-delete-btn {
+      background:none; border:none; color:#6b6f82; cursor:pointer; font-size:16px;
+      line-height:1; padding:2px 6px; border-radius:4px; transition:all 0.15s;
+    }
+    .panel-delete-btn:hover { color:#ef4444; background:rgba(239,68,68,0.15); }
+    .panel-wrapper.panel-hidden > :not(.panel-edit-bar) { display:none !important; }
+    body:not(.edit-mode) .panel-wrapper.panel-hidden { display:none; }
+    /* Stat card edit mode */
+    .stat-card { position:relative; transition: opacity 0.15s; }
+    .stat-card.dragging { opacity:0.4; }
+    .stat-card.drag-over { box-shadow: inset 0 0 0 2px #6ea8fe; }
+    .stat-card .stat-delete-btn {
+      display:none; position:absolute; top:2px; right:2px;
+      background:none; border:none; color:#6b6f82; cursor:pointer;
+      font-size:14px; line-height:1; padding:2px 4px; border-radius:4px; z-index:2;
+    }
+    body.edit-mode .stat-card .stat-delete-btn { display:block; }
+    .stat-card .stat-delete-btn:hover { color:#ef4444; background:rgba(239,68,68,0.15); }
+    .stat-card .stat-drag-handle {
+      display:none; position:absolute; top:2px; left:4px; color:#4a4d5a; font-size:10px;
+      line-height:1; z-index:2;
+    }
+    body.edit-mode .stat-card .stat-drag-handle { display:block; }
+    body.edit-mode .stat-card {
+      user-select:none; -webkit-user-select:none; -webkit-user-drag:element;
+    }
+    body.edit-mode .stat-card * { pointer-events:none; }
+    body.edit-mode .stat-card .stat-delete-btn { pointer-events:auto; }
+    body:not(.edit-mode) .stat-card.stat-hidden { display:none; }
+    body.edit-mode .stat-card.stat-hidden { opacity:0.3; }
+    /* Add-back drawer */
+    .add-drawer {
+      display:none; position:fixed; bottom:56px; left:50%; transform:translateX(-50%);
+      z-index:61; background:#1a1d27; border:1px solid #3a3d4a; border-radius:12px;
+      padding:14px; width:92%; max-height:50vh; overflow-y:auto;
+      box-shadow:0 8px 32px rgba(0,0,0,0.6);
+    }
+    body.edit-mode .add-drawer.open { display:block; }
+    .add-drawer h3 { font-size:13px; color:#e4e6eb; margin-bottom:10px; font-weight:600; }
+    .add-drawer-empty { color:#8b8fa3; font-size:11px; }
+    .add-drawer-item {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:8px 10px; background:#2a2d3a; border-radius:6px; margin-bottom:6px;
+    }
+    .add-drawer-item span { font-size:11px; color:#e4e6eb; }
+    .add-drawer-item .add-btn {
+      background:#22c55e; border:none; color:#fff; cursor:pointer;
+      padding:3px 10px; border-radius:4px; font-size:11px; font-weight:600;
+    }
+    .edit-done-btn {
+      position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:62;
+      background:#22c55e; color:#fff; border:none; padding:10px 28px; border-radius:8px;
+      font-size:13px; font-weight:600; cursor:pointer; box-shadow:0 4px 20px rgba(34,197,94,0.4);
+      display:none;
+    }
+    body.edit-mode .edit-done-btn { display:flex; align-items:center; gap:10px; }
+    .edit-add-btn {
+      background:#6366f1; color:#fff; border:none; padding:8px 16px; border-radius:8px;
+      font-size:12px; font-weight:600; cursor:pointer; box-shadow:0 4px 20px rgba(99,102,241,0.4);
+      position:fixed; bottom:16px; right:12px; z-index:62; display:none;
+    }
+    body.edit-mode .edit-add-btn { display:block; }
+    .settings-btn {
+      background:none; border:none; color:#8b8fa3; cursor:pointer; padding:4px;
+      display:flex; align-items:center;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <div class="header">
+    <div style="display:flex;align-items:center;">
+      <span class="status-dot" id="statusDot"></span>
+      <h1>Rental Manager</h1>
+    </div>
+    <div class="header-controls">
+      <select id="accountFilter" onchange="refreshAll()">
+        <option value="">All</option>
+        <option value="dbcinema">DB Cinema</option>
+        <option value="leo">Leo Adams</option>
+      </select>
+      <button onclick="refreshAll()">Refresh</button>
+      <button class="settings-btn" onclick="toggleEditMode()" title="Customize">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- Stats -->
+    <div class="panel-wrapper" data-panel="stats" data-panel-label="Stats">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Stats</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card" data-stat="today" data-stat-label="Today" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Today</div>
+        <div class="value green" id="statToday">--</div>
+      </div>
+      <div class="stat-card" data-stat="week" data-stat-label="This Week" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">This Week</div>
+        <div class="value green" id="statWeek">--</div>
+      </div>
+      <div class="stat-card" data-stat="monthly" data-stat-label="Expected Monthly" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Expected Monthly</div>
+        <div class="value green" id="statMonthly">--</div>
+      </div>
+      <div class="stat-card" data-stat="active" data-stat-label="Active Rentals" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Active Rentals</div>
+        <div class="value blue" id="statActive">--</div>
+      </div>
+      <div class="stat-card" data-stat="confirmed" data-stat-label="Confirmed" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Confirmed</div>
+        <div class="value green" id="statConfirmed">--</div>
+      </div>
+      <div class="stat-card lost-revenue-card" data-stat="lost-revenue" data-stat-label="Lost Revenue" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Lost Revenue (3m)</div>
+        <div class="value red" id="statLostRevenue">--</div>
+        <div class="sub" id="statLostRevenueSub"></div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Lifetime Revenue Growth -->
+    <div class="panel-wrapper" data-panel="lifetime" data-panel-label="Lifetime Revenue">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Lifetime Revenue</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Lifetime Revenue <span id="lifetimeTotal" style="color:#22c55e;font-weight:700;"></span></span>
+        <div id="lifetimeStats" style="display:flex;gap:8px;font-size:10px;color:#8b8fa3;font-weight:400;flex-wrap:wrap;margin-top:2px;"></div>
+      </div>
+      <div class="section-body">
+        <div style="position:relative;height:220px;">
+          <canvas id="lifetimeChart"></canvas>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Activity -->
+    <div class="panel-wrapper" data-panel="activity" data-panel-label="Live Activity">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Live Activity</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Live Activity</div>
+      <div class="section-body" id="activityBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Currently Out of Stock -->
+    <div class="panel-wrapper" data-panel="out-of-stock" data-panel-label="Out of Stock">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Out of Stock</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Currently Out of Stock</div>
+      <div class="section-body" id="unavailableBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Missed Revenue (combined blocked + unmatched) -->
+    <div class="panel-wrapper" data-panel="missed-revenue" data-panel-label="Missed Revenue">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Missed Revenue</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Missed Revenue</span>
+        <select id="missedRevenuePeriod" onchange="loadMissedRevenue()" onclick="event.stopPropagation()">
+          <option value="month">Month</option>
+          <option value="3m" selected>3m</option>
+          <option value="6m">6m</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div class="section-body">
+        <div style="display:flex;gap:4px;margin-bottom:8px;">
+          <button id="missedTabBlocked" onclick="switchMissedTab('blocked')" style="flex:1;padding:6px;font-size:11px;background:#2a2d3a;border:1px solid #6ea8fe;color:#6ea8fe;border-radius:4px;cursor:pointer;">Denied (In Stock)</button>
+          <button id="missedTabUnmatched" onclick="switchMissedTab('unmatched')" style="flex:1;padding:6px;font-size:11px;background:#2a2d3a;border:1px solid #3a3d4a;color:#8b8fa3;border-radius:4px;cursor:pointer;">Not in Stock</button>
+        </div>
+        <div id="missedBlockedBody"><div class="loading"><div class="spinner"></div>Loading...</div></div>
+        <div id="missedUnmatchedBody" style="display:none;"><div class="loading"><div class="spinner"></div>Loading...</div></div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Investment Scorecard -->
+    <div class="panel-wrapper" data-panel="scorecard" data-panel-label="Scorecard">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Scorecard</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Investment Scorecard</span>
+        <select id="scorecardPeriod" onchange="loadScorecard()" onclick="event.stopPropagation()">
+          <option value="3m">3m</option>
+          <option value="6m" selected>6m</option>
+          <option value="12m">12m</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div class="section-body" id="scorecardBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Funnel -->
+    <div class="panel-wrapper" data-panel="funnel" data-panel-label="Funnel">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Funnel</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Conversation Funnel</div>
+      <div class="section-body" id="funnelBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Top Items -->
+    <div class="panel-wrapper" data-panel="top-items" data-panel-label="Top Items">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Top Items</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Top Items by Revenue</span>
+        <select id="itemPeriod" onchange="loadTopItems()" onclick="event.stopPropagation()">
+          <option value="month">Month</option>
+          <option value="3m">3m</option>
+          <option value="6m" selected>6m</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div class="section-body" id="topItemsBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <div class="desktop-link">
+      <a href="/dashboard">Switch to Desktop View</a>
+    </div>
+  </div>
+
+  <div class="edit-overlay" id="editOverlay" onclick="toggleEditMode()"></div>
+  <button class="edit-done-btn" id="editDoneBtn" onclick="toggleEditMode()">Done</button>
+  <button class="edit-add-btn" id="editAddBtn" onclick="toggleAddDrawer()">+ Add</button>
+  <div class="add-drawer" id="addDrawer"><h3>Add Removed Items</h3><div id="addDrawerItems"></div></div>
+
+<script>
+  // ---- Layout Persistence (Edit Mode) ----
+  var LAYOUT_KEY = 'dashboard_mobile_layout_v2';
+
+  function getSavedLayout() {
+    try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) || null; } catch(e) { return null; }
+  }
+  function saveLayout() {
+    var main = document.querySelector('.main');
+    var panels = main.querySelectorAll('.panel-wrapper[data-panel]');
+    var panelOrder = [], hiddenPanels = [];
+    panels.forEach(function(p) {
+      var id = p.getAttribute('data-panel');
+      panelOrder.push(id);
+      if (p.classList.contains('panel-hidden')) hiddenPanels.push(id);
+    });
+    var grid = document.getElementById('statsGrid');
+    var stats = grid ? grid.querySelectorAll('.stat-card[data-stat]') : [];
+    var statOrder = [], hiddenStats = [];
+    stats.forEach(function(s) {
+      var id = s.getAttribute('data-stat');
+      statOrder.push(id);
+      if (s.classList.contains('stat-hidden')) hiddenStats.push(id);
+    });
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+      panelOrder: panelOrder, hiddenPanels: hiddenPanels,
+      statOrder: statOrder, hiddenStats: hiddenStats
+    }));
+  }
+  function applyLayout() {
+    var layout = getSavedLayout();
+    if (!layout) return;
+    var main = document.querySelector('.main');
+    var desktopLink = main.querySelector('.desktop-link');
+    if (layout.panelOrder && layout.panelOrder.length > 0) {
+      var panelMap = {};
+      main.querySelectorAll('.panel-wrapper[data-panel]').forEach(function(p) { panelMap[p.getAttribute('data-panel')] = p; });
+      var fragment = document.createDocumentFragment();
+      var ordered = [];
+      layout.panelOrder.forEach(function(id) { if (panelMap[id]) { ordered.push(panelMap[id]); delete panelMap[id]; } });
+      Object.keys(panelMap).forEach(function(id) { ordered.push(panelMap[id]); });
+      ordered.forEach(function(p) { fragment.appendChild(p); });
+      if (desktopLink) main.insertBefore(fragment, desktopLink);
+      else main.appendChild(fragment);
+    }
+    if (layout.hiddenPanels) {
+      main.querySelectorAll('.panel-wrapper[data-panel]').forEach(function(p) {
+        if (layout.hiddenPanels.indexOf(p.getAttribute('data-panel')) >= 0) p.classList.add('panel-hidden');
+      });
+    }
+    var grid = document.getElementById('statsGrid');
+    if (grid && layout.statOrder && layout.statOrder.length > 0) {
+      var statMap = {};
+      grid.querySelectorAll('.stat-card[data-stat]').forEach(function(s) { statMap[s.getAttribute('data-stat')] = s; });
+      var frag = document.createDocumentFragment();
+      layout.statOrder.forEach(function(id) { if (statMap[id]) { frag.appendChild(statMap[id]); delete statMap[id]; } });
+      Object.keys(statMap).forEach(function(id) { frag.appendChild(statMap[id]); });
+      grid.appendChild(frag);
+    }
+    if (layout.hiddenStats && grid) {
+      grid.querySelectorAll('.stat-card[data-stat]').forEach(function(s) {
+        if (layout.hiddenStats.indexOf(s.getAttribute('data-stat')) >= 0) s.classList.add('stat-hidden');
+      });
+    }
+  }
+  function toggleEditMode() {
+    var entering = !document.body.classList.contains('edit-mode');
+    document.body.classList.toggle('edit-mode');
+    document.getElementById('editOverlay').classList.toggle('active');
+    if (entering) {
+      document.querySelectorAll('.stat-card[data-stat]').forEach(function(s) { s.setAttribute('draggable', 'false'); });
+    } else {
+      document.getElementById('addDrawer').classList.remove('open');
+      saveLayout();
+    }
+  }
+  function removePanel(btn) {
+    btn.closest('.panel-wrapper').classList.add('panel-hidden');
+  }
+  function removeStat(btn) {
+    btn.closest('.stat-card').classList.add('stat-hidden');
+  }
+  function toggleAddDrawer() {
+    var drawer = document.getElementById('addDrawer');
+    drawer.classList.toggle('open');
+    if (drawer.classList.contains('open')) renderAddDrawer();
+  }
+  function renderAddDrawer() {
+    var container = document.getElementById('addDrawerItems');
+    var items = [];
+    document.querySelectorAll('.panel-wrapper.panel-hidden[data-panel]').forEach(function(p) {
+      var label = p.querySelector('.panel-label');
+      items.push({ type:'panel', id:p.getAttribute('data-panel'), label: label ? label.textContent.trim() : p.getAttribute('data-panel') });
+    });
+    document.querySelectorAll('.stat-card.stat-hidden[data-stat]').forEach(function(s) {
+      items.push({ type:'stat', id:s.getAttribute('data-stat'), label: s.getAttribute('data-stat-label') || s.getAttribute('data-stat') });
+    });
+    if (items.length === 0) {
+      container.innerHTML = '<div class="add-drawer-empty">All widgets are visible</div>';
+      return;
+    }
+    container.innerHTML = items.map(function(item) {
+      return '<div class="add-drawer-item"><span>' + item.label + '</span>' +
+        '<button class="add-btn" onclick="addBackItem(\'' + item.type + '\',\'' + item.id + '\')">+ Add</button></div>';
+    }).join('');
+  }
+  function addBackItem(type, id) {
+    if (type === 'panel') {
+      var panel = document.querySelector('.panel-wrapper[data-panel="' + id + '"]');
+      if (panel) panel.classList.remove('panel-hidden');
+    } else if (type === 'stat') {
+      var stat = document.querySelector('.stat-card[data-stat="' + id + '"]');
+      if (stat) stat.classList.remove('stat-hidden');
+    }
+    renderAddDrawer();
+  }
+
+  // Mobile: touch drag for panels + stat cards
+  (function() {
+    var touchPanel = null;
+    var touchStat = null;
+
+    document.querySelectorAll('.panel-edit-bar').forEach(function(bar) {
+      bar.addEventListener('touchstart', function(e) {
+        if (!document.body.classList.contains('edit-mode')) return;
+        touchPanel = bar.closest('.panel-wrapper');
+        touchPanel.classList.add('dragging');
+      }, { passive: true });
+    });
+
+    // Stat card touch drag
+    document.getElementById('statsGrid').addEventListener('touchstart', function(e) {
+      if (!document.body.classList.contains('edit-mode')) return;
+      var card = e.target.closest('.stat-card[data-stat]');
+      if (!card) return;
+      // Don't start drag if tapping the delete button
+      if (e.target.closest('.stat-delete-btn')) return;
+      touchStat = card;
+      card.classList.add('dragging');
+    }, { passive: true });
+
+    document.addEventListener('touchmove', function(e) {
+      if (!touchPanel && !touchStat) return;
+      e.preventDefault();
+      var y = e.touches[0].clientY;
+      var x = e.touches[0].clientX;
+
+      if (touchPanel) {
+        var main = document.querySelector('.main');
+        var panels = Array.from(main.querySelectorAll('.panel-wrapper[data-panel]'));
+        panels.forEach(function(p) { p.classList.remove('drag-over'); });
+        for (var i = 0; i < panels.length; i++) {
+          if (panels[i] === touchPanel) continue;
+          var rect = panels[i].getBoundingClientRect();
+          if (y > rect.top && y < rect.bottom) {
+            panels[i].classList.add('drag-over');
+            break;
+          }
+        }
+      }
+
+      if (touchStat) {
+        var grid = document.getElementById('statsGrid');
+        var cards = Array.from(grid.querySelectorAll('.stat-card[data-stat]'));
+        cards.forEach(function(c) { c.classList.remove('drag-over'); });
+        for (var i = 0; i < cards.length; i++) {
+          if (cards[i] === touchStat) continue;
+          var rect = cards[i].getBoundingClientRect();
+          if (x > rect.left && x < rect.right && y > rect.top && y < rect.bottom) {
+            cards[i].classList.add('drag-over');
+            break;
+          }
+        }
+      }
+    }, { passive: false });
+
+    document.addEventListener('touchend', function(e) {
+      if (touchPanel) {
+        touchPanel.classList.remove('dragging');
+        var target = document.querySelector('.panel-wrapper.drag-over');
+        if (target && target !== touchPanel) {
+          var main = document.querySelector('.main');
+          var panels = Array.from(main.querySelectorAll('.panel-wrapper[data-panel]'));
+          var dragIdx = panels.indexOf(touchPanel);
+          var dropIdx = panels.indexOf(target);
+          if (dragIdx < dropIdx) target.parentNode.insertBefore(touchPanel, target.nextSibling);
+          else target.parentNode.insertBefore(touchPanel, target);
+        }
+        document.querySelectorAll('.panel-wrapper.drag-over').forEach(function(p) { p.classList.remove('drag-over'); });
+        touchPanel = null;
+      }
+
+      if (touchStat) {
+        touchStat.classList.remove('dragging');
+        var target = document.querySelector('.stat-card.drag-over');
+        if (target && target !== touchStat) {
+          var grid = document.getElementById('statsGrid');
+          var cards = Array.from(grid.querySelectorAll('.stat-card[data-stat]'));
+          var dragIdx = cards.indexOf(touchStat);
+          var dropIdx = cards.indexOf(target);
+          if (dragIdx < dropIdx) grid.insertBefore(touchStat, target.nextSibling);
+          else grid.insertBefore(touchStat, target);
+        }
+        document.querySelectorAll('.stat-card.drag-over').forEach(function(c) { c.classList.remove('drag-over'); });
+        touchStat = null;
+      }
+    });
+  })();
+
+  applyLayout();
+
+  function getAccountQuery() { var v = document.getElementById('accountFilter').value; return v ? '?account=' + v : ''; }
+  function getAccountParam() { var v = document.getElementById('accountFilter').value; return v ? '&account=' + v : ''; }
+
+  function fetchJSON(url) {
+    return fetch(url).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function toggleSection(header) {
+    var body = header.nextElementSibling;
+    if (body) {
+      body.classList.toggle('hidden');
+      header.classList.toggle('collapsed');
+    }
+  }
+
+  // ---- Renderers ----
+
+  function renderBookingStats(data) {
+    document.getElementById('statToday').textContent = '£' + (data.todayEarnings || 0).toLocaleString('en-GB', {minimumFractionDigits: 0});
+    document.getElementById('statWeek').textContent = '£' + (data.weekEarnings || 0).toLocaleString('en-GB', {minimumFractionDigits: 0});
+    document.getElementById('statActive').textContent = data.activeRentals || 0;
+    document.getElementById('statConfirmed').textContent = data.monthConfirmed || 0;
+  }
+
+  function renderProjection(data) {
+    document.getElementById('statMonthly').textContent = '£' + Math.round(data.projected || 0).toLocaleString('en-GB');
+  }
+
+  function renderLostRevenueStat(data) {
+    var el = document.getElementById('statLostRevenue');
+    var sub = document.getElementById('statLostRevenueSub');
+    if (!data || data.deniedRequestCount === 0) { el.textContent = '£0'; sub.textContent = ''; return; }
+    el.textContent = '£' + data.totalLostRevenue.toLocaleString('en-GB', {minimumFractionDigits:0, maximumFractionDigits:0});
+    sub.textContent = data.deniedRequestCount + ' denied · ' + data.itemsAffected + ' items';
+  }
+
+  function renderActivity(data) {
+    var body = document.getElementById('activityBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No recent activity.</div>'; return; }
+    var html = '';
+    data.slice(0, 20).forEach(function(a) {
+      var time = new Date(a.timestamp).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+      var icon = a.type === 'message_processed' ? '💬' : a.type === 'new_rental' ? '📦' : a.type === 'blacklist' ? '🚫' : '📋';
+      html += '<div class="activity-item"><span class="activity-time">' + time + '</span> ' + icon + ' ' + (a.summary || a.title || a.type) + '</div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function renderUnavailable(data) {
+    var body = document.getElementById('unavailableBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#22c55e;font-size:12px;">All items available</div>'; return; }
+    var html = '';
+    data.forEach(function(item) {
+      var backDate = new Date(item.bookedUntil).toLocaleDateString('en-GB', {day:'numeric',month:'short'});
+      html += '<div style="padding:8px 0;border-bottom:1px solid #1e2130;">';
+      html += '<div style="font-size:12px;color:#ef4444;font-weight:600;">' + item.item + '</div>';
+      html += '<div style="font-size:10px;color:#8b8fa3;">All ' + item.totalStock + ' units out · back ' + backDate + '</div>';
+      if (item.currentRenters && item.currentRenters.length > 0) {
+        html += '<div style="font-size:10px;color:#6b6f82;">' + item.currentRenters.join(', ') + '</div>';
+      }
+      html += '</div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function renderMissedBlocked(data) {
+    var body = document.getElementById('missedBlockedBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No denied requests.</div>'; return; }
+    var html = '<table><tr><th>Item</th><th>Denied</th><th>Lost</th><th>Stock</th></tr>';
+    data.forEach(function(item) {
+      html += '<tr><td style="color:#e4e6eb;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + item.item + '</td>';
+      html += '<td style="color:#ef4444;">' + item.deniedCount + '</td>';
+      html += '<td style="color:#ef4444;">£' + item.totalLostRevenue.toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}) + '</td>';
+      html += '<td style="color:#8b8fa3;">' + item.currentInventory + '</td></tr>';
+    });
+    html += '</table>';
+    body.innerHTML = html;
+  }
+
+  function renderMissedUnmatched(data) {
+    var body = document.getElementById('missedUnmatchedBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No unmatched demand.</div>'; return; }
+    var html = '<table><tr><th>Item Requested</th><th>Requests</th><th>Avg Days</th></tr>';
+    data.forEach(function(item) {
+      html += '<tr><td style="color:#e4e6eb;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + item.item + '">' + item.item + '</td>';
+      html += '<td style="color:#f59e0b;">' + item.requestCount + '</td>';
+      html += '<td style="color:#8b8fa3;">' + (item.avgRentalDays || '—') + '</td></tr>';
+    });
+    html += '</table>';
+    body.innerHTML = html;
+  }
+
+  function renderScorecard(data) {
+    var body = document.getElementById('scorecardBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No data.</div>'; return; }
+    var html = '<table><tr><th>Item</th><th>Conf.</th><th>Earned</th><th>Rent/Mo</th></tr>';
+    data.slice(0, 15).forEach(function(item) {
+      var confColor = item.confidence === 'high' ? '#22c55e' : item.confidence === 'medium' ? '#f59e0b' : '#ef4444';
+      var confLabel = item.confidence === 'high' ? 'High' : item.confidence === 'medium' ? 'Med' : 'Low';
+      html += '<tr><td style="color:#e4e6eb;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + item.item + '">' + item.item + '</td>';
+      html += '<td style="color:' + confColor + ';font-weight:600;">' + confLabel + '</td>';
+      html += '<td style="color:#22c55e;">£' + item.actualRevenue.toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}) + '</td>';
+      html += '<td style="color:#a78bfa;">' + (item.rentalsPerMonth ? item.rentalsPerMonth.toFixed(1) : '—') + '</td></tr>';
+    });
+    html += '</table>';
+    body.innerHTML = html;
+  }
+
+  function switchMissedTab(tab) {
+    var blockedBtn = document.getElementById('missedTabBlocked');
+    var unmatchedBtn = document.getElementById('missedTabUnmatched');
+    var blockedBody = document.getElementById('missedBlockedBody');
+    var unmatchedBody = document.getElementById('missedUnmatchedBody');
+    if (tab === 'blocked') {
+      blockedBtn.style.borderColor = '#6ea8fe'; blockedBtn.style.color = '#6ea8fe';
+      unmatchedBtn.style.borderColor = '#3a3d4a'; unmatchedBtn.style.color = '#8b8fa3';
+      blockedBody.style.display = ''; unmatchedBody.style.display = 'none';
+    } else {
+      unmatchedBtn.style.borderColor = '#6ea8fe'; unmatchedBtn.style.color = '#6ea8fe';
+      blockedBtn.style.borderColor = '#3a3d4a'; blockedBtn.style.color = '#8b8fa3';
+      unmatchedBody.style.display = ''; blockedBody.style.display = 'none';
+    }
+  }
+
+  function renderFunnel(data) {
+    var body = document.getElementById('funnelBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No data.</div>'; return; }
+    var stages = ['inquiry','interested','ready_to_book','booked','confirmed','completed','dead'];
+    var stageColors = {'inquiry':'#6ea8fe','interested':'#818cf8','ready_to_book':'#a78bfa','booked':'#f59e0b','confirmed':'#22c55e','completed':'#10b981','dead':'#6b6f82'};
+    var maxCount = Math.max.apply(null, data.map(function(s){return s.count;})) || 1;
+    var html = '';
+    stages.forEach(function(stage) {
+      var found = data.find(function(s){return s.stage === stage;});
+      var count = found ? found.count : 0;
+      var pct = (count / maxCount * 100);
+      var color = stageColors[stage] || '#8b8fa3';
+      html += '<div style="margin-bottom:6px;">';
+      html += '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px;"><span style="color:#8b8fa3;">' + stage.replace(/_/g,' ') + '</span><span style="color:' + color + ';">' + count + '</span></div>';
+      html += '<div style="background:#1e2130;border-radius:4px;height:8px;"><div style="background:' + color + ';border-radius:4px;height:100%;width:' + pct + '%;transition:width 0.3s;"></div></div>';
+      html += '</div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function renderTopItems(rawData) {
+    var body = document.getElementById('topItemsBody');
+    var data = Array.isArray(rawData) ? rawData : (rawData && rawData.items ? rawData.items : []);
+    var otherRevenue = rawData && rawData.otherRevenue ? rawData.otherRevenue : 0;
+    if (!data || data.length === 0) { body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No data.</div>'; return; }
+    var html = '<table><tr><th>Item</th><th>Revenue</th><th>Rentals</th></tr>';
+    data.slice(0, 10).forEach(function(item) {
+      html += '<tr><td style="color:#e4e6eb;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + item.item + '</td>';
+      html += '<td style="color:#22c55e;">£' + item.profit.toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}) + '</td>';
+      html += '<td style="color:#8b8fa3;">' + item.count + '</td></tr>';
+    });
+    var totalRevenue = rawData && rawData.totalRevenue ? rawData.totalRevenue : 0;
+    if (otherRevenue > 0) {
+      html += '<tr><td style="color:#8b8fa3;font-style:italic;">Other / Unattributed</td>';
+      html += '<td style="color:#8b8fa3;">£' + Math.round(otherRevenue).toLocaleString('en-GB') + '</td>';
+      html += '<td></td></tr>';
+    }
+    if (totalRevenue > 0) {
+      html += '<tr style="border-top:1px solid #333;"><td style="color:#e4e6eb;font-weight:700;">Total</td>';
+      html += '<td style="color:#22c55e;font-weight:700;">£' + Math.round(totalRevenue).toLocaleString('en-GB') + '</td>';
+      html += '<td></td></tr>';
+    }
+    html += '</table>';
+    body.innerHTML = html;
+  }
+
+  // ---- Lifetime Chart ----
+  var lifetimeChartInstance = null;
+
+  function loadLifetimeChart() {
+    var amp = getAccountParam();
+    fetchJSON('/revenue/lifetime' + (amp ? '?' + amp.substring(1) : '')).then(renderLifetimeChart).catch(function(){});
+  }
+
+  function renderLifetimeChart(data) {
+    var canvas = document.getElementById('lifetimeChart');
+    var ctx = canvas.getContext('2d');
+    if (lifetimeChartInstance) lifetimeChartInstance.destroy();
+    if (!data || !data.months || data.months.length === 0) return;
+
+    document.getElementById('lifetimeTotal').textContent = '\u00A3' + data.totalRevenue.toLocaleString('en-GB', {minimumFractionDigits:0, maximumFractionDigits:0});
+
+    var statsEl = document.getElementById('lifetimeStats');
+    if (statsEl) {
+      var fmtMonth = function(m) { var p=m.split('-'); var mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mn[parseInt(p[1],10)-1]+' '+p[0]; };
+      var parts = [];
+      if (data.avgMonthly) parts.push('<span>Avg/mo: <b style="color:#e4e6eb;">\u00A3' + data.avgMonthly.toLocaleString('en-GB') + '</b></span>');
+      if (data.strongestMonth) parts.push('<span>Best: <b style="color:#22c55e;">' + fmtMonth(data.strongestMonth.month) + ' \u00A3' + data.strongestMonth.revenue.toLocaleString('en-GB') + '</b></span>');
+      if (data.weakestMonth) parts.push('<span>Weakest: <b style="color:#f59e0b;">' + fmtMonth(data.weakestMonth.month) + ' \u00A3' + data.weakestMonth.revenue.toLocaleString('en-GB') + '</b></span>');
+      statsEl.innerHTML = parts.join('');
+    }
+
+    var labels = data.months.map(function(d) {
+      var parts = d.month.split('-');
+      var mn = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+      return mn[parseInt(parts[1],10)-1] + "'" + parts[0].slice(2);
+    });
+    var cumulativeData = data.months.map(function(d) { return d.cumulative; });
+    var monthlyData = data.months.map(function(d) { return d.revenue; });
+
+    lifetimeChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Cumulative',
+            data: cumulativeData,
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34,197,94,0.08)',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: true,
+            yAxisID: 'y',
+          },
+          {
+            label: 'Monthly',
+            data: monthlyData,
+            type: 'bar',
+            backgroundColor: 'rgba(99,102,241,0.3)',
+            borderColor: '#6366f1',
+            borderWidth: 1,
+            borderRadius: 2,
+            yAxisID: 'y1',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { color: '#8b8fa3', font: { size: 10 }, boxWidth: 10, padding: 8 } },
+          tooltip: { callbacks: { label: function(c) { return c.dataset.label + ': \u00A3' + c.parsed.y.toLocaleString(); } } }
+        },
+        scales: {
+          x: { ticks: { color: '#6b6f82', font: { size: 8 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 }, grid: { color: '#1e2130' } },
+          y: { position: 'left', ticks: { color: '#6b6f82', font: { size: 9 }, callback: function(v) { return v >= 1000 ? '\u00A3' + (v/1000).toFixed(0) + 'k' : '\u00A3' + v; } }, grid: { color: '#1e2130' } },
+          y1: { position: 'right', ticks: { color: '#6b6f82', font: { size: 9 }, callback: function(v) { return v >= 1000 ? '\u00A3' + (v/1000).toFixed(0) + 'k' : '\u00A3' + v; } }, grid: { display: false } }
+        }
+      }
+    });
+  }
+
+  // ---- Loaders ----
+
+  function loadMissedRevenue() {
+    var p = document.getElementById('missedRevenuePeriod').value || '3m';
+    var amp = getAccountParam();
+    fetchJSON('/lost-revenue/items?period=' + p + amp).then(renderMissedBlocked).catch(function(){});
+    fetchJSON('/lost-revenue/unmatched?period=' + p + amp).then(renderMissedUnmatched).catch(function(){});
+  }
+  function loadScorecard() {
+    var p = document.getElementById('scorecardPeriod').value || '6m';
+    fetchJSON('/revenue/potential?period=' + p + getAccountParam()).then(renderScorecard).catch(function(){});
+  }
+  function loadTopItems() {
+    var p = document.getElementById('itemPeriod').value || '6m';
+    fetchJSON('/revenue/top-items?period=' + p + '&limit=10' + getAccountParam()).then(renderTopItems).catch(function(){});
+  }
+
+  // ---- Main refresh ----
+
+  function refreshAll() {
+    var acct = getAccountQuery();
+    var amp = getAccountParam();
+
+    var missedP = document.getElementById('missedRevenuePeriod').value || '3m';
+    var scorecardP = document.getElementById('scorecardPeriod').value || '6m';
+    Promise.allSettled([
+      fetchJSON('/bookings/stats' + acct).then(renderBookingStats),
+      fetchJSON('/revenue/projection' + acct).then(renderProjection),
+      fetchJSON('/lost-revenue/summary?period=3m' + amp).then(renderLostRevenueStat),
+      fetchJSON('/activity/recent?limit=20' + amp).then(renderActivity),
+      fetchJSON('/lost-revenue/items?period=' + missedP + amp).then(renderMissedBlocked),
+      fetchJSON('/lost-revenue/unmatched?period=' + missedP + amp).then(renderMissedUnmatched),
+      fetchJSON('/revenue/potential?period=' + scorecardP + amp).then(renderScorecard),
+      fetchJSON('/inventory/unavailable').then(renderUnavailable),
+      fetchJSON('/bookings/by-stage' + acct).then(renderFunnel),
+      fetchJSON('/revenue/top-items?period=' + (document.getElementById('itemPeriod').value || '6m') + '&limit=10' + amp).then(renderTopItems),
+    ]).then(function() {
+      document.getElementById('statusDot').className = 'status-dot healthy';
+    });
+    loadLifetimeChart();
+  }
+
+  // Poll activity every 15s
+  setInterval(function() {
+    fetchJSON('/activity/recent?limit=20' + getAccountParam()).then(renderActivity).catch(function(){});
+  }, 15000);
+
+  // Auto-refresh every 45s
+  setInterval(refreshAll, 45000);
+
+  // Initial load
+  refreshAll();
+</script>
+</body>
+</html>

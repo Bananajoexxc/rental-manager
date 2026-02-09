@@ -55,16 +55,6 @@
   dependencies:
     json-schema-to-ts "^3.1.1"
 
-"@apm-js-collab/code-transformer@^0.8.0":
-  version "0.8.2"
-
-"@apm-js-collab/tracing-hooks@^0.3.1":
-  version "0.3.1"
-  dependencies:
-    "@apm-js-collab/code-transformer" "^0.8.0"
-    debug "^4.4.1"
-    module-details-from-path "^1.0.4"
-
 "@babel/code-frame@^7.0.0", "@babel/code-frame@^7.16.7", "@babel/code-frame@^7.27.1", "@babel/code-frame@^7.28.6":
   version "7.28.6"
   dependencies:
@@ -817,7 +807,7 @@
     webpack "5.104.1"
     webpack-node-externals "3.0.0"
 
-"@nestjs/common@^10.0.0 || ^11.0.0", "@nestjs/common@^11.0.0", "@nestjs/common@^11.0.1", "@nestjs/common@^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0":
+"@nestjs/common@^10.0.0 || ^11.0.0", "@nestjs/common@^11.0.0", "@nestjs/common@^11.0.1":
   version "11.1.12"
   dependencies:
     file-type "21.3.0"
@@ -833,7 +823,7 @@
     dotenv-expand "12.0.1"
     lodash "4.17.21"
 
-"@nestjs/core@^10.0.0 || ^11.0.0", "@nestjs/core@^11.0.0", "@nestjs/core@^11.0.1", "@nestjs/core@^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0":
+"@nestjs/core@^10.0.0 || ^11.0.0", "@nestjs/core@^11.0.0", "@nestjs/core@^11.0.1":
   version "11.1.12"
   dependencies:
     "@nuxt/opencollective" "0.4.1"
@@ -916,218 +906,6 @@
   dependencies:
     consola "^3.2.3"
 
-"@opentelemetry/api-logs@0.207.0":
-  version "0.207.0"
-  dependencies:
-    "@opentelemetry/api" "^1.3.0"
-
-"@opentelemetry/api-logs@0.211.0":
-  version "0.211.0"
-  dependencies:
-    "@opentelemetry/api" "^1.3.0"
-
-"@opentelemetry/api@^1.1.0", "@opentelemetry/api@^1.3.0", "@opentelemetry/api@^1.7.0", "@opentelemetry/api@^1.8", "@opentelemetry/api@^1.9.0", "@opentelemetry/api@>=1.0.0 <1.10.0", "@opentelemetry/api@>=1.3.0 <1.10.0":
-  version "1.9.0"
-
-"@opentelemetry/context-async-hooks@^1.30.1 || ^2.1.0", "@opentelemetry/context-async-hooks@^2.5.0":
-  version "2.5.0"
-
-"@opentelemetry/core@^1.30.1 || ^2.1.0", "@opentelemetry/core@^2.0.0", "@opentelemetry/core@^2.5.0", "@opentelemetry/core@2.5.0":
-  version "2.5.0"
-  dependencies:
-    "@opentelemetry/semantic-conventions" "^1.29.0"
-
-"@opentelemetry/instrumentation-amqplib@0.58.0":
-  version "0.58.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-
-"@opentelemetry/instrumentation-connect@0.54.0":
-  version "0.54.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.27.0"
-    "@types/connect" "3.4.38"
-
-"@opentelemetry/instrumentation-dataloader@0.28.0":
-  version "0.28.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-
-"@opentelemetry/instrumentation-express@0.59.0":
-  version "0.59.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.27.0"
-
-"@opentelemetry/instrumentation-fs@0.30.0":
-  version "0.30.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-
-"@opentelemetry/instrumentation-generic-pool@0.54.0":
-  version "0.54.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-
-"@opentelemetry/instrumentation-graphql@0.58.0":
-  version "0.58.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-
-"@opentelemetry/instrumentation-hapi@0.57.0":
-  version "0.57.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.27.0"
-
-"@opentelemetry/instrumentation-http@0.211.0":
-  version "0.211.0"
-  dependencies:
-    "@opentelemetry/core" "2.5.0"
-    "@opentelemetry/instrumentation" "0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.29.0"
-    forwarded-parse "2.1.2"
-
-"@opentelemetry/instrumentation-ioredis@0.59.0":
-  version "0.59.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/redis-common" "^0.38.2"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-
-"@opentelemetry/instrumentation-kafkajs@0.20.0":
-  version "0.20.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.30.0"
-
-"@opentelemetry/instrumentation-knex@0.55.0":
-  version "0.55.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.1"
-
-"@opentelemetry/instrumentation-koa@0.59.0":
-  version "0.59.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.36.0"
-
-"@opentelemetry/instrumentation-lru-memoizer@0.55.0":
-  version "0.55.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-
-"@opentelemetry/instrumentation-mongodb@0.64.0":
-  version "0.64.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-
-"@opentelemetry/instrumentation-mongoose@0.57.0":
-  version "0.57.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-
-"@opentelemetry/instrumentation-mysql@0.57.0":
-  version "0.57.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-    "@types/mysql" "2.15.27"
-
-"@opentelemetry/instrumentation-mysql2@0.57.0":
-  version "0.57.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-    "@opentelemetry/sql-common" "^0.41.2"
-
-"@opentelemetry/instrumentation-nestjs-core@0.57.0":
-  version "0.57.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.30.0"
-
-"@opentelemetry/instrumentation-pg@0.63.0":
-  version "0.63.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.34.0"
-    "@opentelemetry/sql-common" "^0.41.2"
-    "@types/pg" "8.15.6"
-    "@types/pg-pool" "2.0.7"
-
-"@opentelemetry/instrumentation-redis@0.59.0":
-  version "0.59.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/redis-common" "^0.38.2"
-    "@opentelemetry/semantic-conventions" "^1.27.0"
-
-"@opentelemetry/instrumentation-tedious@0.30.0":
-  version "0.30.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.33.0"
-    "@types/tedious" "^4.0.14"
-
-"@opentelemetry/instrumentation-undici@0.21.0":
-  version "0.21.0"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/semantic-conventions" "^1.24.0"
-
-"@opentelemetry/instrumentation@^0.207.0":
-  version "0.207.0"
-  dependencies:
-    "@opentelemetry/api-logs" "0.207.0"
-    import-in-the-middle "^2.0.0"
-    require-in-the-middle "^8.0.0"
-
-"@opentelemetry/instrumentation@^0.211.0", "@opentelemetry/instrumentation@>=0.57.1 <1", "@opentelemetry/instrumentation@0.211.0":
-  version "0.211.0"
-  dependencies:
-    "@opentelemetry/api-logs" "0.211.0"
-    import-in-the-middle "^2.0.0"
-    require-in-the-middle "^8.0.0"
-
-"@opentelemetry/redis-common@^0.38.2":
-  version "0.38.2"
-
-"@opentelemetry/resources@^1.30.1 || ^2.1.0", "@opentelemetry/resources@^2.5.0", "@opentelemetry/resources@2.5.0":
-  version "2.5.0"
-  dependencies:
-    "@opentelemetry/core" "2.5.0"
-    "@opentelemetry/semantic-conventions" "^1.29.0"
-
-"@opentelemetry/sdk-trace-base@^1.30.1 || ^2.1.0", "@opentelemetry/sdk-trace-base@^2.5.0":
-  version "2.5.0"
-  dependencies:
-    "@opentelemetry/core" "2.5.0"
-    "@opentelemetry/resources" "2.5.0"
-    "@opentelemetry/semantic-conventions" "^1.29.0"
-
-"@opentelemetry/semantic-conventions@^1.24.0", "@opentelemetry/semantic-conventions@^1.27.0", "@opentelemetry/semantic-conventions@^1.29.0", "@opentelemetry/semantic-conventions@^1.30.0", "@opentelemetry/semantic-conventions@^1.33.0", "@opentelemetry/semantic-conventions@^1.33.1", "@opentelemetry/semantic-conventions@^1.34.0", "@opentelemetry/semantic-conventions@^1.36.0", "@opentelemetry/semantic-conventions@^1.39.0":
-  version "1.39.0"
-
-"@opentelemetry/sql-common@^0.41.2":
-  version "0.41.2"
-  dependencies:
-    "@opentelemetry/core" "^2.0.0"
-
 "@paralleldrive/cuid2@^2.2.2":
   version "2.3.1"
   dependencies:
@@ -1177,11 +955,6 @@
   dependencies:
     "@prisma/debug" "6.7.0"
 
-"@prisma/instrumentation@7.2.0":
-  version "7.2.0"
-  dependencies:
-    "@opentelemetry/instrumentation" "^0.207.0"
-
 "@protobufjs/aspromise@^1.1.1", "@protobufjs/aspromise@^1.1.2":
   version "1.1.2"
 
@@ -1217,85 +990,6 @@
 
 "@scarf/scarf@=1.4.0":
   version "1.4.0"
-
-"@sentry-internal/node-cpu-profiler@^2.2.0":
-  version "2.2.0"
-  dependencies:
-    detect-libc "^2.0.3"
-    node-abi "^3.73.0"
-
-"@sentry/core@10.38.0":
-  version "10.38.0"
-
-"@sentry/nestjs@^10.38.0":
-  version "10.38.0"
-  dependencies:
-    "@opentelemetry/api" "^1.9.0"
-    "@opentelemetry/core" "^2.5.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/instrumentation-nestjs-core" "0.57.0"
-    "@opentelemetry/semantic-conventions" "^1.39.0"
-    "@sentry/core" "10.38.0"
-    "@sentry/node" "10.38.0"
-
-"@sentry/node-core@10.38.0":
-  version "10.38.0"
-  dependencies:
-    "@apm-js-collab/tracing-hooks" "^0.3.1"
-    "@sentry/core" "10.38.0"
-    "@sentry/opentelemetry" "10.38.0"
-    import-in-the-middle "^2.0.6"
-
-"@sentry/node@10.38.0":
-  version "10.38.0"
-  dependencies:
-    "@opentelemetry/api" "^1.9.0"
-    "@opentelemetry/context-async-hooks" "^2.5.0"
-    "@opentelemetry/core" "^2.5.0"
-    "@opentelemetry/instrumentation" "^0.211.0"
-    "@opentelemetry/instrumentation-amqplib" "0.58.0"
-    "@opentelemetry/instrumentation-connect" "0.54.0"
-    "@opentelemetry/instrumentation-dataloader" "0.28.0"
-    "@opentelemetry/instrumentation-express" "0.59.0"
-    "@opentelemetry/instrumentation-fs" "0.30.0"
-    "@opentelemetry/instrumentation-generic-pool" "0.54.0"
-    "@opentelemetry/instrumentation-graphql" "0.58.0"
-    "@opentelemetry/instrumentation-hapi" "0.57.0"
-    "@opentelemetry/instrumentation-http" "0.211.0"
-    "@opentelemetry/instrumentation-ioredis" "0.59.0"
-    "@opentelemetry/instrumentation-kafkajs" "0.20.0"
-    "@opentelemetry/instrumentation-knex" "0.55.0"
-    "@opentelemetry/instrumentation-koa" "0.59.0"
-    "@opentelemetry/instrumentation-lru-memoizer" "0.55.0"
-    "@opentelemetry/instrumentation-mongodb" "0.64.0"
-    "@opentelemetry/instrumentation-mongoose" "0.57.0"
-    "@opentelemetry/instrumentation-mysql" "0.57.0"
-    "@opentelemetry/instrumentation-mysql2" "0.57.0"
-    "@opentelemetry/instrumentation-pg" "0.63.0"
-    "@opentelemetry/instrumentation-redis" "0.59.0"
-    "@opentelemetry/instrumentation-tedious" "0.30.0"
-    "@opentelemetry/instrumentation-undici" "0.21.0"
-    "@opentelemetry/resources" "^2.5.0"
-    "@opentelemetry/sdk-trace-base" "^2.5.0"
-    "@opentelemetry/semantic-conventions" "^1.39.0"
-    "@prisma/instrumentation" "7.2.0"
-    "@sentry/core" "10.38.0"
-    "@sentry/node-core" "10.38.0"
-    "@sentry/opentelemetry" "10.38.0"
-    import-in-the-middle "^2.0.6"
-    minimatch "^9.0.0"
-
-"@sentry/opentelemetry@10.38.0":
-  version "10.38.0"
-  dependencies:
-    "@sentry/core" "10.38.0"
-
-"@sentry/profiling-node@^10.38.0":
-  version "10.38.0"
-  dependencies:
-    "@sentry-internal/node-cpu-profiler" "^2.2.0"
-    "@sentry/core" "10.38.0"
-    "@sentry/node" "10.38.0"
 
 "@sinclair/typebox@^0.34.0":
   version "0.34.48"
@@ -1377,7 +1071,7 @@
 "@types/caseless@*":
   version "0.12.5"
 
-"@types/connect@*", "@types/connect@3.4.38":
+"@types/connect@*":
   version "3.4.38"
   dependencies:
     "@types/node" "*"
@@ -1446,11 +1140,6 @@
 "@types/methods@^1.1.4":
   version "1.1.4"
 
-"@types/mysql@2.15.27":
-  version "2.15.27"
-  dependencies:
-    "@types/node" "*"
-
 "@types/node-telegram-bot-api@^0.64.13":
   version "0.64.13"
   dependencies:
@@ -1466,25 +1155,6 @@
   version "25.2.0"
   dependencies:
     undici-types "~7.16.0"
-
-"@types/pg-pool@2.0.7":
-  version "2.0.7"
-  dependencies:
-    "@types/pg" "*"
-
-"@types/pg@*":
-  version "8.16.0"
-  dependencies:
-    "@types/node" "*"
-    pg-protocol "*"
-    pg-types "^2.2.0"
-
-"@types/pg@8.15.6":
-  version "8.15.6"
-  dependencies:
-    "@types/node" "*"
-    pg-protocol "*"
-    pg-types "^2.2.0"
 
 "@types/qs@*":
   version "6.14.0"
@@ -1527,11 +1197,6 @@
   dependencies:
     "@types/methods" "^1.1.4"
     "@types/superagent" "^8.1.0"
-
-"@types/tedious@^4.0.14":
-  version "4.0.14"
-  dependencies:
-    "@types/node" "*"
 
 "@types/tough-cookie@*":
   version "4.0.5"
@@ -1805,9 +1470,6 @@ accepts@^2.0.0:
     mime-types "^3.0.0"
     negotiator "^1.0.0"
 
-acorn-import-attributes@^1.9.5:
-  version "1.9.5"
-
 acorn-import-phases@^1.0.3:
   version "1.0.4"
 
@@ -1819,7 +1481,7 @@ acorn-walk@^8.1.1:
   dependencies:
     acorn "^8.11.0"
 
-"acorn@^6.0.0 || ^7.0.0 || ^8.0.0", acorn@^8, acorn@^8.11.0, acorn@^8.14.0, acorn@^8.15.0, acorn@^8.4.1:
+"acorn@^6.0.0 || ^7.0.0 || ^8.0.0", acorn@^8.11.0, acorn@^8.14.0, acorn@^8.15.0, acorn@^8.4.1:
   version "8.15.0"
 
 agent-base@^7.1.2:
@@ -2222,7 +1884,7 @@ chrome-trace-event@^1.0.2:
 ci-info@^4.2.0:
   version "4.4.0"
 
-cjs-module-lexer@^2.1.0, cjs-module-lexer@^2.2.0:
+cjs-module-lexer@^2.1.0:
   version "2.2.0"
 
 class-transformer@*, "class-transformer@^0.4.0 || ^0.5.0", class-transformer@^0.5.1, class-transformer@>=0.4.1:
@@ -2419,7 +2081,7 @@ debug@^3.2.7:
   dependencies:
     ms "^2.1.1"
 
-debug@^4.1.0, debug@^4.1.1, debug@^4.3.1, debug@^4.3.2, debug@^4.3.4, debug@^4.3.5, debug@^4.3.7, debug@^4.4.0, debug@^4.4.1, debug@^4.4.3, debug@4:
+debug@^4.1.0, debug@^4.1.1, debug@^4.3.1, debug@^4.3.2, debug@^4.3.4, debug@^4.3.7, debug@^4.4.0, debug@^4.4.3, debug@4:
   version "4.4.3"
   dependencies:
     ms "^2.1.3"
@@ -2457,9 +2119,6 @@ delayed-stream@~1.0.0:
 
 depd@^2.0.0, depd@~2.0.0:
   version "2.0.0"
-
-detect-libc@^2.0.3:
-  version "2.1.2"
 
 detect-newline@^3.1.0:
   version "3.1.0"
@@ -3050,9 +2709,6 @@ formidable@^3.5.4:
     dezalgo "^1.0.4"
     once "^1.4.0"
 
-forwarded-parse@2.1.2:
-  version "2.1.2"
-
 forwarded@0.2.0:
   version "0.2.0"
 
@@ -3375,14 +3031,6 @@ import-fresh@^3.2.1, import-fresh@^3.3.0:
   dependencies:
     parent-module "^1.0.0"
     resolve-from "^4.0.0"
-
-import-in-the-middle@^2.0.0, import-in-the-middle@^2.0.6:
-  version "2.0.6"
-  dependencies:
-    acorn "^8.15.0"
-    acorn-import-attributes "^1.9.5"
-    cjs-module-lexer "^2.2.0"
-    module-details-from-path "^1.0.4"
 
 import-local@^3.2.0:
   version "3.2.0"
@@ -4204,11 +3852,6 @@ minimatch@^3.0.4, minimatch@^3.1.1, minimatch@^3.1.2:
   dependencies:
     brace-expansion "^1.1.7"
 
-minimatch@^9.0.0:
-  version "9.0.5"
-  dependencies:
-    brace-expansion "^2.0.1"
-
 minimatch@^9.0.4:
   version "9.0.5"
   dependencies:
@@ -4229,9 +3872,6 @@ mkdirp@^0.5.6:
   version "0.5.6"
   dependencies:
     minimist "^1.2.6"
-
-module-details-from-path@^1.0.3, module-details-from-path@^1.0.4:
-  version "1.0.4"
 
 moment@^2.29.1:
   version "2.30.1"
@@ -4267,11 +3907,6 @@ negotiator@^1.0.0:
 
 neo-async@^2.6.2:
   version "2.6.2"
-
-node-abi@^3.73.0:
-  version "3.87.0"
-  dependencies:
-    semver "^7.3.5"
 
 node-abort-controller@^3.0.1:
   version "3.1.1"
@@ -4478,21 +4113,6 @@ path-type@^4.0.0:
 performance-now@^2.1.0:
   version "2.1.0"
 
-pg-int8@1.0.1:
-  version "1.0.1"
-
-pg-protocol@*:
-  version "1.11.0"
-
-pg-types@^2.2.0:
-  version "2.2.0"
-  dependencies:
-    pg-int8 "1.0.1"
-    postgres-array "~2.0.0"
-    postgres-bytea "~1.0.0"
-    postgres-date "~1.0.4"
-    postgres-interval "^1.1.0"
-
 picocolors@^1.1.1:
   version "1.1.1"
 
@@ -4535,20 +4155,6 @@ pluralize@8.0.0:
 
 possible-typed-array-names@^1.0.0:
   version "1.1.0"
-
-postgres-array@~2.0.0:
-  version "2.0.0"
-
-postgres-bytea@~1.0.0:
-  version "1.0.1"
-
-postgres-date@~1.0.4:
-  version "1.0.7"
-
-postgres-interval@^1.1.0:
-  version "1.2.0"
-  dependencies:
-    xtend "^4.0.0"
 
 prelude-ls@^1.2.1:
   version "1.2.1"
@@ -4743,12 +4349,6 @@ require-directory@^2.1.1:
 
 require-from-string@^2.0.2:
   version "2.0.2"
-
-require-in-the-middle@^8.0.0:
-  version "8.0.1"
-  dependencies:
-    debug "^4.3.5"
-    module-details-from-path "^1.0.3"
 
 requires-port@^1.0.0:
   version "1.0.0"
@@ -5762,7 +5362,12 @@ write-file-atomic@^5.0.1:
     imurmurhash "^0.1.4"
     signal-exit "^4.0.1"
 
-xtend@^4.0.0, xtend@^4.0.2:
+ws@^8.18.0:
+  version "8.19.0"
+  resolved "https://registry.npmjs.org/ws/-/ws-8.19.0.tgz"
+  integrity sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==
+
+xtend@^4.0.2:
   version "4.0.2"
 
 y18n@^5.0.5:

@@ -114,7 +114,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'Fake Location Handling',
-        content: 'All listing locations except Trafalgar Square/Whitehall/Central London are marketing-only locations that do not actually exist as pickup points. NEVER tell renters locations are fake, for marketing, or that all items are at one place — listings would be removed. ALWAYS apologise first ("Sorry about that", "Apologies for the inconvenience"), then use a natural excuse: "that one is out on a rental at that branch", "in for a service right now", "we are consolidating pickups at our Trafalgar Square spot today", "stock at that location ran out but we have it in Central London". Be warm and understanding. Then redirect to Trafalgar Square pickup. If renter says too far, first offer 10% distance discount (20km+), then mention delivery available and ask for postcode.',
+        content: 'All listing locations except Trafalgar Square/Whitehall/Central London area are marketing-only. NEVER tell renters locations are fake or that all items are at one place. ALWAYS: (1) acknowledge their specific location by name, (2) apologise with a natural excuse — vary between: "out of stock at that branch", "out on a rental there", "pulled in for a service", "in for maintenance at our central hub", "consolidating pickups at Trafalgar Square today", "stock all rented out". (3) Offer central branch + 10% distance discount (automatic for any non-central location). (4) Ask if that works or if they prefer delivery. If renter says too far, don\'t assume delivery — apologise, mention the discount, then gently suggest delivery as an option.',
         importance: 10,
       },
 
@@ -184,7 +184,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE - Master Inventory 71 Items',
-        content: 'Full master inventory with max quantities (shared across both accounts): Anamorphic Blazar Remus 33mm:1, 45mm:1, 65mm:1, 100mm:1. Anamorphic Great Joy 35mm:1, 50mm:1, 85mm:1. Sony GM 24-70mm f2.8:4, 16-35mm f2.8:1, 70-200mm f2.8:2, 90mm f2.8:1. Sony 28-70mm:2. Canon EF 24-105mm f4:1, 16-35mm f2.8:1. Sony 11mm f2.8 fisheye:1. Sony FX3:3, A7 III:1, A7 II:1. Fujifilm X100 VI:1. BMPCC 6K Pro:1, BMPCC 6K Full Frame:1. Softbox 85cm:2. V-mount 95mAh:2, 150mAh:4. C-stand:1. DJI Osmo Action Pro 5:3. DJI Mavic 3 Pro:1. LED light panels RGB:3. DJI gimbal battery:3. Hollyland Mars 4K transmitter:1. GoPro 12 Hero:3. Suction cups:6. Nanlite Forza 300:1. Rode Video Mic Go:1. Camera flash:1. Rode Wireless Mic Pro set:2. Audio boom mic Sennheiser:1. DJI Wireless Mics:1. Smoke machine fogger:1. Motorized slider:1. ND filter:3. 256GB card:3. Atomos Ninja V:1. DJI Mini 4 Pro:1. Cinebloom filter mist:1. Rode Video Mic Pro Plus:1. Nanlite Pavotube 30x II:4. Small rig tripod:3. Nanlite 500B:1. JBL wireless microphones:1. Smoke Ninja Pro hazer:1. DJ RX3 Pioneer controller:1. PL to Sony E mount:2. Anker Power Station F2000:1. Hollyland Pyro S transmitter:1. Hollyland 7-inch monitor:1. PL to EF mount:1, RF mount:1, L mount:1. DJI Mic 2 wireless:1. Sirui tripod:1. CF Express Type A card:1. JBL Club 120 speaker:2. Ambitful RGB light tubes 2x set:2. Smoke Ninja:1. Tilta Nucleus Nano 2 follow focus:1. Sony NPF 970 batteries 2x sets:4. Monopod arm support:1. 5-in-1 reflector panel:1. Tilta shoulder rig:1. DJI RS3 Pro gimbal:2.',
+        content: 'Full master inventory with max quantities (shared across both accounts): Anamorphic Blazar Remus 33mm:1, 45mm:1, 65mm:1, 100mm:1. Anamorphic Great Joy lens 35mm:1, 50mm:1, 85mm:1. Sony GM 24-70mm f2.8:4, 16-35mm f2.8:1, 70-200mm f2.8:2, 90mm f2.8:1. Sony 28-70mm:2. Canon EF 24-105mm f4:1, 16-35mm f2.8:1. Sony 11mm f2.8 fisheye:1. Sony FX3:3, A7 III:1, A7 II:1. Fujifilm X100 VI:1. BMPCC 6K Pro:1, BMPCC 6K Full Frame:1. Softbox 85cm:2. V-mount 95mAh:2, 150mAh:4. C-stand:1. DJI Osmo Action Pro 5:3. DJI Mavic 3 Pro:1. LED light panels RGB:3. DJI gimbal battery:3. Hollyland Mars 4K transmitter:1. GoPro 12 Hero:3. Suction cups:6. Nanlite Forza 300:1. Rode Video Mic Go:1. Camera flash:1. Rode Wireless Mic Pro set:2. Audio boom mic Sennheiser:1. DJI Wireless Mics:1. Smoke machine fogger:1. Motorized slider:1. ND filter:3. 256GB card:3. Atomos Ninja V:1. DJI Mini 4 Pro:1. Cinebloom filter mist:1. Rode Video Mic Pro Plus:1. Nanlite Pavotube 30x II:4. Small rig tripod:3. Nanlite 500B:1. JBL wireless microphones:1. Smoke Ninja Pro hazer:1. DJ RX3 Pioneer controller:1. PL to Sony E mount:2. Anker Power Station F2000:1. Hollyland Pyro S transmitter:1. Hollyland 7-inch monitor:1. PL to EF mount:1, RF mount:1, L mount:1. DJI Mic 2 wireless:1. Sirui tripod:1. CF Express Type A card:1. JBL Club 120 speaker:2. Ambitful RGB light tubes 2x set:2. Smoke Ninja:1. Tilta Nucleus Nano 2 follow focus:1. Sony NPF 970 batteries 2x sets:4. Monopod arm support:1. 5-in-1 reflector panel:1. Tilta shoulder rig:1. DJI RS3 Pro gimbal:2.',
         importance: 10,
       },
       {
@@ -571,24 +571,58 @@ export class MemoryService implements OnModuleInit {
     const allText = older.map(m => m.content).join(' ');
 
     // Extract item mentions (camera/lens/light gear patterns)
-    const itemMatches = allText.match(/\b(Sony|Canon|Blackmagic|Nanlite|Aputure|DJI|Sennheiser|Rode|SmallRig)\s+[\w\-\s]+(?=[\.,!?\s])/gi);
-    if (itemMatches) itemMatches.slice(0, 5).forEach(m => facts.add(`Item: ${m.trim()}`));
+    const itemMatches = allText.match(/\b(Sony|Canon|Blackmagic|Nanlite|Aputure|DJI|Sennheiser|Rode|SmallRig|Hollyland|Atomos|Tilta|BMPCC|JBL|Pioneer|Anker|DZO|DZOFILM|Nikon|Fujifilm|Panasonic|RED|ARRI)\s+[\w\-\s]+(?=[\.,!?\s])/gi);
+    if (itemMatches) itemMatches.slice(0, 8).forEach(m => facts.add(`Item: ${m.trim()}`));
 
-    // Extract dates
+    // Extract dates (multiple formats)
     const dateMatches = allText.match(/\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\b/gi);
-    if (dateMatches) dateMatches.slice(0, 3).forEach(m => facts.add(`Date: ${m}`));
+    if (dateMatches) dateMatches.slice(0, 4).forEach(m => facts.add(`Date: ${m}`));
+    const dateAlt = allText.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?\b/gi);
+    if (dateAlt) dateAlt.slice(0, 2).forEach(m => facts.add(`Date: ${m}`));
 
     // Extract prices
     const priceMatches = allText.match(/£\d+[\d,]*(?:\.\d{2})?(?:\s*\/\s*day)?/g);
-    if (priceMatches) priceMatches.slice(0, 3).forEach(m => facts.add(`Price: ${m}`));
+    if (priceMatches) priceMatches.slice(0, 4).forEach(m => facts.add(`Price: ${m}`));
 
     // Extract names (from renter messages — first capitalized word after greeting)
-    const nameMatch = allText.match(/(?:I'm|my name is|I am|this is)\s+([A-Z][a-z]+)/i);
+    const nameMatch = allText.match(/(?:I'm|my name is|I am|this is|name'?s)\s+([A-Z][a-z]+)/i);
     if (nameMatch) facts.add(`Renter name: ${nameMatch[1]}`);
 
     // Extract delivery/location info
     const postcodeMatch = allText.match(/\b[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}\b/i);
     if (postcodeMatch) facts.add(`Postcode: ${postcodeMatch[0].toUpperCase()}`);
+    const locationMatch = allText.match(/\b(?:based in|located in|coming from|I'm in|address is|near)\s+([^.,!?\n]{3,40})/i);
+    if (locationMatch) facts.add(`Location: ${locationMatch[1].trim()}`);
+
+    // Extract project/purpose — critical for gear recommendations
+    const projectMatch = allText.match(/\b(?:for|shooting|filming|doing|working on|it'?s a|it'?s for|project is|making|producing)\s+(a\s+)?([^.,!?\n]{3,50})/i);
+    if (projectMatch) facts.add(`Project: ${projectMatch[2].trim()}`);
+    const useCases = allText.match(/\b(wedding|interview|documentary|music video|short film|corporate|event|commercial|youtube|podcast|live stream|concert|conference|real estate|property|fashion|brand|indie film|content|vlog|behind the scenes|BTS)\b/gi);
+    if (useCases) {
+      const unique = [...new Set(useCases.map(u => u.toLowerCase()))];
+      unique.slice(0, 3).forEach(u => facts.add(`Use case: ${u}`));
+    }
+
+    // Extract agreed preferences (pickup/delivery, times)
+    const pickupPref = allText.match(/\b(pickup|pick up|collect|self.collect|delivery|deliver|courier|drop off|dropoff)\b/i);
+    if (pickupPref) facts.add(`Preference: ${pickupPref[1]}`);
+    const timePref = allText.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi);
+    if (timePref) timePref.slice(0, 3).forEach(t => facts.add(`Time mentioned: ${t}`));
+
+    // Extract concerns, complaints, negotiation stance
+    const concerns = allText.match(/\b(?:worried|concerned|issue|problem|unfortunately|damaged|broken|late|delay|cancel|refund|complaint|disappointed|not happy|too expensive|can't afford|budget is|maximum budget|lower price)\b/gi);
+    if (concerns) {
+      const unique = [...new Set(concerns.map(c => c.toLowerCase()))];
+      facts.add(`Renter concerns: ${unique.join(', ')}`);
+    }
+
+    // Extract explicit agreements and confirmations
+    const agreements = allText.match(/\b(?:agreed|confirmed|sounds good|perfect|yes please|let'?s do it|book it|go ahead|that works|deal)\b/gi);
+    if (agreements) facts.add(`Renter agreed/confirmed during conversation`);
+
+    // Extract quantity mentions
+    const qtyMatch = allText.match(/\b(\d+)\s*(?:units?|cameras?|bodies|lenses|lights?|mics?|kits?|sets?|pairs?)\b/gi);
+    if (qtyMatch) qtyMatch.slice(0, 3).forEach(q => facts.add(`Quantity: ${q}`));
 
     const factsLine = facts.size > 0
       ? `[CONTEXT from ${older.length} earlier messages] ${Array.from(facts).join('. ')}`
@@ -828,7 +862,16 @@ export class MemoryService implements OnModuleInit {
   ): Promise<string | null> {
     try {
       const state = await this.prisma.follow_up_state.findUnique({ where: { rental_id: rentalId } });
-      if (!state) return null;
+      if (!state) {
+        // No follow_up_state yet — create one so summary can be stored
+        try {
+          await this.prisma.follow_up_state.create({
+            data: { rental_id: rentalId, status: 'active' },
+          });
+        } catch {
+          // May already exist from race condition — ignore
+        }
+      }
 
       // Check if we have a recent summary and don't need to refresh
       const messages = await this.prisma.conversation.findMany({
@@ -839,22 +882,25 @@ export class MemoryService implements OnModuleInit {
       });
 
       const messageCount = messages.length;
-      if (!forceRefresh && state.conversation_summary && messageCount > 0) {
-        // Only refresh every 3 new messages (estimate by checking summary staleness)
+      if (!forceRefresh && state?.conversation_summary && messageCount > 0) {
+        // Return cached summary if very recently built (within 15s) — avoids redundant calls
         const summaryAge = state.updated_at ? Date.now() - state.updated_at.getTime() : Infinity;
-        if (summaryAge < 60_000 && messageCount < 6) return state.conversation_summary;
+        if (summaryAge < 15_000) return state.conversation_summary;
       }
 
-      // Need at least 4 messages to summarize
-      if (messageCount < 4) return state.conversation_summary || null;
+      // Build summary from even a single message — don't wait for 4
+      if (messageCount < 1) return state?.conversation_summary || null;
 
       const convoText = messages.reverse().map(m =>
-        `${m.role === 'user' ? 'Renter' : 'Bot'}: ${m.content.substring(0, 200)}`,
+        `${m.role === 'user' ? 'Renter' : 'Bot'}: ${m.content.substring(0, 400)}`,
       ).join('\n');
 
-      const response = await this.aiService.processExtraction(
-        `Summarize this rental conversation in exactly 3 short lines:\n1. Who they are and what they're shooting\n2. Items discussed and current status\n3. Tone and any items they rejected\n\nConversation:\n${convoText}\n\nRespond with ONLY the 3-line summary, no labels.`,
-      );
+      // Richer summary prompt — captures operational context the bot needs to reply correctly
+      const prompt = messageCount === 1
+        ? `Summarize this first rental message in 2-3 short lines. Capture:\n- What the renter wants (items, dates, purpose)\n- Any specific requests (delivery, time preferences, questions asked)\n- Their tone (casual, urgent, professional)\n\nMessage:\n${convoText}\n\nRespond with ONLY the summary, no labels.`
+        : `Summarize this rental conversation in 4-5 short lines. Capture ALL of these:\n1. Who they are and what they're shooting/using it for\n2. Items discussed, what's confirmed available, what was quoted\n3. What the bot promised or committed to (delivery quotes, times, discounts)\n4. What the renter agreed to, asked about, or is still deciding on\n5. Any concerns, rejections, or unresolved questions\n\nConversation:\n${convoText}\n\nRespond with ONLY the summary, no labels or numbers.`;
+
+      const response = await this.aiService.processExtraction(prompt);
 
       const summary = response.content.trim();
 

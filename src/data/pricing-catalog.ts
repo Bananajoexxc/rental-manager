@@ -60,9 +60,9 @@ export const PRICING_CATALOG: PricingEntry[] = [
   { item_name: 'Anamorphic Blazar Remus 45mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
   { item_name: 'Anamorphic Blazar Remus 65mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
   { item_name: 'Anamorphic Blazar Remus 100mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Great Joy 35mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Great Joy 50mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Great Joy 85mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Great Joy lens 35mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Great Joy lens 50mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Great Joy lens 85mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
 
   // ──────────────────────────────────────────
   // MOUNT ADAPTERS
@@ -463,19 +463,19 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'Sony FX3 + Great Joy 35mm Anamorphic',
     category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 35mm'],
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 35mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
     item_name: 'Sony FX3 + Great Joy 50mm Anamorphic',
     category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 50mm'],
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 50mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
     item_name: 'Sony FX3 + Great Joy 85mm Anamorphic',
     category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 85mm'],
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 85mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
@@ -677,7 +677,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'Great Joy Anamorphic Set (35+50+85mm)',
     category: 'bundle', daily_price_min: 50, daily_price_max: 90, is_bundle: true,
-    bundle_items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm'],
+    bundle_items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
@@ -701,7 +701,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'Great Joy Anamorphic Duo (35+50)',
     category: 'bundle', daily_price_min: 32, daily_price_max: 58, is_bundle: true,
-    bundle_items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm'],
+    bundle_items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
 
@@ -753,7 +753,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'Music Video Kit',
     category: 'bundle', daily_price_min: 90, daily_price_max: 120, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 50mm', 'DJI RS3 Pro gimbal', 'Smoke Ninja', 'Nanlite Pavotube 30x II'],
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 50mm', 'DJI RS3 Pro gimbal', 'Smoke Ninja', 'Nanlite Pavotube 30x II'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
@@ -795,7 +795,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'Anamorphic Film Kit (FX3 + Great Joy Set + RS3)',
     category: 'bundle', daily_price_min: 95, daily_price_max: 130, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm', 'DJI RS3 Pro gimbal'],
+    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm', 'DJI RS3 Pro gimbal'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {

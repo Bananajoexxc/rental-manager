@@ -7,6 +7,8 @@ import { AiService } from '../ai/ai.service';
 import { RulesService } from '../rules/rules.service';
 import { MemoryService } from '../memory/memory.service';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
+import { CalendarService } from '../calendar/calendar.service';
+import { TitleParserService } from '../revenue/title-parser.service';
 
 @Injectable()
 export class CompletedScanService {
@@ -20,6 +22,8 @@ export class CompletedScanService {
     private rulesService: RulesService,
     private memoryService: MemoryService,
     private renterProfileService: RenterProfileService,
+    private calendarService: CalendarService,
+    private titleParserService: TitleParserService,
   ) {}
 
   /**
@@ -212,5 +216,211 @@ export class CompletedScanService {
     } catch (error) {
       this.logger.error(`Error processing completed rental ${rental.title}: ${error.message}`);
     }
+  }
+
+  /**
+   * Monthly cron: Import ALL completed bookings from Hygglo into the rental table.
+   * Runs on the 1st of each month at 4am. Also reconciles active bookings.
+   * This ensures the rental table (used for all revenue calculations) stays complete.
+   */
+  @Cron('0 4 1 * *')
+  async monthlyRevenueSync(): Promise<void> {
+    this.logger.log('=== MONTHLY REVENUE SYNC: Starting ===');
+
+    const accounts: HyggloAccount[] = ['dbcinema', 'leo'];
+    let totalImported = 0;
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+    const errors: string[] = [];
+
+    for (const account of accounts) {
+      try {
+        const completedRentals = await this.hyggloService.scanCompletedRentalsPaginated(account);
+        this.logger.log(`Hygglo ${account}: ${completedRentals.length} completed rentals fetched`);
+
+        for (const rental of completedRentals) {
+          try {
+            if (!rental.startDate || !rental.endDate) {
+              totalSkipped++;
+              continue;
+            }
+
+            const existingRental = await this.prisma.rental.findFirst({
+              where: { listing_id: rental.listingId },
+            });
+
+            const ownerEarnings = rental.rentalPrice || 0;
+
+            if (existingRental) {
+              // Parse items if not already parsed
+              let parsedUpdate: any = {};
+              if (!existingRental.parsed_items) {
+                try {
+                  parsedUpdate.parsed_items = await this.titleParserService.parseTitleWithAI(rental.title) as any;
+                } catch { /* non-critical */ }
+              }
+
+              // Update revenue if changed
+              if (ownerEarnings > 0 && (existingRental.rental_price !== ownerEarnings || existingRental.status !== 'completed')) {
+                await this.prisma.rental.update({
+                  where: { id: existingRental.id },
+                  data: { rental_price: ownerEarnings, status: 'completed', ...parsedUpdate },
+                });
+                totalUpdated++;
+              } else {
+                totalSkipped++;
+              }
+            } else {
+              // Parse items from title using AI
+              let parsedItems: any = null;
+              try {
+                parsedItems = await this.titleParserService.parseTitleWithAI(rental.title);
+              } catch { /* non-critical */ }
+
+              // Create new rental + bookings
+              const savedRental = await this.prisma.rental.create({
+                data: {
+                  listing_id: rental.listingId,
+                  title: rental.title,
+                  status: 'completed',
+                  start_date: rental.startDate,
+                  end_date: rental.endDate,
+                  renter_info: rental.renterInfo || null,
+                  listing_url: rental.listingUrl || '',
+                  account: rental.account || account,
+                  rental_price: ownerEarnings || null,
+                  price_per_day: rental.pricePerDay || null,
+                  ...(parsedItems ? { parsed_items: parsedItems } : {}),
+                },
+              });
+
+              // Extract items and create bookings
+              const itemNames: string[] = [];
+              if ((rental as any)._detail?.items && Array.isArray((rental as any)._detail.items)) {
+                for (const item of (rental as any)._detail.items) {
+                  if (item.type === 'PRODUCT' && item.title) {
+                    itemNames.push(item.title);
+                  }
+                }
+              }
+
+              await this.calendarService.createBookingsFromRental(
+                { ...savedRental, rental_price: ownerEarnings || savedRental.rental_price },
+                itemNames,
+              );
+
+              totalImported++;
+            }
+          } catch (err) {
+            errors.push(`${rental.title}: ${err.message}`);
+          }
+        }
+      } catch (err) {
+        errors.push(`Account ${account}: ${err.message}`);
+      }
+    }
+
+    // Backfill parsed_items for any rentals that still need them
+    try {
+      const backfillResult = await this.titleParserService.backfillParsedItems();
+      if (backfillResult.titles > 0) {
+        this.logger.log(`Title backfill: ${backfillResult.updated} updated, ${backfillResult.skipped} skipped, ${backfillResult.failed} failed out of ${backfillResult.titles} titles`);
+      }
+    } catch (err) {
+      this.logger.error(`Title backfill failed: ${err.message}`);
+    }
+
+    // Reconcile: cancel DB entries whose end_date has passed but Hygglo doesn't list as completed
+    const totalCancelled = await this.reconcilePastRentals();
+
+    const summary = `Monthly revenue sync: imported=${totalImported}, updated=${totalUpdated}, skipped=${totalSkipped}, cancelled=${totalCancelled}, errors=${errors.length}`;
+    this.logger.log(summary);
+
+    if (totalImported > 0 || totalUpdated > 0 || totalCancelled > 0) {
+      this.telegramService.sendRentalUpdate('system', {
+        type: 'info',
+        priority: 'normal',
+        data: { message: summary },
+      });
+    }
+  }
+
+  /**
+   * Daily cron (6am): Reconcile past rental entries against Hygglo completed orders.
+   * Entries whose end_date is >7 days ago but are NOT in Hygglo's completed list
+   * get marked as 'cancelled' so they don't count in revenue.
+   *
+   * Root cause: the rental-scanner creates entries for pending/upcoming/ongoing orders.
+   * Many (especially on Leo's account) end up as 'obsolete' on Hygglo (cancelled/expired)
+   * but the DB derives status from dates, so they appear as completed revenue.
+   */
+  @Cron('0 6 * * *')
+  async dailyReconciliation(): Promise<void> {
+    this.logger.log('=== DAILY RECONCILIATION: Starting ===');
+    const cancelled = await this.reconcilePastRentals();
+    if (cancelled > 0) {
+      this.logger.log(`Daily reconciliation: cancelled ${cancelled} phantom revenue entries`);
+    } else {
+      this.logger.log('Daily reconciliation: no phantom entries found');
+    }
+  }
+
+  /**
+   * Reconcile past rentals: fetch Hygglo completed order IDs for each account,
+   * then cancel any DB entries with end_date > 7 days ago that aren't in the completed set.
+   */
+  private async reconcilePastRentals(): Promise<number> {
+    const accounts: HyggloAccount[] = ['dbcinema', 'leo'];
+    let totalCancelled = 0;
+    const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
+
+    for (const account of accounts) {
+      try {
+        // Fetch all completed order IDs from Hygglo (listing_id = order.id)
+        const completedRentals = await this.hyggloService.scanCompletedRentalsPaginated(account);
+        const completedIds = new Set(completedRentals.map(r => r.listingId));
+        this.logger.log(`Reconcile ${account}: ${completedIds.size} completed orders on Hygglo`);
+
+        // Find past DB entries for this account that aren't in the completed set
+        const pastEntries = await this.prisma.rental.findMany({
+          where: {
+            account,
+            end_date: { lt: cutoffDate },
+            status: { notIn: ['cancelled'] },
+            listing_id: { notIn: [...completedIds] },
+          },
+          select: { id: true, listing_id: true, title: true, rental_price: true, renter_info: true, start_date: true },
+        });
+
+        if (pastEntries.length === 0) continue;
+
+        this.logger.warn(`Reconcile ${account}: Found ${pastEntries.length} phantom entries (not in Hygglo completed)`);
+
+        for (const entry of pastEntries) {
+          // Mark rental as cancelled
+          await this.prisma.rental.update({
+            where: { id: entry.id },
+            data: { status: 'cancelled' },
+          });
+
+          // Also cancel associated bookings
+          await this.prisma.booking.updateMany({
+            where: { rental_id: entry.id, status: { notIn: ['cancelled'] } },
+            data: { status: 'cancelled' },
+          });
+
+          totalCancelled++;
+        }
+
+        if (pastEntries.length > 0) {
+          const phantomRevenue = pastEntries.reduce((s, e) => s + Number(e.rental_price || 0), 0);
+          this.logger.warn(`Reconcile ${account}: Cancelled ${pastEntries.length} phantom entries (£${phantomRevenue.toFixed(0)} removed from revenue)`);
+        }
+      } catch (err) {
+        this.logger.error(`Reconcile ${account} failed: ${err.message}`);
+      }
+    }
+
+    return totalCancelled;
   }
 }

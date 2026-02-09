@@ -24,6 +24,8 @@ model rental {
   price_per_day   Float?          // calculated price per day
   currency        String?         @default("GBP")
   account         String?         // 'dbcinema' or 'leo' — which Hygglo account this rental belongs to
+  listing_location String?        // Advertised pickup location from the listing (e.g. "Stratford", "Shoreditch") — may be fake
+  parsed_items    Json?           // AI-parsed items: [{item: "Sony FX3", qty: 1}, {item: "Sony GM 24-70mm f2.8", qty: 1}]
   created_at      DateTime        @default(now())
   updated_at      DateTime        @updatedAt
   extracted_items extracteditem[]
@@ -151,8 +153,17 @@ model booking {
   rental          rental?   @relation(fields: [rental_id], references: [id], onDelete: SetNull)
   pickup_time     String?   // e.g. '10:00'
   return_time     String?   // e.g. '19:00'
+  pickup_date     DateTime? // Actual pickup date (may be evening before start_date)
+  return_date     DateTime? // Actual return date (may be morning after end_date)
   pickup_reminded Boolean   @default(false)
   return_reminded Boolean   @default(false)
+  // Arrival confirmation tracking
+  pickup_arrival_sent_at        DateTime?  // When first pickup arrival check was sent to renter
+  pickup_arrival_followup_sent  Boolean    @default(false) // Second arrival reminder sent
+  pickup_arrival_confirmed      Boolean    @default(false) // Renter confirmed pickup arrival
+  return_arrival_sent_at        DateTime?  // When first return arrival check was sent to renter
+  return_arrival_followup_sent  Boolean    @default(false) // Second return arrival reminder sent
+  return_arrival_confirmed      Boolean    @default(false) // Renter confirmed return arrival
   status          String    @default("confirmed") // 'confirmed', 'completed', 'cancelled'
   revenue         Float?
   platform_fee    Float?
@@ -338,6 +349,7 @@ model renter_profile {
   verification_guided       Boolean              @default(false)
   verification_failure_guided Boolean            @default(false)
   total_rentals             Int                  @default(0)
+  total_spend               Float                @default(0)
   items_interested          String[]             // Items this renter has asked about or booked
   rental_progress           String?              @db.Text // Current request progress summary (e.g. "agreed on FX3+24-70, dates 5-7 Feb, pickup 10am")
   previous_agreements       String?              @db.Text // What was agreed in prior rentals/cancelled requests — for re-request context
@@ -345,6 +357,14 @@ model renter_profile {
   first_seen_at             DateTime             @default(now())
   last_seen_at              DateTime             @default(now())
   renter_links              rental_renter_link[]
+
+  requires_manual_approval  Boolean   @default(false)
+  rental_issues_note        String?   @db.Text
+
+  hygglo_rating             Float?    // Average star rating (1-5), null = unknown
+  hygglo_review_count       Int?      // Number of reviews
+  hygglo_bad_reviews        String?   @db.Text  // JSON array of reviews < 5 stars: [{stars, text, date}]
+  rating_checked_at         DateTime? // When rating was last checked
 
   @@index([name])
   @@index([hygglo_user_id])
@@ -490,7 +510,8 @@ model follow_up_state {
   availability_verified Boolean   @default(false)
   discount_eligible     Boolean   @default(false)
   discount_applied      Boolean   @default(false)
-  conversation_stage    String    @default("inquiry") // inquiry, interest, qualified, booking_ready, booking_sent, awaiting_verification, confirmed, dead
+  conversation_stage    String    @default("inquiry") // inquiry, interested, ready_to_book, booked, confirmed, completed, dead
+  stage_before_dead     String?   // stores previous stage when conversation goes DEAD, for smart revival
   stage_changed_at      DateTime?
   time_request_sent        Boolean   @default(false)
   time_request_sent_at     DateTime?
@@ -507,4 +528,167 @@ model follow_up_state {
 
   @@index([status])
   @@index([rental_id])
+}
+
+// === Lost Revenue Tracking ===
+
+model lost_revenue_record {
+  id              String   @id @default(uuid())
+  hygglo_order_id String   @unique
+  title           String
+  renter_info     String?
+  account         String
+  start_date      DateTime
+  end_date        DateTime
+  rental_days     Int
+  hygglo_price    Float?
+  estimated_price Float?
+  lost_revenue    Float
+  items_requested Json
+  stock_blocked   Boolean
+  blocked_items   String[]
+  unmatched_items String[]
+  synced_at       DateTime @default(now())
+  created_at      DateTime @default(now())
+
+  @@index([account])
+  @@index([start_date])
+  @@index([stock_blocked])
+}
+
+// === Competitor Intelligence (dashboard-only, separate from rental bot) ===
+
+model competitor_profile {
+  id             String   @id @default(uuid())
+  name           String
+  slug           String   @unique
+  profile_url    String?
+  total_reviews  Int      @default(0)
+  avg_rating     Float?
+  total_listings Int      @default(0)
+  last_scraped   DateTime?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  listings       competitor_listing[]
+  reviews        competitor_review[]
+
+  @@index([name])
+}
+
+model competitor_listing {
+  id              String   @id @default(uuid())
+  competitor_id   String
+  competitor      competitor_profile @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
+  title           String
+  item_category   String?
+  daily_price     Float?
+  owner_earnings  Float?
+  listing_url     String?
+  listing_slug    String?
+  is_active       Boolean  @default(true)
+  first_seen      DateTime @default(now())
+  last_seen       DateTime @default(now())
+
+  @@unique([competitor_id, title])
+  @@index([competitor_id])
+  @@index([item_category])
+  @@index([is_active])
+}
+
+model competitor_review {
+  id              String   @id @default(uuid())
+  competitor_id   String
+  competitor      competitor_profile @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
+  reviewer_name   String?
+  rating          Float?
+  content         String?  @db.Text
+  item_rented     String?
+  review_date     DateTime?
+  scraped_at      DateTime @default(now())
+
+  @@index([competitor_id])
+  @@index([scraped_at])
+  @@index([review_date])
+}
+
+model competitor_insight {
+  id              String   @id @default(uuid())
+  insight_type    String
+  content         String   @db.Text
+  recommendations Json?
+  data_snapshot   Json?
+  created_at      DateTime @default(now())
+
+  @@index([insight_type])
+  @@index([created_at])
+}
+
+// === Owner Unavailability / Vacation Blocks ===
+
+model owner_unavailability {
+  id         String    @id @default(uuid())
+  start_time DateTime           // full datetime — supports "Saturday from 10:30"
+  end_time   DateTime?          // null = rest of day / open-ended
+  reason     String?            // "vacation", "personal", etc.
+  all_day    Boolean   @default(false)
+  active     Boolean   @default(true)
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  @@index([start_time, end_time])
+  @@index([active])
+}
+
+// === Coupon Codes ===
+
+model coupon_code {
+  id                String    @id @default(uuid())
+  code              String    @unique
+  discount_percent  Float
+  description       String?
+  active            Boolean   @default(true)
+  account           String?   // null = all accounts
+  max_uses          Int?
+  times_used        Int       @default(0)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@index([code])
+  @@index([active])
+}
+
+// === Return Processing ===
+
+model return_processing {
+  id              String    @id @default(uuid())
+  rental_id       String    @unique
+  outcome         String    // 'good' | 'issues'
+  blacklisted     Boolean   @default(false)
+  flagged         Boolean   @default(false)
+  review_left     Boolean   @default(false)
+  thank_you_sent  Boolean   @default(false)
+  thank_you_text  String?   @db.Text
+  earnings        Float?
+  processed_by    String    @default("dashboard")
+  processed_at    DateTime  @default(now())
+  notes           String?   @db.Text
+
+  @@index([rental_id])
+}
+
+// === AI Item Matcher Cache ===
+
+model item_match_cache {
+  id               Int      @id @default(autoincrement())
+  input_normalized String   @unique
+  matched_item     String?
+  confidence       Float
+  alternatives     String[] @default([])
+  is_marketing     Boolean  @default(false)
+  inventory_hash   String
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([inventory_hash])
 }

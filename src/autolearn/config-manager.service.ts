@@ -17,13 +17,15 @@ export class ConfigManagerService implements OnModuleInit {
   }
 
   private async seedDefaults() {
+    let seeded = 0;
     for (const [key, value] of Object.entries(CONFIG_DEFAULTS)) {
       const existing = await this.prisma.bot_config.findUnique({ where: { key } });
       if (!existing) {
         await this.prisma.bot_config.create({ data: { key, value } });
-        this.logger.log(`Seeded config: ${key} = ${value}`);
+        seeded++;
       }
     }
+    if (seeded > 0) this.logger.log(`Seeded ${seeded} new config key(s)`);
   }
 
   private async refreshCache() {

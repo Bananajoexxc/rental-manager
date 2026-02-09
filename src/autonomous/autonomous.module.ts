@@ -20,6 +20,8 @@ import { FollowUpModule } from '../follow-up/follow-up.module';
 import { VerificationModule } from '../verification/verification.module';
 import { RevenueModule } from '../revenue/revenue.module';
 import { MarketModule } from '../market/market.module';
+import { CouponModule } from '../coupon/coupon.module';
+import { PlaywrightModule } from '../playwright/playwright.module';
 
 @Module({
   imports: [
@@ -43,6 +45,8 @@ import { MarketModule } from '../market/market.module';
     VerificationModule,
     RevenueModule,
     MarketModule,
+    CouponModule,
+    PlaywrightModule,
   ],
   providers: [AutonomousService],
   exports: [AutonomousService],

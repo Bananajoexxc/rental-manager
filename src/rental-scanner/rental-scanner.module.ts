@@ -9,6 +9,7 @@ import { CalendarModule } from '../calendar/calendar.module';
 import { RenterProfileModule } from '../renter-profile/renter-profile.module';
 import { FollowUpModule } from '../follow-up/follow-up.module';
 import { VerificationModule } from '../verification/verification.module';
+import { RevenueModule } from '../revenue/revenue.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { VerificationModule } from '../verification/verification.module';
     RenterProfileModule,
     FollowUpModule,
     VerificationModule,
+    RevenueModule,
   ],
   providers: [RentalScannerService],
   exports: [RentalScannerService],

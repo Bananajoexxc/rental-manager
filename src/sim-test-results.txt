@@ -1,0 +1,126 @@
+Starting 20-message simulation test at Wed Feb  4 17:02:29 UTC 2026
+
+=== MESSAGE 1 ===
+RENTER: Hi! I'm interested in renting a Sony FX3. Is it available this weekend?
+BOT REPLY: Yeah, FX3 is available this weekend. Runs about 50-60/day.
+
+Which dates exactly and what time slots work for you? Our hours are 10am-12pm and 7pm-9pm for pickup and return.
+
+=== MESSAGE 2 ===
+RENTER: Yeah this weekend, Saturday to Sunday. How much would it be?
+BOT REPLY: FX3 for Saturday to Sunday (1 day rental) would be around 50-60 plus Hygglo's service fee on top.
+
+Camera comes with 3x NP-FZ100 batteries and 128GB card.
+
+Need any lenses with it? The 24-70mm f2.8 GM is a solid all-rounder, or we have the FX3 + 24-70mm kit that works out cheaper at about 60-70/day.
+
+Picking up from Central London (Trafalgar Square area).
+
+=== MESSAGE 3 ===
+RENTER: Cool, where would I pick it up from?
+BOT REPLY: Central London, Trafalgar Square area. I'll send you the exact meetup spot once your booking is confirmed.
+
+Which time slot works for you? 10am-12pm or 7pm-9pm for both pickup Saturday and return Sunday?
+
+=== MESSAGE 4 ===
+RENTER: I can come Saturday morning, what times work?
+BOT REPLY: Our pickup times are 10am-12pm and 7pm-9pm. Which of those works for you?
+
+=== MESSAGE 5 ===
+RENTER: Can I also get some extra batteries for the FX3? I want to make sure I have plenty of power.
+BOT REPLY: We have Sony NP-FZ100 battery sets available at about 8-10/day per set (comes with 2 batteries per set). Camera already includes 3x batteries but happy to add more if you need them.
+
+How many extra sets do you want?
+
+=== MESSAGE 6 ===
+RENTER: What about a V-mount battery? Would I need any adapters or plates for that?
+BOT REPLY: V-mount batteries come with all the plates, adapters, and cables you need. Nothing extra to get.
+
+We have 95mAh V-mounts at about 15-20/day and 150mAh at 20-25/day.
+
+Which one works for you?
+
+=== MESSAGE 7 ===
+RENTER: Actually do you think I need anything else for a good setup?
+BOT REPLY: What are you shooting? That'll help me suggest the right gear.
+
+=== MESSAGE 8 ===
+RENTER: I'm shooting a short film, mostly outdoor scenes with some dialogue
+BOT REPLY: For outdoor dialogue you'll want a wireless mic setup. The Rode Wireless Pro runs about 25-30/day and handles wind way better than a shotgun for outdoor work.
+
+Since you mentioned the FX3, the DJI RS3 Pro gimbal pairs really well with it if you need movement shots. That's around 30-35/day.
+
+Want to add either of those?
+
+=== MESSAGE 9 ===
+RENTER: Actually I just moved to Manchester, could I pick up from there instead?
+BOT REPLY: All our gear is based in Central London (Trafalgar Square area). Manchester is outside our delivery range unfortunately.
+
+If you're able to come to Central London for pickup, you'd qualify for the 10% travel distance discount since you're coming from Manchester.
+
+Does that work or is the trip not doable?
+
+=== MESSAGE 10 ===
+RENTER: When should I return the gear on Sunday?
+BOT REPLY: Our return times are 10am-12pm and 7pm-9pm. Which slot works for you?
+
+=== MESSAGE 11 ===
+RENTER: What if I cant make it back Sunday evening? Could I return Monday evening instead?
+BOT REPLY: Monday evening would be an extra rental day since it's past your booked return. You'd need to extend the booking and pay for that additional day.
+
+Morning-after return Monday 10am-12pm is free though if that works for you instead.
+
+=== MESSAGE 12 ===
+RENTER: I know the FX3 comes with stuff but I want to add the 70-200mm lens as well
+BOT REPLY: The 70-200mm f2.8 runs about 35-40/day. Works great with the FX3.
+
+What dates do you need everything for so I can check availability and give you the total?
+
+=== MESSAGE 13 ===
+RENTER: How much is this all going to cost me roughly?
+BOT REPLY: FX3 runs about 50-60/day, 70-200mm is around 35-40/day. So roughly 85-100/day for both before Hygglo's service fee.
+
+What dates are you looking at? Longer rentals get volume discounts automatically.
+
+=== MESSAGE 14 ===
+RENTER: Could you deliver it to me instead of me picking up?
+BOT REPLY: Yeah delivery is available. What's your postcode? I'll get you a quote.
+
+=== MESSAGE 15 ===
+RENTER: Actually could I get it Friday evening instead of Saturday morning?
+BOT REPLY: Friday evening pickup is free since your rental is over 40 quid. I can do 7-9pm Friday if the gear is available then.
+
+What dates is your booking for so I can check?
+
+=== MESSAGE 16 ===
+RENTER: Is all your equipment in good condition? Like well maintained?
+BOT REPLY: Yeah everything is maintained and checked between rentals. FX3 and lenses are in solid working condition.
+
+You'll check it all when you collect anyway to make sure you're happy with it before you leave.
+
+=== MESSAGE 17 ===
+RENTER: My friend also needs a BMPCC 6K Pro for the same shoot. Does that need a V-mount too?
+BOT REPLY: BMPCC 6K Pro comes with 5x LP-E6NH batteries included, no V-mount needed. Uses Canon EF lenses, not Sony mount.
+
+Your friend needs to create their own Hygglo account and book it directly though. Can't sub-rent under your booking.
+
+=== MESSAGE 18 ===
+RENTER: Oh wait I think I gave you the wrong location earlier, I am actually in Birmingham
+BOT REPLY: We only deliver within London, max 30km from Central London. Birmingham is outside our delivery range.
+
+You can still pick up from our Trafalgar Square location if that works for you.
+
+=== MESSAGE 19 ===
+RENTER: Do you have a gimbal I could add? Something that works with the FX3
+BOT REPLY: Yeah the DJI RS3 Pro gimbal works with the FX3. Runs about 30-40 a day.
+
+Want me to check if it's available for your dates?
+
+=== MESSAGE 20 ===
+RENTER: Sounds great, how do I go ahead and book everything?
+BOT REPLY: Send a rental request through Hygglo for the items you want. Once I get the notification I'll verify it and send you the pickup address and confirmation details.
+
+Make sure to include all the items we discussed in the request.
+
+
+Test completed at Wed Feb  4 17:03:26 UTC 2026

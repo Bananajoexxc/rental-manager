@@ -10,6 +10,7 @@ import { CalendarService } from '../calendar/calendar.service';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
 import { VerificationService } from '../verification/verification.service';
+import { TitleParserService } from '../revenue/title-parser.service';
 
 @Injectable()
 export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
@@ -20,7 +21,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
   private scannerTimeout: NodeJS.Timeout | null = null;
   private scanCount = 0;
   private shuttingDown = false;
-  private failedBackfillRentals = new Set<string>(); // rental IDs where backfill returned 0 (unmatchable items)
+  private failedBackfillRentals = new Set<string>(); // rental IDs where backfill returned 0 (unmatchable items) — also persisted via ai_decision
 
   private readonly INITIAL_SCAN_INTERVAL: number;
   private readonly REDUCED_SCAN_INTERVAL: number;
@@ -38,6 +39,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     private renterProfileService: RenterProfileService,
     private followUpService: FollowUpService,
     private verificationService: VerificationService,
+    @Optional() @Inject(forwardRef(() => TitleParserService)) private titleParserService: TitleParserService,
   ) {
     // Load configuration from environment variables
     this.INITIAL_SCAN_INTERVAL = this.parseIntOrDefault(process.env.INITIAL_SCAN_INTERVAL_MS, 60000);
@@ -52,6 +54,22 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    // Restore persisted backfill failures from DB (survives restarts)
+    try {
+      const persistedFailures = await this.prisma.ai_decision.findMany({
+        where: { decision_type: 'backfill_unmatchable' },
+        select: { rental_id: true },
+      });
+      for (const f of persistedFailures) {
+        if (f.rental_id) this.failedBackfillRentals.add(f.rental_id);
+      }
+      if (persistedFailures.length > 0) {
+        this.logger.log(`Restored ${persistedFailures.length} unmatchable backfill entries from DB`);
+      }
+    } catch (e) {
+      this.logger.debug(`Failed to restore backfill failures: ${e.message}`);
+    }
+
     // Wait a bit before starting the scanner to allow other services to initialize
     setTimeout(() => {
       if (!this.shuttingDown) {
@@ -153,8 +171,23 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Group new rentals by renter, then dispatch
+      // Track listing IDs of new rentals so we don't also process their messages below
+      const newRentalListingIds = new Set<string>();
       if (this.autonomousService && newRentalResults.length > 0) {
-        const renterGroups = this.groupNewRentalsByRenter(newRentalResults);
+        for (const result of newRentalResults) {
+          newRentalListingIds.add(result.savedRental.listing_id);
+        }
+
+        // Cross-account duplicate check: same renter on both accounts → keep DB Cinema, discard Leo
+        const filteredResults: Array<{ savedRental: any; rawRental: any }> = [];
+        for (const result of newRentalResults) {
+          const discarded = await this.discardCrossAccountDuplicate(result.savedRental, newRentalResults);
+          if (!discarded) {
+            filteredResults.push(result);
+          }
+        }
+
+        const renterGroups = this.groupNewRentalsByRenter(filteredResults);
         for (const [, group] of renterGroups.entries()) {
           if (group.length === 1) {
             // Single rental → normal pipeline
@@ -196,10 +229,18 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Check for new messages and route through autonomous pipeline
+      // IMPORTANT: Exclude messages from rentals that were just processed as new (prevents duplicate replies)
       if (this.autonomousService) {
         try {
           const messages = await this.hyggloService.checkNewMessages();
-          const newMessages = messages.filter((m) => m.isNew);
+          let newMessages = messages.filter((m) => m.isNew);
+          if (newRentalListingIds.size > 0 && newMessages.length > 0) {
+            const before = newMessages.length;
+            newMessages = newMessages.filter((m) => !newRentalListingIds.has(m.rentalId));
+            if (before !== newMessages.length) {
+              this.logger.log(`Filtered ${before - newMessages.length} messages from newly-created rentals (already handled by onNewRental)`);
+            }
+          }
           if (newMessages.length > 0) {
             this.logger.log(`New messages found: ${newMessages.length}`);
             await this.autonomousService.onNewMessages(newMessages);
@@ -232,6 +273,15 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (existingRental) {
+        // Parse items if title changed or never parsed
+        const titleChanged = rental.title !== existingRental.title;
+        let parsedItems = existingRental.parsed_items;
+        if ((titleChanged || !parsedItems) && this.titleParserService) {
+          try {
+            parsedItems = await this.titleParserService.parseTitleWithAI(rental.title) as any;
+          } catch { /* non-critical */ }
+        }
+
         // Update existing rental (including dates and price if newly available)
         const updatedRental = await this.prisma.rental.update({
           where: { listing_id: rental.listingId },
@@ -246,9 +296,76 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             rental_price: rental.rentalPrice ?? existingRental.rental_price,
             price_per_day: rental.pricePerDay ?? existingRental.price_per_day,
             currency: rental.currency ?? existingRental.currency,
+            listing_location: rental.listingLocation ?? existingRental.listing_location,
+            ...(parsedItems !== undefined ? { parsed_items: parsedItems as any } : {}),
             updated_at: new Date(),
           },
         });
+
+        // Cascade rental status changes to bookings (e.g., pending → upcoming promotes bookings)
+        if (rental.status !== existingRental.status) {
+          try {
+            await this.calendarService.cascadeRentalStatusToBookings(
+              existingRental.id, rental.status, existingRental.status,
+            );
+          } catch (err) {
+            this.logger.warn(`Cascade status failed for rental ${existingRental.id}: ${err.message}`);
+          }
+
+          // Rental just became confirmed (pending → upcoming/ongoing)
+          const wasUnconfirmed = ['pending', 'requested'].includes(existingRental.status);
+          const isNowConfirmed = ['upcoming', 'ongoing'].includes(rental.status);
+          if (wasUnconfirmed && isNowConfirmed) {
+            // Send happy Telegram notification
+            const earnings = rental.rentalPrice || updatedRental.rental_price || 0;
+            const renter = rental.renterInfo || updatedRental.renter_info || 'Someone';
+            const items = updatedRental.title || rental.title || 'gear';
+            try {
+              await this.telegramService.sendProactiveMessage(
+                `🎉 Woohoo! You just booked £${Math.round(earnings)}!\n` +
+                `${renter} confirmed their rental of ${items}`,
+                'Markdown',
+                { force: true },
+              );
+            } catch (err) {
+              this.logger.warn(`Failed to send booking confirmation notification: ${err.message}`);
+            }
+
+            // Auto-trigger time request for confirmed booking
+            try {
+              const followUpState = await this.prisma.follow_up_state.findUnique({
+                where: { rental_id: existingRental.id },
+              });
+              if (followUpState && !(followUpState as any).time_request_sent) {
+                // Check if times already exist
+                const bookings = await this.prisma.booking.findMany({
+                  where: { rental_id: existingRental.id, status: 'confirmed' },
+                  select: { pickup_time: true, return_time: true },
+                });
+                const hasAllTimes = bookings.length > 0 && bookings[0].pickup_time && bookings[0].return_time;
+
+                if (hasAllTimes) {
+                  await this.prisma.follow_up_state.update({
+                    where: { id: followUpState.id },
+                    data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'confirmed' },
+                  });
+                } else {
+                  await this.hyggloService.sendMessage(
+                    rental.listingId,
+                    `Booking's all confirmed! Just need your exact pickup and return times (with AM or PM please) so I can lock those in.`,
+                  );
+                  await this.prisma.follow_up_state.update({
+                    where: { id: followUpState.id },
+                    data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'none' },
+                  });
+                  this.logger.log(`Auto-sent time request on confirmation for ${updatedRental.title}`);
+                }
+              }
+            } catch (err) {
+              this.logger.warn(`Failed to auto-send time request on confirmation: ${err.message}`);
+            }
+          }
+        }
 
         // Backfill: create bookings if this rental has dates/price but no bookings yet
         // Check ALL statuses (confirmed + pending_review) to prevent re-creating overbooked items every scan
@@ -278,10 +395,44 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             } else {
               // No bookings created — items don't match inventory. Stop retrying.
               this.failedBackfillRentals.add(existingRental.id);
+              // Persist to DB so it survives restarts
+              await this.prisma.ai_decision.create({
+                data: {
+                  rental_id: existingRental.id,
+                  decision_type: 'backfill_unmatchable',
+                  input_summary: `Backfill failed: "${rental.title}"`,
+                  output_summary: 'Items do not match inventory — permanently skipped',
+                  confidence: 1,
+                  action_taken: 'marked_unmatchable',
+                  notified: false,
+                },
+              }).catch(() => {}); // non-critical
               this.logger.warn(`Backfill produced 0 bookings for "${rental.title}" — marked as unmatchable, won't retry`);
             }
           } catch (err) {
             this.logger.warn(`Backfill booking failed for ${rental.title}: ${err.message}`);
+          }
+        }
+
+        // Update renter rating on existing rentals (catches rating changes over time)
+        if (rental.renterRating !== undefined && rental.renterRating !== null) {
+          try {
+            const renterLink = await this.prisma.rental_renter_link.findFirst({
+              where: { rental_id: existingRental.id },
+              select: { renter_profile_id: true },
+            });
+            if (renterLink) {
+              await this.prisma.renter_profile.update({
+                where: { id: renterLink.renter_profile_id },
+                data: {
+                  hygglo_rating: rental.renterRating,
+                  hygglo_review_count: rental.renterReviewCount || 0,
+                  rating_checked_at: new Date(),
+                },
+              });
+            }
+          } catch {
+            // Non-critical — rating update for existing rental
           }
         }
 
@@ -301,6 +452,14 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         if (details.photosUrls.length > 0) photosUrls = details.photosUrls;
       }
 
+      // Parse items from title using AI, then enhance with photo vision if needed
+      let parsedItems: any = null;
+      if (this.titleParserService) {
+        try {
+          parsedItems = await this.titleParserService.parseTitleWithAI(rental.title);
+        } catch { /* non-critical */ }
+      }
+
       // Save new rental to database (including price data)
       const savedRental = await this.prisma.rental.create({
         data: {
@@ -317,6 +476,8 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           rental_price: rental.rentalPrice ?? null,
           price_per_day: rental.pricePerDay ?? null,
           currency: rental.currency ?? null,
+          listing_location: rental.listingLocation ?? null,
+          ...(parsedItems ? { parsed_items: parsedItems } : {}),
         },
       });
 
@@ -325,6 +486,31 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         listingId: savedRental.listing_id,
         title: savedRental.title,
       });
+
+      // Enhance parsed items with photo vision (Claude Haiku) and populate extracteditem table
+      if (this.titleParserService && photosUrls.length > 0) {
+        try {
+          const enhanced = await this.titleParserService.enhanceWithPhotos(
+            savedRental.id, rental.title, parsedItems || [], photosUrls,
+          );
+          if (enhanced.length > (parsedItems || []).length) {
+            parsedItems = enhanced;
+          }
+          // Also store in extracteditem table for use by autonomous/telegram/follow-up
+          for (const item of (parsedItems || [])) {
+            try {
+              await this.prisma.extracteditem.create({
+                data: {
+                  rental_id: savedRental.id,
+                  item_name: item.item,
+                  source: 'photo',
+                  confidence_score: 0.9,
+                },
+              });
+            } catch { /* ignore dups */ }
+          }
+        } catch { /* non-critical */ }
+      }
 
       // Auto-store price memory if price data available
       if (savedRental.rental_price) {
@@ -338,60 +524,8 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`Stored price memory: ${priceMemory}`);
       }
 
-      // Process photos for item extraction
-      if (photosUrls.length > 0) {
-        this.logger.log(`🖼️ Analyzing ${photosUrls.length} photos...`);
-        const extractedItems = await this.imageAnalysisService.analyzeImages(photosUrls);
-
-        // Save extracted items from photos
-        for (const item of extractedItems) {
-          await this.prisma.extracteditem.create({
-            data: {
-              rental_id: savedRental.id,
-              item_name: item.itemName,
-              source: 'photo',
-              confidence_score: item.confidenceScore,
-            },
-          });
-        }
-
-        this.logger.log(`✅ Saved ${extractedItems.length} items from photos`);
-        this.loggingService.info('Items extracted from photos', {
-          rentalId: savedRental.id,
-          itemCount: extractedItems.length,
-        });
-      }
-
-      // Process description for catalog items (one-time)
-      let catalogItems: string[] = [];
-      if (description) {
-        this.logger.log('📝 Parsing description for items...');
-        catalogItems = this.imageAnalysisService.parseDescriptionForItems(description);
-
-        // Save catalog items
-        for (const itemName of catalogItems) {
-          try {
-            await this.prisma.itemcatalog.create({
-              data: {
-                listing_id: rental.listingId,
-                item_name: itemName,
-                description: description.substring(0, 500), // Store excerpt
-              },
-            });
-          } catch (error) {
-            // Ignore duplicate errors (unique constraint)
-            if (!error.message.includes('Unique constraint')) {
-              this.logger.error('Error saving catalog item', error);
-            }
-          }
-        }
-
-        this.logger.log(`✅ Saved ${catalogItems.length} catalog items from description`);
-        this.loggingService.info('Catalog items saved', {
-          listingId: rental.listingId,
-          itemCount: catalogItems.length,
-        });
-      }
+      // Note: Photo-based item extraction is handled above by enhanceWithPhotos (Claude Haiku vision)
+      // Results are stored in both rental.parsed_items AND extracteditem table
 
       // Auto-create calendar bookings from extracted items
       try {
@@ -404,7 +538,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           });
           allItemNames.push(...photoItems.map(i => i.item_name));
         }
-        allItemNames.push(...catalogItems);
+        // catalogItems removed — description parsing now handled by enhanceWithPhotos
 
         // Use owner earnings as revenue (what the owner actually receives)
         const ownerEarnings = rental._detail?.price?.ownerEarnings;
@@ -432,12 +566,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
             // Only notify owner if there's an availability conflict (overbooked items)
             if (overbookedItems.length > 0) {
-              const conflictMsg = `🚨 *AVAILABILITY CONFLICT*\n\n` +
-                `├ 📦 ${savedRental.title}\n` +
-                `├ 👤 ${savedRental.renter_info || 'Unknown'}\n` +
-                overbookedItems.map(b => `├ ⚠️ ${b.item_name}: ${b.maxQuantity - b.availableSlots}/${b.maxQuantity} already booked`).join('\n') +
-                `\n└ Manual review needed`;
-              this.telegramService.sendProactiveMessage(conflictMsg, 'Markdown', { force: true }).catch(err => {
+              this.telegramService.sendRentalUpdate(savedRental.id, {
+                type: 'availability_conflict', priority: 'high',
+                data: { overbookedItems },
+              }, { rentalTitle: savedRental.title, renterName: savedRental.renter_info || undefined, account: savedRental.account || undefined }).catch(err => {
                 this.logger.warn(`Failed to send conflict notification: ${err.message}`);
               });
             }
@@ -466,12 +598,38 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
               profile.id,
             );
           }
+
+          // Store renter rating from Hygglo API data
+          if (rental.renterRating !== undefined && rental.renterRating !== null) {
+            try {
+              await this.prisma.renter_profile.update({
+                where: { id: profile.id },
+                data: {
+                  hygglo_rating: rental.renterRating,
+                  hygglo_review_count: rental.renterReviewCount || 0,
+                  rating_checked_at: new Date(),
+                },
+              });
+              if (rental.renterRating < 5) {
+                this.logger.warn(`LOW RATING RENTER: ${renterName} has ${rental.renterRating}/5 stars (${rental.renterReviewCount} reviews) for ${rental.title}`);
+              }
+            } catch (ratingErr) {
+              this.logger.debug(`Failed to store renter rating: ${ratingErr.message}`);
+            }
+          }
         }
 
         // Initialize follow-up state for timer tracking
         await this.followUpService.initializeFollowUpState(savedRental.id);
       } catch (profileErr) {
         this.logger.warn(`Renter profile/follow-up init failed for ${savedRental.title}: ${profileErr.message}`);
+      }
+
+      // Attach renter rating to savedRental for downstream use (onNewRental)
+      if (rental.renterRating !== undefined) {
+        (savedRental as any)._renterRating = rental.renterRating;
+        (savedRental as any)._renterReviewCount = rental.renterReviewCount;
+        (savedRental as any)._renterUserId = rental.renterUserId;
       }
 
       return { isNew: true, savedRental, rawRental: rental };
@@ -637,6 +795,251 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `Multi-item request consolidated: ${sorted.length} rentals from ${renterName} → primary: ${primary.savedRental.title}`,
     );
+  }
+
+  /**
+   * Cross-account duplicate rule: If the same renter requests on both accounts,
+   * always discard Leo's rental and keep DB Cinema (higher-priced).
+   * Checks both: (1) same-batch duplicates, (2) existing DB rentals.
+   * Returns true if this rental was discarded.
+   */
+  private async discardCrossAccountDuplicate(
+    rental: any,
+    batchResults: Array<{ savedRental: any; rawRental: any }>,
+  ): Promise<boolean> {
+    if (!rental.account || !rental.renter_info) return false;
+
+    const renterNorm = rental.renter_info.trim().toLowerCase();
+    const rentalAccount = rental.account as string;
+
+    // (1) Check same-batch: both accounts in this scan batch
+    const otherAccountInBatch = batchResults.find(r => {
+      if (r.savedRental.id === rental.id) return false;
+      const otherRenter = (r.savedRental.renter_info || '').trim().toLowerCase();
+      const otherAccount = r.savedRental.account as string;
+      return otherRenter === renterNorm && otherAccount !== rentalAccount;
+    });
+
+    if (otherAccountInBatch) {
+      // Both accounts in same batch — discard Leo's
+      if (rentalAccount === 'leo') {
+        await this.closeAsAccountDuplicate(rental, 'dbcinema');
+        return true;
+      }
+      // This is DB Cinema and Leo's is in the batch — Leo's will be discarded on its iteration
+      return false;
+    }
+
+    // (2) Check existing rentals: same renter, other account, overlapping dates, active status
+    if (rentalAccount === 'leo') {
+      const existingDbCinema = await this.prisma.rental.findFirst({
+        where: {
+          account: 'dbcinema',
+          status: { in: ['pending', 'upcoming', 'ongoing'] },
+          renter_info: { not: null },
+        },
+      });
+
+      // Filter in code for case-insensitive renter match + date overlap
+      if (existingDbCinema) {
+        const existingRenter = (existingDbCinema.renter_info || '').trim().toLowerCase();
+        if (existingRenter === renterNorm && this.datesOverlap(rental, existingDbCinema)) {
+          await this.closeAsAccountDuplicate(rental, 'dbcinema');
+          return true;
+        }
+      }
+
+      // Check all matching renters (case-insensitive query not available, so broader check)
+      const dbCinemaRentals = await this.prisma.rental.findMany({
+        where: {
+          account: 'dbcinema',
+          status: { in: ['pending', 'upcoming', 'ongoing'] },
+          renter_info: { not: null },
+        },
+        select: { id: true, renter_info: true, start_date: true, end_date: true, listing_id: true, title: true },
+      });
+
+      for (const dbRental of dbCinemaRentals) {
+        const dbRenter = (dbRental.renter_info || '').trim().toLowerCase();
+        if (dbRenter === renterNorm && this.datesOverlap(rental, dbRental)) {
+          await this.closeAsAccountDuplicate(rental, 'dbcinema');
+          return true;
+        }
+      }
+    }
+
+    // If this is DB Cinema and same renter already exists on Leo → close Leo's existing rental
+    if (rentalAccount === 'dbcinema') {
+      const leoRentals = await this.prisma.rental.findMany({
+        where: {
+          account: 'leo',
+          status: { in: ['pending', 'upcoming', 'ongoing'] },
+          renter_info: { not: null },
+        },
+        select: { id: true, renter_info: true, start_date: true, end_date: true, listing_id: true, title: true },
+      });
+
+      for (const leoRental of leoRentals) {
+        const leoRenter = (leoRental.renter_info || '').trim().toLowerCase();
+        if (leoRenter === renterNorm && this.datesOverlap(rental, leoRental)) {
+          // Close Leo's existing rental — redirect to DB Cinema
+          await this.closeExistingLeoRental(leoRental, rental);
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if two rentals have overlapping date ranges.
+   * Generous overlap: treats missing dates as matching.
+   */
+  private datesOverlap(a: any, b: any): boolean {
+    const aStart = a.start_date ? new Date(a.start_date).getTime() : null;
+    const aEnd = a.end_date ? new Date(a.end_date).getTime() : null;
+    const bStart = b.start_date ? new Date(b.start_date).getTime() : null;
+    const bEnd = b.end_date ? new Date(b.end_date).getTime() : null;
+
+    // If either rental is missing dates, assume overlap (same renter = likely same request)
+    if (!aStart || !aEnd || !bStart || !bEnd) return true;
+
+    // Standard overlap check: A starts before B ends AND A ends after B starts
+    return aStart < bEnd && aEnd > bStart;
+  }
+
+  /**
+   * Close a Leo rental as a cross-account duplicate — redirect renter to DB Cinema.
+   */
+  private async closeAsAccountDuplicate(leoRental: any, preferredAccount: string) {
+    const renterName = leoRental.renter_info || 'there';
+    const firstName = renterName.split(' ')[0];
+
+    this.logger.log(
+      `🔄 Cross-account duplicate: ${renterName} requested on both accounts. Closing Leo rental "${leoRental.title}", keeping ${preferredAccount}.`,
+    );
+
+    // Send redirect message on Leo's chat
+    const message =
+      `Hi ${firstName}! I can see you've also sent a request on our main account. ` +
+      `I'll handle everything through that chat — makes it easier to coordinate. ` +
+      `Please continue the conversation there!`;
+
+    try {
+      await this.hyggloService.sendMessage(leoRental.listing_id, message);
+    } catch (err) {
+      this.logger.warn(`Failed to send cross-account redirect for ${leoRental.listing_id}: ${err.message}`);
+    }
+
+    // Mark as consolidated
+    try {
+      await this.prisma.rental.update({
+        where: { id: leoRental.id },
+        data: { status: 'consolidated' },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to mark Leo rental as consolidated: ${err.message}`);
+    }
+
+    // Close follow-up state
+    try {
+      await this.prisma.follow_up_state.updateMany({
+        where: { rental_id: leoRental.id },
+        data: { status: 'completed' },
+      });
+    } catch { /* may not exist yet */ }
+
+    // Audit trail
+    try {
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: leoRental.id,
+          decision_type: 'cross_account_duplicate',
+          input_summary: `Same renter "${renterName}" requested on both Leo and DB Cinema accounts`,
+          output_summary: `Discarded Leo rental — redirected to ${preferredAccount} (higher-priced account)`,
+          confidence: 1.0,
+          action_taken: 'consolidated_to_dbcinema',
+          notified: true,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to store cross-account decision: ${err.message}`);
+    }
+
+    // Notify Daniel
+    try {
+      await this.telegramService.sendProactiveMessage(
+        `🔄 Cross-account duplicate detected:\n` +
+        `Renter: ${renterName}\n` +
+        `Leo rental "${leoRental.title}" closed → continuing on DB Cinema`,
+      );
+    } catch { /* non-critical */ }
+  }
+
+  /**
+   * Close an existing Leo rental when a new DB Cinema request arrives from the same renter.
+   */
+  private async closeExistingLeoRental(leoRental: any, dbCinemaRental: any) {
+    this.logger.log(
+      `🔄 New DB Cinema request from same renter — closing existing Leo rental "${leoRental.title}"`,
+    );
+
+    const renterName = dbCinemaRental.renter_info || leoRental.renter_info || 'there';
+    const firstName = renterName.split(' ')[0];
+
+    // Send redirect message on Leo's chat
+    const message =
+      `Hi ${firstName}! I see you've also reached out on our main account. ` +
+      `I'll handle everything through that chat instead — easier to coordinate. ` +
+      `You can continue the conversation there!`;
+
+    try {
+      await this.hyggloService.sendMessage(leoRental.listing_id, message);
+    } catch (err) {
+      this.logger.warn(`Failed to send redirect on existing Leo rental: ${err.message}`);
+    }
+
+    // Mark as consolidated
+    try {
+      await this.prisma.rental.update({
+        where: { id: leoRental.id },
+        data: { status: 'consolidated' },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to consolidate existing Leo rental: ${err.message}`);
+    }
+
+    // Close follow-up
+    try {
+      await this.prisma.follow_up_state.updateMany({
+        where: { rental_id: leoRental.id },
+        data: { status: 'completed' },
+      });
+    } catch { /* may not exist */ }
+
+    // Audit trail
+    try {
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: leoRental.id,
+          decision_type: 'cross_account_duplicate',
+          input_summary: `Same renter "${renterName}" now on DB Cinema — closing Leo rental`,
+          output_summary: `Existing Leo rental closed. DB Cinema rental "${dbCinemaRental.title}" is primary.`,
+          confidence: 1.0,
+          action_taken: 'consolidated_to_dbcinema',
+          notified: true,
+        },
+      });
+    } catch { /* non-critical */ }
+
+    // Notify Daniel
+    try {
+      await this.telegramService.sendProactiveMessage(
+        `🔄 Cross-account duplicate:\n` +
+        `${renterName} has requests on both accounts.\n` +
+        `Closed Leo "${leoRental.title}" → keeping DB Cinema "${dbCinemaRental.title}"`,
+      );
+    } catch { /* non-critical */ }
   }
 
   getStatus() {

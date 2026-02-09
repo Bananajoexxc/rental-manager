@@ -101,7 +101,7 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
   // ── Anamorphic Bundles ──
   {
     bundle_name: 'Great Joy Anamorphic Set (35+50+85mm)',
-    items: ['Anamorphic Great Joy 35mm', 'Anamorphic Great Joy 50mm', 'Anamorphic Great Joy 85mm'],
+    items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm'],
     daily_price_min: 50, daily_price_max: 90,
     use_cases: ['anamorphic', 'cinematic', 'film', 'music video', 'widescreen'],
     trigger_keywords: ['anamorphic', 'great joy', 'widescreen', 'cinemascope', 'film look', 'oval bokeh'],
@@ -161,7 +161,7 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
     savings_note: 'Save vs renting 4 individually (~£48-72 individual vs ~£35-50 bundle). Pavotubes are only available in sets of 2 or 4, never individually.',
   },
 
-  // ── Action Camera Bundle ──
+  // ── Action Camera Bundles ──
   {
     bundle_name: '3x GoPro Hero 12 Set',
     items: ['GoPro 12 Hero', 'GoPro 12 Hero', 'GoPro 12 Hero'],
@@ -169,6 +169,114 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
     use_cases: ['multi-angle', 'action', 'sport', 'event', 'pov'],
     trigger_keywords: ['gopro set', 'multiple gopro', 'action cameras', 'pov cameras', 'multi angle action'],
     savings_note: 'Save vs renting 3 individually (~£48-54 individual vs ~£30-40 bundle)',
+  },
+  {
+    bundle_name: 'Action Cam Duo (GoPro + DJI Osmo)',
+    items: ['GoPro 12 Hero', 'DJI Osmo Action Pro 5'],
+    daily_price_min: 32, daily_price_max: 44,
+    use_cases: ['action', 'sport', 'bts', 'multi-angle', 'vlog'],
+    trigger_keywords: ['action cam', 'gopro and osmo', 'osmo', 'dji action', 'bts camera', 'behind the scenes'],
+    savings_note: 'Save vs renting separately (~£44-51 individual vs ~£32-44 bundle)',
+  },
+  {
+    bundle_name: 'Car Mount Kit (3x Suction Cups + GoPro)',
+    items: ['Suction cups', 'Suction cups', 'Suction cups', 'GoPro 12 Hero'],
+    daily_price_min: 18, daily_price_max: 38,
+    use_cases: ['car', 'vehicle', 'driving', 'automotive', 'chase'],
+    trigger_keywords: ['car mount', 'suction', 'vehicle shoot', 'car rig', 'driving footage', 'automotive'],
+    savings_note: 'Save vs renting separately (~£48 individual vs ~£18-38 bundle)',
+  },
+
+  // ── Drone Bundles ──
+  {
+    bundle_name: 'Dual Drone Kit (Mavic 3 Pro + Mini 4 Pro)',
+    items: ['DJI Mavic 3 Pro', 'DJI Mini 4 Pro'],
+    daily_price_min: 40, daily_price_max: 55,
+    use_cases: ['aerial', 'real estate', 'event', 'travel', 'documentary'],
+    trigger_keywords: ['drone', 'aerial', 'mavic', 'dji drone', 'fly', 'overhead', 'bird eye'],
+    savings_note: 'Save vs renting separately (~£55-59 individual vs ~£40-55 bundle). Mavic for cinematic, Mini for tight spaces (sub-250g).',
+  },
+  {
+    bundle_name: 'Aerial + Ground Kit (Mavic 3 + FX3 + 16-35mm)',
+    items: ['DJI Mavic 3 Pro', 'Sony FX3', 'Sony GM 16-35mm f2.8'],
+    daily_price_min: 65, daily_price_max: 85,
+    use_cases: ['real estate', 'travel', 'documentary', 'property', 'commercial'],
+    trigger_keywords: ['aerial and ground', 'real estate', 'property video', 'drone and camera', 'estate agent'],
+    savings_note: 'Save vs renting separately (~£77-97 individual vs ~£65-85 bundle). Wide lens for interiors, drone for exteriors.',
+  },
+
+  // ── Audio Bundles ──
+  {
+    bundle_name: 'Full Audio Kit (Rode Wireless + Boom + VideoMic Pro)',
+    items: ['Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser', 'Rode Video Mic Pro Plus'],
+    daily_price_min: 35, daily_price_max: 50,
+    use_cases: ['documentary', 'interview', 'film', 'narrative', 'corporate'],
+    trigger_keywords: ['audio kit', 'sound kit', 'full audio', 'microphone set', 'boom and wireless', 'professional audio'],
+    savings_note: 'Save vs renting separately (~£42-65 individual vs ~£35-50 bundle). Wireless for on-camera talent, boom for off-camera dialogue, VideoMic for ambient.',
+  },
+  {
+    bundle_name: 'Interview Audio Kit (Rode Wireless + Boom)',
+    items: ['Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser'],
+    daily_price_min: 30, daily_price_max: 42,
+    use_cases: ['interview', 'documentary', 'corporate', 'podcast'],
+    trigger_keywords: ['interview mic', 'interview audio', 'boom mic', 'wireless and boom', 'documentary audio'],
+    savings_note: 'Save vs renting separately (~£34-53 individual vs ~£30-42 bundle). Wireless for talent, boom for room tone.',
+  },
+  {
+    bundle_name: 'Dual Wireless Mic Kit (2x Rode)',
+    items: ['Rode Wireless Mic Pro set', 'Rode Wireless Mic Pro set'],
+    daily_price_min: 25, daily_price_max: 40,
+    use_cases: ['interview', 'podcast', 'two-person', 'dialogue', 'corporate'],
+    trigger_keywords: ['two mics', '2 wireless', 'dual mic', 'two people', 'dialogue', '2 person interview'],
+    savings_note: 'Save vs renting 2 separately (~£34-52 individual vs ~£25-40 bundle). One per talent for 2-person setups.',
+  },
+
+  // ── Smoke / Atmosphere Bundles ──
+  {
+    bundle_name: 'Smoke Duo (Ninja + Ninja Pro)',
+    items: ['Smoke Ninja', 'Smoke Ninja Pro hazer'],
+    daily_price_min: 30, daily_price_max: 45,
+    use_cases: ['music video', 'film', 'atmosphere', 'creative', 'portrait'],
+    trigger_keywords: ['smoke', 'haze', 'fog', 'atmosphere', 'hazer', 'smoky', 'misty'],
+    savings_note: 'Save vs renting separately (~£40-57 individual vs ~£30-45 bundle). Compact + Pro for layered haze.',
+  },
+  {
+    bundle_name: 'Music Video Atmosphere Kit (Smoke Ninja Pro + 2x Pavotube)',
+    items: ['Smoke Ninja Pro hazer', 'Nanlite Pavotube 30x II', 'Nanlite Pavotube 30x II'],
+    daily_price_min: 40, daily_price_max: 60,
+    use_cases: ['music video', 'creative', 'fashion', 'portrait', 'mood'],
+    trigger_keywords: ['music video atmosphere', 'smoke and lights', 'haze and tubes', 'mood lighting', 'creative atmosphere'],
+    savings_note: 'Save vs renting separately (~£49-71 individual vs ~£40-60 bundle). Haze catches RGB tube light beautifully.',
+  },
+
+  // ── Monitoring Bundles ──
+  {
+    bundle_name: 'Wireless Monitor Kit (Hollyland 7" + Mars 4K)',
+    items: ['Hollyland 7-inch monitor', 'Hollyland Mars 4K transmitter'],
+    daily_price_min: 25, daily_price_max: 38,
+    use_cases: ['director', 'client monitoring', 'wireless', 'on-set'],
+    trigger_keywords: ['wireless monitor', 'director monitor', 'client monitor', 'video village', 'wireless feed', 'remote monitor'],
+    savings_note: 'Save vs renting separately (~£28-45 individual vs ~£25-38 bundle). Wireless video feed to director/client.',
+  },
+
+  // ── Wedding / Event Bundles ──
+  {
+    bundle_name: 'Wedding Dual Camera Kit',
+    items: ['Sony FX3', 'Sony FX3', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
+    daily_price_min: 75, daily_price_max: 100,
+    use_cases: ['wedding', 'event', 'ceremony', 'reception'],
+    trigger_keywords: ['wedding', 'ceremony', 'reception', 'bride', 'groom', 'two camera event'],
+    savings_note: 'Save vs renting separately (~£122-162 individual vs ~£75-100 bundle). Wide + tele zoom covers all ceremony angles.',
+  },
+
+  // ── Documentary / Corporate ──
+  {
+    bundle_name: 'Documentary Filmmaker Kit',
+    items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser'],
+    daily_price_min: 60, daily_price_max: 85,
+    use_cases: ['documentary', 'corporate', 'short doc', 'journalistic'],
+    trigger_keywords: ['documentary', 'doc', 'corporate video', 'journalistic', 'news style'],
+    savings_note: 'Save vs renting separately (~£81-113 individual vs ~£60-85 bundle). Camera + versatile lens + dual audio coverage.',
   },
 ];
 

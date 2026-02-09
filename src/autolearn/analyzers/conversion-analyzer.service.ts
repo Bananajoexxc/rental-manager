@@ -29,8 +29,8 @@ export class ConversionAnalyzerService {
       stageCounts[s.conversation_stage] = (stageCounts[s.conversation_stage] || 0) + 1;
     }
 
-    // Expected funnel: inquiry → interest → qualified → booking_ready → booking_sent → confirmed
-    const funnel = ['inquiry', 'interest', 'qualified', 'booking_ready', 'booking_sent', 'confirmed'];
+    // Expected funnel: inquiry → interested → ready_to_book → booked → confirmed
+    const funnel = ['inquiry', 'interested', 'ready_to_book', 'booked', 'confirmed'];
     const funnelCounts = funnel.map(stage => ({ stage, count: stageCounts[stage] || 0 }));
 
     // Find high drop-off stages (>50% drop from previous)

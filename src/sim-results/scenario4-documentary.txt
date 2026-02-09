@@ -1,0 +1,143 @@
+SCENARIO 4: Documentary Filmmaker - Week BMPCC rental
+Started at Wed Feb  4 15:49:27 UTC 2026
+
+=== MESSAGE 1 ===
+RENTER: Hi, I need to rent a BMPCC 6K Pro for a documentary. Looking at a week-long rental starting Monday.
+BOT REPLY: Hey! The BMPCC 6K Pro is available for a week starting this Monday 10th Feb. Shoots beautiful RAW footage, perfect for documentary work.
+
+Week rental runs around £280-320 with the 7-day discount included. Camera comes with 5x LP-E6NH batteries and a 1TB card.
+
+For a doc you'll probably want audio sorted - we've got Rode wireless mics and a Sennheiser boom kit if needed. Also have Canon EF lenses (24-105mm f4 is solid for docs) and the DJI RS3 Pro gimbal for movement.
+
+What dates exactly are you looking at? And is pickup from Central London (Trafalgar Square area) working for you?
+
+=== MESSAGE 2 ===
+RENTER: What batteries does the BMPCC come with? How many?
+BOT REPLY: The BMPCC 6K Pro comes with 5x LP-E6NH batteries.
+
+=== MESSAGE 3 ===
+RENTER: I'll need longer battery life. What V-mount options do you have?
+BOT REPLY: We've got V-mount batteries - 2x 95mAh and 4x 150mAh available. The 150mAh will give you serious runtime.
+
+V-mount rentals include all the plates, adapters and cables you need to power the BMPCC. Around £25-30/day for a 150mAh battery.
+
+Want me to add one to your booking?
+
+=== MESSAGE 4 ===
+RENTER: Do I need to rent plates and adapters separately for the V-mount?
+BOT REPLY: No, V-mount battery rentals include all the plates, adapters and cables. You're sorted.
+
+=== MESSAGE 5 ===
+RENTER: How much for the BMPCC plus V-mount for a full week? Monday to Sunday.
+BOT REPLY: BMPCC 6K Pro for the week is around £280-320. Add a 150mAh V-mount battery and you're looking at roughly £175-210 for the week on that.
+
+Total comes to about £455-530 for the week with both. That puts you over £350 so you get the 10% discount automatically.
+
+Hygglo adds their service fee on top at checkout but the 7-day discount is already factored in.
+
+Want to lock that in for Monday 10th to Sunday 16th?
+
+=== MESSAGE 6 ===
+RENTER: What lens works best with the BMPCC for documentary work?
+BOT REPLY: The Canon EF 24-105mm f4 is your best bet for doc work with the BMPCC. Versatile range, solid build, reliable autofocus for run-and-gun.
+
+BMPCC takes Canon EF mount so it fits perfectly. Runs around £20-25/day.
+
+Want me to check availability for the same dates?
+
+=== MESSAGE 7 ===
+RENTER: I'll take the 24-105mm. Also need a good mic for interviews.
+BOT REPLY: Got it. For interviews the Rode Wireless Pro set is perfect - lavalier mics with backup recording built in. Really reliable. Around £25-30/day.
+
+Or if you prefer a boom setup, the Sennheiser MKE600 kit gives you that classic sound. Similar price.
+
+Which style works better for your interviews?
+
+=== MESSAGE 8 ===
+RENTER: What about a monitor? The BMPCC screen is quite small.
+BOT REPLY: The Atomos Ninja V is solid for the BMPCC - 5 inch touchscreen, records ProRes if you need it. Around £30-35/day.
+
+Or the Hollyland 7-inch monitor if you just need a bigger viewing screen without recording. About £20-25/day.
+
+Which one fits your setup?
+
+=== MESSAGE 9 ===
+RENTER: Add the Atomos Ninja V. What time Monday morning for pickup?
+BOT REPLY: Opening times are 10am-12pm and 7pm-9pm. Which slot works for you Monday morning - 10am, 11am, or 12pm?
+
+And for return Sunday - morning slot 10am-12pm or evening 7pm-9pm?
+
+=== MESSAGE 10 ===
+RENTER: Can I pick up Sunday evening to prep on Monday morning?
+BOT REPLY: Yeah, evening-before pickup is free for your rental since it's over £40. You can grab everything Sunday 7-9pm.
+
+So Sunday evening pickup and what return time Sunday 16th - morning 10am-12pm or evening 7pm-9pm?
+
+=== MESSAGE 11 ===
+RENTER: So pickup Sunday evening is free since this is over 40 quid?
+BOT REPLY: Yeah, for rentals over £40 total, day-before evening pickup is free. You're well over that so no extra charge.
+
+What return time works for you Sunday 16th?
+
+=== MESSAGE 12 ===
+RENTER: Great. And if my shoot runs until Monday of the following week, what happens?
+BOT REPLY: You'd need to extend the rental to cover those extra days. Just let me know before your booked return time and I'll send you a booking extension to add the days you need.
+
+Price stays the same per day for the extension.
+
+=== MESSAGE 13 ===
+RENTER: Could I return Monday morning instead of Sunday evening? Would that cost extra?
+BOT REPLY: Morning-after return is free for your rental since it's over £40. You can return Monday morning 10am-12pm at no extra cost.
+
+So confirm for me: Pickup Sunday evening 7-9pm, return Monday morning 10am-12pm?
+
+=== MESSAGE 14 ===
+RENTER: I'm shooting in East London, Hackney area. E8 postcode.
+BOT REPLY: All pickups and returns are from our Trafalgar Square location - 11 Trafalgar Square by the statue of James II.
+
+Hackney E8 is about 7km from us, so roughly 15-20 min drive. You coming to collect or need delivery?
+
+=== MESSAGE 15 ===
+RENTER: Actually my producer says we might need a second camera. Do you have the BMPCC 6K Full Frame?
+BOT REPLY: Yeah, BMPCC 6K Full Frame is available for those dates. Runs about £45-50/day.
+
+Want me to add it to your booking?
+
+=== MESSAGE 16 ===
+RENTER: What comes with the Full Frame version? Same batteries as the Pro?
+BOT REPLY: BMPCC 6K Full Frame comes with 5x LP-E6NH batteries and a 1TB SSD card.
+
+Same batteries as the Pro, yeah. Canon EF mount for lenses.
+
+=== MESSAGE 17 ===
+RENTER: We need SSD storage too. What options do you have?
+BOT REPLY: The BMPCC Full Frame already comes with a 1TB SSD included. The Pro also has 1TB included.
+
+So you're covered on storage with both cameras.
+
+=== MESSAGE 18 ===
+RENTER: My DP also wants a DJI RS3. How much extra is that for the week?
+BOT REPLY: DJI RS3 Pro gimbal runs about £18-25/day, so for the week roughly £90-125.
+
+Want me to add it?
+
+=== MESSAGE 19 ===
+RENTER: Let me get a total: BMPCC 6K Pro, V-mount, 24-105mm, Rode mic, Ninja V, RS3 Pro for 7 days.
+BOT REPLY: BMPCC 6K Pro: £45-50/day
+V-mount 150Wh: £12-15/day
+Canon 24-105mm f4: £18-22/day
+Rode Video Mic Pro Plus: £8-10/day
+Atomos Ninja V: £18-22/day
+DJI RS3 Pro: £18-25/day
+
+Total roughly £630-720 for the week. You're getting 10% off automatically at checkout for the 7 day rental, plus another 10% off since you're over £350.
+
+V-mount includes all plates and cables you need.
+
+=== MESSAGE 20 ===
+RENTER: Perfect. I'll book through Hygglo now. Anything else I should know?
+BOT REPLY: Sound. Once I get the booking notification, I'll send you the exact pickup address at Trafalgar Square.
+
+Opening times are 10am-12pm and 7-9pm. Let me know your preferred pickup and return times when you book, otherwise I'll assign 12pm pickup and 9pm return by default.
+
+Scenario 4 done at Wed Feb  4 15:50:33 UTC 2026

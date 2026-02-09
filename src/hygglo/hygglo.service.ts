@@ -28,6 +28,9 @@ export interface RentalListing {
   rentalPrice?: number;
   pricePerDay?: number;
   currency?: string;
+  listingLocation?: string; // Advertised pickup location parsed from listing slug/data
+  renterRating?: number;      // Average star rating (1-5)
+  renterReviewCount?: number;  // Number of reviews
   _detail?: any; // Full order detail from /v4/my/orders/:id
 }
 
@@ -78,6 +81,7 @@ export class HyggloService implements OnModuleInit {
   private tokens = new Map<HyggloAccount, TokenState>();
   private client: AxiosInstance;
   private hasLoggedOrderSample = false;
+  private _ratingFieldsLogged = false;
   private lastMessageCheckTime = new Map<string, number>();
   private recentlySentMessages = new Map<string, number>(); // content hash → timestamp, to avoid re-processing our own sent messages
   private readonly SENT_MESSAGE_TTL_MS = 10 * 60 * 1000; // 10 minute window
@@ -393,6 +397,11 @@ export class HyggloService implements OnModuleInit {
     return this.scanRentalsForAccount(account, status);
   }
 
+  /** Public wrapper for scanning a specific account + status (used by reconciliation). */
+  async scanRentalsForAccountPublic(accountName: HyggloAccount, status: 'ongoing' | 'upcoming' | 'pending'): Promise<RentalListing[]> {
+    return this.scanRentalsForAccount(accountName, status);
+  }
+
   private async scanRentalsForAccount(accountName: HyggloAccount, status: 'ongoing' | 'upcoming' | 'pending'): Promise<RentalListing[]> {
     try {
       const authenticated = await this.ensureAuthenticated(accountName);
@@ -482,6 +491,27 @@ export class HyggloService implements OnModuleInit {
     return enriched;
   }
 
+  /** Fetch a single order's detail from Hygglo API. Used for backfilling missing titles. */
+  async getOrderDetailPublic(orderId: string, accountName: HyggloAccount): Promise<any | null> {
+    const authenticated = await this.ensureAuthenticated(accountName);
+    if (!authenticated) return null;
+
+    const token = this.tokens.get(accountName);
+    if (!token) return null;
+
+    try {
+      const res = await this.client.get(`/v4/my/orders/${orderId}`, {
+        params: { timezone: 'Europe/London' },
+        headers: { 'Authorization': `Bearer ${token.accessToken}` },
+        __account: accountName,
+      } as any);
+      return res.data;
+    } catch (error) {
+      this.logger.debug(`getOrderDetailPublic(${orderId}) failed: ${error.message}`);
+      return null;
+    }
+  }
+
   private mapOrdersToRentalListings(orders: any[], status: 'ongoing' | 'upcoming' | 'pending', account: HyggloAccount): RentalListing[] {
     return orders.map((order) => {
       const labels = order.labels || {};
@@ -500,6 +530,18 @@ export class HyggloService implements OnModuleInit {
       const renterUserId = detail.users?.otherPart?.id
         ? String(detail.users.otherPart.id)
         : undefined;
+
+      // Renter rating extraction from otherPart user data
+      if (detail.users?.otherPart && !this._ratingFieldsLogged) {
+        this.logger.debug(`[RATING] otherPart sample: ${JSON.stringify(detail.users.otherPart)}`);
+        this._ratingFieldsLogged = true;
+      }
+      // rating field is an object: { value: 5, count: 6 }
+      const ratingObj = detail.users?.otherPart?.rating;
+      const renterRating: number | undefined = ratingObj?.value ?? undefined;
+      const renterReviewCount: number | undefined = ratingObj?.count
+        ?? detail.users?.otherPart?.customerCompletedOrders
+        ?? undefined;
 
       // Photos from detail items
       const photosUrls: string[] = [];
@@ -534,10 +576,9 @@ export class HyggloService implements OnModuleInit {
         endDate = new Date(detail.rentalPeriod.endDateUTC);
       }
 
-      // Hygglo models 1-day rentals as start == end. Normalize to start + 1 day.
-      if (startDate && endDate && startDate.getTime() === endDate.getTime()) {
-        endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
-      }
+      // Hygglo dates are INCLUSIVE (both start and end are rental days).
+      // 1-day rentals: start == end. Multi-day: start=8, end=9 means 2 days.
+      // No normalization needed — keep as-is (inclusive).
 
       // Fallback: parse dates from labels.duration.compact (e.g., "31 Dec-1 Jan", "30-31 Jan", "29 Jan")
       if (!startDate || !endDate) {
@@ -552,16 +593,21 @@ export class HyggloService implements OnModuleInit {
       let currency: string | undefined;
 
       if (detail.price) {
-        // price.total = what renter pays, price.ownerEarnings = what owner gets
-        rentalPrice = detail.price.total ?? undefined;
+        // Use ownerEarnings (what the owner actually receives after Hygglo's cut)
+        // Falls back to total if ownerEarnings not available
+        rentalPrice = detail.price.ownerEarnings ?? detail.price.total ?? undefined;
         currency = detail.price.currency ?? undefined;
       }
 
-      // Calculate price per day
+      // Calculate price per day (inclusive dates: days = end - start + 1)
       if (rentalPrice && startDate && endDate) {
-        const days = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
+        const diffDays = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+        const days = Math.max(1, diffDays + 1);
         pricePerDay = Math.round((rentalPrice / days) * 100) / 100;
       }
+
+      // Extract listing location from slug or item data
+      const listingLocation = this.extractListingLocation(listingUrl, title, detail);
 
       return {
         listingId,
@@ -572,16 +618,88 @@ export class HyggloService implements OnModuleInit {
         renterInfo: renter,
         renterUserId,
         listingUrl,
+        listingLocation,
         description,
         photosUrls,
         account,
         rentalPrice,
         pricePerDay,
         currency,
+        renterRating,
+        renterReviewCount,
         // Pass detail through for downstream use (items, activities, ownerEarnings)
         _detail: detail,
       };
     });
+  }
+
+  // Known London areas used as listing locations (non-central = marketing-only)
+  private static readonly KNOWN_AREAS: Record<string, string> = {
+    'stratford': 'Stratford', 'shoreditch': 'Shoreditch', 'camden': 'Camden',
+    'hackney': 'Hackney', 'islington': 'Islington', 'brixton': 'Brixton',
+    'peckham': 'Peckham', 'greenwich': 'Greenwich', 'croydon': 'Croydon',
+    'ealing': 'Ealing', 'richmond': 'Richmond', 'wembley': 'Wembley',
+    'hammersmith': 'Hammersmith', 'fulham': 'Fulham', 'clapham': 'Clapham',
+    'wimbledon': 'Wimbledon', 'battersea': 'Battersea', 'dalston': 'Dalston',
+    'bethnal green': 'Bethnal Green', 'bermondsey': 'Bermondsey',
+    'notting hill': 'Notting Hill', 'kensington': 'Kensington',
+    'west london': 'West London', 'east london': 'East London',
+    'south london': 'South London', 'north london': 'North London',
+    'canary wharf': 'Canary Wharf', 'lewisham': 'Lewisham',
+    'tottenham': 'Tottenham', 'finsbury park': 'Finsbury Park',
+    'kings cross': 'Kings Cross', 'angel': 'Angel',
+    'elephant and castle': 'Elephant and Castle', 'woolwich': 'Woolwich',
+    'northwick park': 'Northwick Park', 'harrow': 'Harrow',
+    'walthamstow': 'Walthamstow', 'barking': 'Barking',
+    'ilford': 'Ilford', 'enfield': 'Enfield', 'hounslow': 'Hounslow',
+    'sutton': 'Sutton', 'bromley': 'Bromley', 'brent': 'Brent',
+    'acton': 'Acton', 'putney': 'Putney', 'tooting': 'Tooting',
+    'streatham': 'Streatham', 'wood green': 'Wood Green',
+    'muswell hill': 'Muswell Hill', 'crouch end': 'Crouch End',
+    'stoke newington': 'Stoke Newington', 'bow': 'Bow',
+    'mile end': 'Mile End', 'poplar': 'Poplar',
+    'deptford': 'Deptford', 'catford': 'Catford',
+    'sydenham': 'Sydenham', 'dulwich': 'Dulwich',
+    'balham': 'Balham', 'wandsworth': 'Wandsworth',
+    'chiswick': 'Chiswick', 'shepherd': 'Shepherds Bush',
+    'kensal': 'Kensal', 'maida vale': 'Maida Vale',
+    'kilburn': 'Kilburn', 'hampstead': 'Hampstead',
+    'highgate': 'Highgate', 'holloway': 'Holloway',
+  };
+
+  // Central locations that are real pickup points — NOT fake
+  private static readonly CENTRAL_LOCATIONS = [
+    'trafalgar', 'whitehall', 'central london', 'charing cross',
+    'national gallery', 'pall mall', 'westminster', 'covent garden',
+  ];
+
+  /**
+   * Extract listing location from slug/title/detail.
+   * Returns the area name if it's a non-central (fake) location, null otherwise.
+   */
+  private extractListingLocation(listingUrl: string, title: string, detail: any): string | undefined {
+    // Check all text sources for area mentions
+    const slug = (listingUrl || '').toLowerCase().replace(/[^a-z\s]/g, ' ');
+    const titleLower = (title || '').toLowerCase();
+    const locationStr = (detail?.location?.name || detail?.location?.address || '').toLowerCase();
+    const combined = `${slug} ${titleLower} ${locationStr}`;
+
+    // First check if it's a central location (real)
+    for (const central of HyggloService.CENTRAL_LOCATIONS) {
+      if (combined.includes(central)) return undefined;
+    }
+
+    // Check for known non-central areas
+    for (const [key, displayName] of Object.entries(HyggloService.KNOWN_AREAS)) {
+      if (combined.includes(key)) return displayName;
+    }
+
+    // Check detail.location if available from API
+    if (detail?.location?.name) {
+      return detail.location.name;
+    }
+
+    return undefined;
   }
 
   /**
@@ -688,14 +806,14 @@ export class HyggloService implements OnModuleInit {
       }
     }
 
-    // Pattern: "29 Jan" (single day)
+    // Pattern: "29 Jan" (single day) — inclusive: start == end
     const singleDayMatch = cleaned.match(/^(\d{1,2})\s+(\w{3})$/i);
     if (singleDayMatch) {
       const day = parseInt(singleDayMatch[1]);
       const month = monthNames[singleDayMatch[2].toLowerCase()];
       if (month !== undefined) {
         const startDate = new Date(currentYear, month, day);
-        const endDate = new Date(currentYear, month, day + 1);
+        const endDate = new Date(currentYear, month, day);
         return { startDate, endDate };
       }
     }
@@ -964,6 +1082,62 @@ export class HyggloService implements OnModuleInit {
     return allowed.split(',').map(s => s.trim()).includes(rentalId);
   }
 
+  /**
+   * Mark a rental as returned via the Hygglo API.
+   * Tries known PATCH actions. Gated by RETURN_ENABLED_RENTALS in READ_ONLY_MODE.
+   */
+  async markAsReturned(rentalId: string, accountName?: string): Promise<{ success: boolean; error?: string }> {
+    const readOnly = process.env.READ_ONLY_MODE === 'true';
+    const returnEnabled = (process.env.RETURN_ENABLED_RENTALS || '').split(',').map(s => s.trim()).includes(rentalId);
+
+    if (readOnly && !returnEnabled) {
+      this.logger.warn(`BLOCKED [READ_ONLY_MODE] markAsReturned on rental ${rentalId}`);
+      return { success: false, error: 'Read-only mode is active' };
+    }
+
+    // Try each account (or specific one)
+    const accountsToTry = accountName
+      ? this.accounts.filter(a => a.name === accountName)
+      : this.accounts;
+
+    for (const account of accountsToTry) {
+      const authenticated = await this.ensureAuthenticated(account.name);
+      if (!authenticated) continue;
+
+      const token = this.tokens.get(account.name)!;
+
+      // Try known PATCH actions for marking as returned
+      const actionsToTry = ['return', 'complete', 'end', 'mark_returned', 'close'];
+
+      for (const action of actionsToTry) {
+        try {
+          this.logger.debug(`markAsReturned: trying action="${action}" for ${rentalId} on ${account.name}`);
+          const response = await this.client.patch(
+            `/v4/my/orders/${rentalId}`,
+            { action },
+            {
+              params: { timezone: 'Europe/London' },
+              headers: { 'Authorization': `Bearer ${token.accessToken}` },
+              __account: account.name,
+            } as any,
+          );
+
+          if (response.status === 200) {
+            this.logger.log(`markAsReturned(${rentalId}): success with action="${action}" via ${account.name}`);
+            return { success: true };
+          }
+        } catch (error) {
+          const status = error instanceof AxiosError ? error.response?.status : 'unknown';
+          const data = error instanceof AxiosError ? JSON.stringify(error.response?.data || {}).substring(0, 200) : '';
+          this.logger.debug(`markAsReturned: action="${action}" failed on ${account.name}: ${status} ${data}`);
+        }
+      }
+    }
+
+    this.logger.warn(`markAsReturned(${rentalId}): all API actions failed`);
+    return { success: false, error: 'No API action succeeded' };
+  }
+
   async sendMessage(rentalId: string, message: string): Promise<boolean> {
     const readOnly = process.env.READ_ONLY_MODE === 'true';
     const writeEnabled = this.isWriteEnabledRental(rentalId);
@@ -1146,6 +1320,148 @@ export class HyggloService implements OnModuleInit {
       this.logger.error(`scanCompletedRentals error for ${accountName}: ${error.message}`);
       return [];
     }
+  }
+
+  /**
+   * Paginated scan of completed/obsolete rentals for historical backfill.
+   * Iterates through ALL pages until no more results are returned.
+   * maxResults=0 means no limit (fetch everything).
+   */
+  async scanCompletedRentalsPaginated(
+    accountName: HyggloAccount,
+    maxResults: number = 0,
+  ): Promise<RentalListing[]> {
+    const authenticated = await this.ensureAuthenticated(accountName);
+    if (!authenticated) {
+      this.logger.warn(`Cannot scan completed rentals for ${accountName} - not authenticated`);
+      return [];
+    }
+
+    const token = this.tokens.get(accountName)!;
+    const allRentals: RentalListing[] = [];
+    const pageSize = 50;
+
+    // Only 'completed' — 'obsolete' = cancelled/rejected orders with no revenue (thousands of useless records)
+    for (const filter of ['completed'] as const) {
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore && (maxResults === 0 || allRentals.length < maxResults)) {
+        try {
+          const response = await this.client.get('/v4/my/orders', {
+            params: {
+              role: 'owner',
+              filter,
+              sort: 'order-start-date',
+              offset,
+              limit: pageSize,
+            },
+            headers: {
+              'Authorization': `Bearer ${token.accessToken}`,
+            },
+            __account: accountName,
+          } as any);
+
+          const data = response.data;
+          const orders: any[] = Array.isArray(data) ? data : (data.items || data.results || data.data || []);
+
+          if (orders.length === 0) {
+            hasMore = false;
+            break;
+          }
+
+          this.logger.log(`Backfill page: ${filter} offset=${offset}, got ${orders.length} orders for ${accountName}`);
+
+          const enriched = await this.enrichOrdersWithDetails(orders, accountName);
+          const mapped = this.mapOrdersToRentalListings(enriched, 'ongoing', accountName);
+          allRentals.push(...mapped);
+
+          offset += pageSize;
+          if (orders.length < pageSize) hasMore = false;
+
+          // Rate limit: 500ms between pages
+          await this.delay(500);
+        } catch (error) {
+          this.logger.error(`Backfill pagination error (${filter}, offset=${offset}): ${error.message}`);
+          hasMore = false;
+        }
+      }
+    }
+
+    this.logger.log(`scanCompletedRentalsPaginated(${accountName}): total ${allRentals.length} historical rentals`);
+    return maxResults > 0 ? allRentals.slice(0, maxResults) : allRentals;
+  }
+
+  /**
+   * Paginated scan of OBSOLETE (cancelled/rejected) rentals from Hygglo.
+   * Used by lost-revenue analysis to find bookings that couldn't be fulfilled.
+   */
+  async scanObsoleteRentalsPaginated(
+    accountName: HyggloAccount,
+    maxResults: number = 0,
+    sinceDate?: Date,
+  ): Promise<RentalListing[]> {
+    const authenticated = await this.ensureAuthenticated(accountName);
+    if (!authenticated) {
+      this.logger.warn(`Cannot scan obsolete rentals for ${accountName} - not authenticated`);
+      return [];
+    }
+
+    const token = this.tokens.get(accountName)!;
+    const allRentals: RentalListing[] = [];
+    const pageSize = 50;
+
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore && (maxResults === 0 || allRentals.length < maxResults)) {
+      try {
+        const response = await this.client.get('/v4/my/orders', {
+          params: {
+            role: 'owner',
+            filter: 'obsolete',
+            sort: 'order-start-date',
+            offset,
+            limit: pageSize,
+          },
+          headers: {
+            'Authorization': `Bearer ${token.accessToken}`,
+          },
+          __account: accountName,
+        } as any);
+
+        const data = response.data;
+        const orders: any[] = Array.isArray(data) ? data : (data.items || data.results || data.data || []);
+
+        if (orders.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        this.logger.log(`Obsolete page: offset=${offset}, got ${orders.length} orders for ${accountName}`);
+
+        const enriched = await this.enrichOrdersWithDetails(orders, accountName);
+        const mapped = this.mapOrdersToRentalListings(enriched, 'ongoing', accountName);
+
+        // Filter by sinceDate if provided
+        for (const rental of mapped) {
+          if (sinceDate && rental.startDate && rental.startDate < sinceDate) continue;
+          allRentals.push(rental);
+        }
+
+        offset += pageSize;
+        if (orders.length < pageSize) hasMore = false;
+
+        // Rate limit: 1000ms between pages (slower — obsolete has more data)
+        await this.delay(1000);
+      } catch (error) {
+        this.logger.error(`Obsolete pagination error (offset=${offset}): ${error.message}`);
+        hasMore = false;
+      }
+    }
+
+    this.logger.log(`scanObsoleteRentalsPaginated(${accountName}): total ${allRentals.length} obsolete rentals`);
+    return maxResults > 0 ? allRentals.slice(0, maxResults) : allRentals;
   }
 
   // --- Utility ---

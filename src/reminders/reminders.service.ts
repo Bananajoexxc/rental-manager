@@ -26,7 +26,7 @@ export class RemindersService {
     private hyggloService: HyggloService,
   ) {}
 
-  // Every minute: check for upcoming pickups and late returns
+  // Every minute: check for upcoming pickups, late returns, and arrival confirmations
   @Cron('* * * * *')
   async checkReminders() {
     const now = new Date();
@@ -36,6 +36,8 @@ export class RemindersService {
       await this.checkUpcomingPickups(now);
       // Check for returns 30+ min late
       await this.checkLateReturns(now);
+      // Send arrival confirmations to renters via Hygglo chat
+      await this.checkArrivalConfirmations(now);
     } catch (error) {
       this.logger.error(`Reminder check error: ${error.message}`);
     }
@@ -234,7 +236,7 @@ export class RemindersService {
 
       if (bookingsNoTimes.length === 0) return;
 
-      // Check follow_up_state: only auto-assign if stage is confirmed and not already auto-assigned
+      // Stage gate: auto_assign_times only at 'confirmed' (see STAGE_ACTION_MAP in conversation-stage.service.ts)
       const rentalIds = [...new Set(bookingsNoTimes.map(b => b.rental_id).filter(Boolean))] as string[];
       const followUpStates = await this.prisma.follow_up_state.findMany({
         where: {
@@ -343,6 +345,211 @@ export class RemindersService {
     }
   }
 
+  // ══════════════════════════════════════════════
+  // ARRIVAL CONFIRMATION SYSTEM
+  // ══════════════════════════════════════════════
+
+  private readonly pickupArrivalMessage1 =
+    'Hey! Just checking — have you arrived at the pickup point? ' +
+    'Text "arrived" in this chat when you\'re here and we\'ll be right with you.\n\n' +
+    this.arrivalReminderText;
+
+  private readonly pickupArrivalMessage2 =
+    'Just following up — are you on your way for pickup? ' +
+    'Let me know when you\'re here or if you need any help finding the spot.';
+
+  private readonly returnArrivalMessage1 =
+    'Hey! Just checking — have you arrived to return the gear? ' +
+    'Text "arrived" when you\'re here and we\'ll come meet you.';
+
+  private readonly returnArrivalMessage2 =
+    'Following up on the return — are you on your way back? ' +
+    'Let me know when you\'re here or if you need a bit more time.';
+
+  /**
+   * Check and send arrival confirmations to renters.
+   * Pickup: T+5 min first message, T+15 min second message.
+   * Return: same pattern.
+   * Stops permanently once renter confirms arrival in chat.
+   */
+  private async checkArrivalConfirmations(now: Date) {
+    // Get all confirmed bookings with times that are happening in a 3-day window around today
+    const windowStart = new Date(now);
+    windowStart.setDate(windowStart.getDate() - 1);
+    windowStart.setHours(0, 0, 0, 0);
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + 1);
+    windowEnd.setHours(23, 59, 59, 999);
+
+    // Simple query: get all confirmed bookings with pickup or return times in date range
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        pickup_time: { not: null },
+        // Date window: either pickup_date/start_date or return_date/end_date falls within range
+        OR: [
+          { pickup_date: { gte: windowStart, lte: windowEnd } },
+          { start_date: { gte: windowStart, lte: windowEnd } },
+          { return_date: { gte: windowStart, lte: windowEnd } },
+          { end_date: { gte: windowStart, lte: windowEnd } },
+        ],
+      },
+      include: { rental: true },
+    });
+
+    // Only log when there are actually bookings to check (avoids per-minute noise)
+
+    for (const booking of bookings) {
+      try {
+        const listingId = booking.rental?.listing_id;
+        if (!listingId) continue;
+
+        // === PICKUP ARRIVAL ===
+        if (!booking.pickup_arrival_confirmed && booking.pickup_time) {
+          const pickupDate = booking.pickup_date || booking.start_date;
+          const pickupDateTime = this.buildDateTime(pickupDate, booking.pickup_time);
+          if (!pickupDateTime) continue;
+
+          const minSincePickup = (now.getTime() - pickupDateTime.getTime()) / (1000 * 60);
+
+          // First message: 5 min after pickup time
+          if (minSincePickup >= 5 && !booking.pickup_arrival_sent_at) {
+            await this.sendArrivalCheck(listingId, booking.id, 'pickup', 1);
+          }
+          // Second message: 15 min after pickup time (10 min after first)
+          else if (minSincePickup >= 15 && booking.pickup_arrival_sent_at && !booking.pickup_arrival_followup_sent) {
+            await this.sendArrivalCheck(listingId, booking.id, 'pickup', 2);
+          }
+        }
+
+        // === RETURN ARRIVAL (only after pickup confirmed) ===
+        if (booking.pickup_arrival_confirmed && !booking.return_arrival_confirmed && booking.return_time) {
+          const returnDate = booking.return_date || booking.end_date;
+          const returnDateTime = this.buildDateTime(returnDate, booking.return_time);
+          if (!returnDateTime) continue;
+
+          const minSinceReturn = (now.getTime() - returnDateTime.getTime()) / (1000 * 60);
+
+          // First message: 5 min after return time
+          if (minSinceReturn >= 5 && !booking.return_arrival_sent_at) {
+            await this.sendArrivalCheck(listingId, booking.id, 'return', 1);
+          }
+          // Second message: 15 min after return time (10 min after first)
+          else if (minSinceReturn >= 15 && booking.return_arrival_sent_at && !booking.return_arrival_followup_sent) {
+            await this.sendArrivalCheck(listingId, booking.id, 'return', 2);
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`Arrival check failed for booking ${booking.id}: ${err.message}`);
+      }
+    }
+  }
+
+  /**
+   * Send arrival check message via Hygglo and update booking state.
+   */
+  private async sendArrivalCheck(
+    listingId: string,
+    bookingId: string,
+    phase: 'pickup' | 'return',
+    messageNum: 1 | 2,
+  ) {
+    const messages = {
+      pickup: { 1: this.pickupArrivalMessage1, 2: this.pickupArrivalMessage2 },
+      return: { 1: this.returnArrivalMessage1, 2: this.returnArrivalMessage2 },
+    };
+
+    const message = messages[phase][messageNum];
+
+    try {
+      this.logger.log(`Sending arrival check: ${phase} #${messageNum} for booking ${bookingId} via listing ${listingId}`);
+      const sent = await this.hyggloService.sendMessage(listingId, message);
+
+      // Update state: mark as sent so we don't re-send.
+      // In READ_ONLY_MODE, sendMessage returns false — still update state to prevent retry spam.
+      const updateData: any = {};
+      if (phase === 'pickup') {
+        if (messageNum === 1) updateData.pickup_arrival_sent_at = new Date();
+        if (messageNum === 2) updateData.pickup_arrival_followup_sent = true;
+      } else {
+        if (messageNum === 1) updateData.return_arrival_sent_at = new Date();
+        if (messageNum === 2) updateData.return_arrival_followup_sent = true;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await this.prisma.booking.update({
+          where: { id: bookingId },
+          data: updateData,
+        });
+
+        this.logger.log(`Arrival check ${sent ? 'sent' : 'queued (READ_ONLY)'}: ${phase} #${messageNum} for booking ${bookingId}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to send arrival check (${phase} #${messageNum}): ${err.message}`);
+    }
+  }
+
+  /**
+   * Build a DateTime from a date and time string (HH:MM).
+   */
+  private buildDateTime(date: Date, time: string): Date | null {
+    if (!date || !time) return null;
+    const [hours, minutes] = time.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return null;
+    const dt = new Date(date);
+    dt.setHours(hours, minutes, 0, 0);
+    return dt;
+  }
+
+  /**
+   * Confirm renter arrival — called from processMessage when renter says "arrived"/"I'm here".
+   * Returns which phase was confirmed (pickup/return/null).
+   */
+  async confirmArrival(rentalId: string): Promise<'pickup' | 'return' | null> {
+    // Find all confirmed bookings for this rental
+    const bookings = await this.prisma.booking.findMany({
+      where: { rental_id: rentalId, status: 'confirmed' },
+    });
+
+    if (bookings.length === 0) return null;
+
+    let confirmedPhase: 'pickup' | 'return' | null = null;
+
+    for (const booking of bookings) {
+      // First check: is this a return confirmation? (pickup already done)
+      if (booking.pickup_arrival_confirmed && !booking.return_arrival_confirmed) {
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: { return_arrival_confirmed: true },
+        });
+        confirmedPhase = 'return';
+        this.logger.log(`Return arrival confirmed for booking ${booking.id} (${booking.renter_name})`);
+      }
+      // Second check: is this a pickup confirmation?
+      else if (!booking.pickup_arrival_confirmed) {
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: { pickup_arrival_confirmed: true },
+        });
+        confirmedPhase = 'pickup';
+        this.logger.log(`Pickup arrival confirmed for booking ${booking.id} (${booking.renter_name})`);
+      }
+    }
+
+    // Notify Daniel
+    if (confirmedPhase) {
+      const booking = bookings[0];
+      await this.telegramService.sendProactiveMessage(
+        `✅ *Renter Arrived (${confirmedPhase})*\n\n` +
+        `├ 👤 ${booking.renter_name}\n` +
+        `├ 📦 ${booking.item_name}\n` +
+        `└ ${confirmedPhase === 'pickup' ? '📍 Ready for pickup' : '📍 Ready for return'}`,
+      );
+    }
+
+    return confirmedPhase;
+  }
+
   /**
    * Find the most popular time from a cluster map.
    */
@@ -370,11 +577,20 @@ export class RemindersService {
     type: 'pickup' | 'return',
     excludeRentalId?: string,
   ): Promise<string> {
-    // Try preferred time
+    // Try preferred time — checkTimeConflict now checks BOTH booking conflicts AND vacation
     const check = await this.calendarService.checkTimeConflict(
       itemName, date, preferredTime, type, excludeRentalId,
     );
     if (!check.conflict) return preferredTime;
+
+    // If vacation conflict returned a suggested alternative, try it first
+    const suggestedAlt = (check as any).suggestedAlternative;
+    if (suggestedAlt) {
+      const altCheck = await this.calendarService.checkTimeConflict(
+        itemName, date, suggestedAlt, type, excludeRentalId,
+      );
+      if (!altCheck.conflict) return suggestedAlt;
+    }
 
     // Fallback times: work backward from evening for pickup, forward from morning for return
     const fallbacks = type === 'pickup'

@@ -8,6 +8,18 @@ export class RenterProfileService {
   constructor(private prisma: PrismaService) {}
 
   /**
+   * Determine loyalty tier based on total rentals.
+   */
+  getLoyaltyTier(totalRentals: number): { tier: string; discountPct: number } | null {
+    // NOTE: discountPct is kept at 0 — Daniel's rules explicitly say "No loyalty discounts"
+    // Tiers are for recognition/personalization only, NOT for offering discounts
+    if (totalRentals >= 7) return { tier: 'Gold', discountPct: 0 };
+    if (totalRentals >= 4) return { tier: 'Silver', discountPct: 0 };
+    if (totalRentals >= 2) return { tier: 'Bronze', discountPct: 0 };
+    return null;
+  }
+
+  /**
    * Find an existing renter profile or create a new one.
    * Deduplicates by hygglo_user_id first, then fuzzy name match.
    */
@@ -160,10 +172,20 @@ export class RenterProfileService {
         update: {},
       });
 
-      // Increment total_rentals on the profile
+      // Get rental price to track total spend
+      const rental = await this.prisma.rental.findUnique({
+        where: { id: rentalId },
+        select: { rental_price: true },
+      });
+      const rentalPrice = rental?.rental_price || 0;
+
+      // Increment total_rentals and total_spend on the profile
       await this.prisma.renter_profile.update({
         where: { id: profileId },
-        data: { total_rentals: { increment: 1 } },
+        data: {
+          total_rentals: { increment: 1 },
+          ...(rentalPrice > 0 ? { total_spend: { increment: rentalPrice } } : {}),
+        },
       });
     } catch (error) {
       // Ignore if already linked
@@ -328,6 +350,14 @@ export class RenterProfileService {
     parts.push(`--- RENTER PROFILE: ${profile.name} ---`);
     parts.push(`Total rentals: ${profile.total_rentals}`);
     parts.push(`First seen: ${profile.first_seen_at.toISOString().split('T')[0]}`);
+
+    // Loyalty tier
+    const loyalty = this.getLoyaltyTier(profile.total_rentals);
+    if (loyalty) {
+      parts.push(`Loyalty tier: ${loyalty.tier} (valued returning customer)`);
+      parts.push(`Total spend: £${Math.round(profile.total_spend)}`);
+      parts.push(`RETURNING CUSTOMER: Acknowledge their loyalty naturally ("Welcome back!" or "Good to see you again"). Do NOT offer loyalty discounts — there are no loyalty/repeat-customer discounts. Standard pricing applies.`);
+    }
 
     if (profile.verification_status !== 'unknown') {
       parts.push(`Verification: ${profile.verification_status}`);

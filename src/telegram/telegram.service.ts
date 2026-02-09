@@ -24,6 +24,76 @@ import { RecommendationService } from '../recommendations/recommendation.service
 import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
 import { AutolearnService } from '../autolearn/autolearn.service';
 import { CorrectionDetectorService } from '../autolearn/correction-detector.service';
+import { HyggloAccount } from '../hygglo/hygglo.service';
+
+// --- Consolidated rental notification types ---
+export type RentalSectionType =
+  | 'new_rental' | 'message_processed' | 'message_blocked' | 'quality_alert'
+  | 'availability_conflict' | 'same_day_block' | 'verification_block'
+  | 'review_block' | 'availability_block' | 'auto_accept_failed'
+  | 'blacklist' | 'scam' | 'damage' | 'verification_failure'
+  | 'pipeline_error' | 'info';
+
+export interface RentalNotificationSection {
+  type: RentalSectionType;
+  priority: 'critical' | 'high' | 'normal';
+  data: Record<string, any>;
+}
+
+export interface RentalNotificationMeta {
+  rentalTitle?: string;
+  renterName?: string;
+  account?: string;
+  profit?: string;
+  startDate?: Date;
+  endDate?: Date;
+  days?: number;
+}
+
+interface RentalNotifBufferEntry {
+  sections: RentalNotificationSection[];
+  timer: NodeJS.Timeout;
+  meta: RentalNotificationMeta;
+}
+
+export interface DecisionOption {
+  label: string;
+  emoji: string;
+  intent: string;
+  aiInstruction: string;
+}
+
+export interface DecisionPromptConfig {
+  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag';
+  rentalId: string;
+  listingId: string;
+  account: HyggloAccount;
+  renterName: string;
+  renterLastMessage: string;
+  contextSummary: string;
+  displayText: string;
+  options: DecisionOption[];
+  holdMessageSent: boolean;
+  recommendedReply?: string;
+}
+
+interface PendingDecision {
+  id: string;
+  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag';
+  telegramMessageId: number;
+  rentalId: string;
+  listingId: string;
+  account: HyggloAccount;
+  renterName: string;
+  renterLastMessage: string;
+  contextSummary: string;
+  displayText: string;
+  options: DecisionOption[];
+  createdAt: number;
+  resolved: boolean;
+  holdMessageSent: boolean;
+  recommendedReply?: string;
+}
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -47,6 +117,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly NOTIF_DEDUP_WINDOW_MS = 30 * 60 * 1000; // suppress identical notifications for 30 min
   private readonly NOTIF_MIN_INTERVAL_MS = 1500; // min 1.5s between sends
   private readonly NOTIF_MAX_PER_MINUTE = 5; // max 5 notifications per minute
+
+  // --- Consolidated rental notification buffer ---
+  private rentalNotifBuffer = new Map<string, RentalNotifBufferEntry>();
+  private readonly RENTAL_NOTIF_BUFFER_MS = 3000;
+
+  // --- Dashboard activity log (ring buffer) ---
+  private activityLog: Array<{
+    id: number;
+    timestamp: string;
+    type: RentalSectionType;
+    priority: 'critical' | 'high' | 'normal';
+    rentalTitle?: string;
+    renterName?: string;
+    account?: string;
+    summary: string;
+  }> = [];
+  private activityLogCounter = 0;
+  private readonly ACTIVITY_LOG_MAX = 200;
+
+  // --- Interactive decision system ---
+  private pendingDecisions = new Map<string, PendingDecision>();
+  private awaitingCustomReply = new Map<string, string>(); // ownerChatId → decisionId
+  private decisionCounter = 0;
+  private readonly DECISION_EXPIRY_MS = 4 * 60 * 60 * 1000; // 4 hours
 
   // Unified renter chat state (replaces separate renter bot)
   private renterChatHistories = new Map<string, { role: 'user' | 'assistant'; content: string }[]>();
@@ -99,8 +193,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Failed to clear webhook: ${err.message}`);
     }
 
-    // Now start polling
-    await this.bot.startPolling();
+    // Wait for previous instance's polling connection to fully expire
+    // This prevents 409 restart loops that kill the systemd service
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Start polling with retry — if 409 persists, wait and retry up to 5 times
+    let pollingStarted = false;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await this.bot.startPolling();
+        pollingStarted = true;
+        break;
+      } catch (err) {
+        if (err.message?.includes('409') && attempt < 5) {
+          this.logger.warn(`Telegram 409 on startup attempt ${attempt}/5 — waiting ${attempt * 3}s for previous instance to release...`);
+          await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+        } else {
+          throw err;
+        }
+      }
+    }
+    if (!pollingStarted) {
+      this.logger.error('Failed to start Telegram polling after 5 attempts');
+      return;
+    }
 
     this.bot.on('polling_error', (err: any) => {
       // Suppress 409 Conflict logs — they're transient during restart
@@ -120,6 +236,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     this.registerCommands();
     this.registerConversationHandler();
+
+    // Interactive decision system: handle inline keyboard button presses
+    this.bot.on('callback_query', (query: any) => this.handleCallbackQuery(query));
+
+    // Cleanup expired decisions every 30 minutes
+    setInterval(() => this.cleanupExpiredDecisions(), 30 * 60 * 1000);
 
     this.logger.log('Telegram bot is polling for updates (unified: owner + renter)');
   }
@@ -239,44 +361,357 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Account tag
-    const accountLabel = this.getAccountLabel(rental.account);
-    const accountTag = accountLabel ? `[${accountLabel}] ` : '';
+    const meta = await this.buildRentalMeta(rental);
 
-    // Period
-    const startStr = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '?';
-    const endStr = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '?';
-    const days = rental.start_date && rental.end_date
-      ? Math.ceil((new Date(rental.end_date).getTime() - new Date(rental.start_date).getTime()) / (1000 * 60 * 60 * 24))
-      : 0;
+    await this.sendRentalUpdate(
+      rental.id || rental.listing_id,
+      { type: 'new_rental', priority: 'normal', data: {} },
+      meta,
+    );
+  }
 
-    // Earnings: show owner earnings (after Hygglo fees), not renter total
+  /**
+   * Build standard rental metadata (profit, dates, account) for consolidated notifications.
+   * Profit = owner earnings after platform fees. Estimated from catalog if no booking yet.
+   */
+  async buildRentalMeta(rental: any): Promise<RentalNotificationMeta> {
     const curr = rental.currency === 'SEK' ? 'kr' : '£';
-    let earningsStr = '?';
+    let profitStr: string | undefined;
     try {
       const bookingRevenue = await this.prisma.booking.aggregate({
         where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
         _sum: { revenue: true },
       });
       if (bookingRevenue._sum.revenue) {
-        earningsStr = `${curr}${bookingRevenue._sum.revenue}`;
+        profitStr = `${curr}${bookingRevenue._sum.revenue}`;
       } else {
-        // Fallback: estimate owner earnings as ~64% of renter total
+        // No booking yet — estimate profit from rental_price or extracted items
         const rentalPrice = rental.rental_price || rental.rentalPrice;
-        if (rentalPrice) earningsStr = `~${curr}${Math.round(rentalPrice * 0.64)}`;
+        if (rentalPrice) {
+          profitStr = `~${curr}${Math.round(rentalPrice * 0.64)}`;
+        } else {
+          // Estimate from extracted items (1-day catalog price × 64%)
+          profitStr = await this.estimateProfitFromItems(rental.id, curr);
+        }
       }
     } catch {
       const rentalPrice = rental.rental_price || rental.rentalPrice;
-      if (rentalPrice) earningsStr = `~${curr}${Math.round(rentalPrice * 0.64)}`;
+      if (rentalPrice) profitStr = `~${curr}${Math.round(rentalPrice * 0.64)}`;
     }
 
-    const lines = [
-      `📦 ${accountTag}*${rental.title}*`,
-      `👤 ${rental.renter_info || 'N/A'}`,
-      `💰 ${earningsStr} · 📅 ${startStr}–${endStr} (${days}d)`,
-    ];
+    // Hygglo dates are INCLUSIVE (both start and end are rental days): days = diff + 1
+    const days = rental.start_date && rental.end_date
+      ? Math.max(1, Math.round((new Date(rental.end_date).getTime() - new Date(rental.start_date).getTime()) / (1000 * 60 * 60 * 24)) + 1)
+      : 0;
 
-    await this.sendProactiveMessage(lines.join('\n'));
+    return {
+      rentalTitle: rental.title,
+      renterName: rental.renter_info || undefined,
+      account: rental.account,
+      profit: profitStr,
+      startDate: rental.start_date ? new Date(rental.start_date) : undefined,
+      endDate: rental.end_date ? new Date(rental.end_date) : undefined,
+      days: days || undefined,
+    };
+  }
+
+  /**
+   * Estimate profit from extracted items when no booking/price exists yet.
+   * Uses 1-day catalog price × ~64% (after platform fees).
+   */
+  private async estimateProfitFromItems(rentalId: string, curr: string): Promise<string | undefined> {
+    try {
+      const items = await this.prisma.extracteditem.findMany({
+        where: { rental_id: rentalId },
+        select: { item_name: true },
+      });
+      if (items.length === 0) return undefined;
+
+      const { PRICING_CATALOG } = await import('../data/pricing-catalog.js');
+      let total = 0;
+      for (const item of items) {
+        const entry = PRICING_CATALOG.find((p: any) => p.item_name.toLowerCase() === item.item_name.toLowerCase());
+        total += entry ? entry.daily_price_max : 25;
+      }
+      const profit = Math.round(total * 0.64);
+      return `~${curr}${profit}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Structured rental notification API. Buffers sections for 3s and sends ONE consolidated message.
+   * Critical-priority sections (blacklist, scam) bypass buffer and send immediately.
+   */
+  async sendRentalUpdate(
+    rentalId: string | number,
+    section: RentalNotificationSection,
+    meta?: RentalNotificationMeta,
+  ): Promise<void> {
+    const key = String(rentalId);
+
+    // Record to activity log for dashboard
+    this.recordActivity(section, meta);
+
+    // Critical → flush any pending buffer, then send standalone immediately
+    if (section.priority === 'critical') {
+      // Flush existing buffer first so ordering is preserved
+      if (this.rentalNotifBuffer.has(key)) {
+        await this.flushRentalBuffer(key);
+      }
+      const standalone: RentalNotifBufferEntry = {
+        sections: [section],
+        timer: null as any,
+        meta: meta || {},
+      };
+      const text = this.formatConsolidatedNotification(standalone);
+      await this.sendProactiveMessage(text, 'Markdown', { force: true });
+      return;
+    }
+
+    // Normal/high → add to buffer
+    const existing = this.rentalNotifBuffer.get(key);
+    if (existing) {
+      existing.sections.push(section);
+      // Merge meta (don't overwrite existing values with undefined)
+      if (meta) {
+        for (const [k, v] of Object.entries(meta)) {
+          if (v !== undefined && !(existing.meta as any)[k]) {
+            (existing.meta as any)[k] = v;
+          }
+        }
+      }
+    } else {
+      // First section for this rental — start timer (timer is NOT reset on subsequent sections)
+      const timer = setTimeout(() => this.flushRentalBuffer(key), this.RENTAL_NOTIF_BUFFER_MS);
+      this.rentalNotifBuffer.set(key, {
+        sections: [section],
+        timer,
+        meta: meta || {},
+      });
+    }
+  }
+
+  /**
+   * Flush buffered sections for a rental into one consolidated Telegram message.
+   */
+  private async flushRentalBuffer(key: string): Promise<void> {
+    const entry = this.rentalNotifBuffer.get(key);
+    if (!entry) return;
+
+    clearTimeout(entry.timer);
+    this.rentalNotifBuffer.delete(key);
+
+    if (entry.sections.length === 0) return;
+
+    const text = this.formatConsolidatedNotification(entry);
+    await this.sendProactiveMessage(text, 'Markdown');
+  }
+
+  /**
+   * Record an activity event to the in-memory ring buffer for the dashboard.
+   */
+  private recordActivity(section: RentalNotificationSection, meta?: RentalNotificationMeta): void {
+    const summaryMap: Partial<Record<RentalSectionType, (d: Record<string, any>) => string>> = {
+      new_rental: () => 'New rental request',
+      message_processed: (d) => d.renterMsg ? `"${String(d.renterMsg).substring(0, 60)}"` : 'Message processed',
+      message_blocked: (d) => `Blocked: ${d.violations || 'policy violation'}`,
+      quality_alert: (d) => `Quality ${d.score || '?'} — ${d.details || 'review needed'}`,
+      availability_conflict: (d) => `Overbooked: ${d.overbookedItems || d.item || '?'}`,
+      same_day_block: () => 'Same-day — manual approval needed',
+      verification_block: (d) => `Verification: ${d.status || 'pending'}`,
+      review_block: () => 'Review escalation — manual review',
+      availability_block: (d) => `${d.item || 'Item'} unavailable`,
+      auto_accept_failed: (d) => `Auto-accept failed: ${d.error || '?'}`,
+      blacklist: (d) => `BLACKLIST: ${d.entry || d.reason || '?'}`,
+      scam: (d) => `SCAM: ${d.pattern || '?'} (${d.score || '?'})`,
+      damage: (d) => `Damage: ${d.score || '?'}% — ${d.issues || '?'}`,
+      verification_failure: (d) => `Verification failed ${d.count || '?'}x`,
+      pipeline_error: (d) => `Error: ${d.error || d.message || '?'}`,
+      info: (d) => d.text || 'Info',
+    };
+
+    const summarizer = summaryMap[section.type];
+    const summary = summarizer ? summarizer(section.data) : section.type;
+
+    this.activityLog.push({
+      id: ++this.activityLogCounter,
+      timestamp: new Date().toISOString(),
+      type: section.type,
+      priority: section.priority,
+      rentalTitle: meta?.rentalTitle,
+      renterName: meta?.renterName,
+      account: meta?.account,
+      summary,
+    });
+
+    // Trim to max size
+    if (this.activityLog.length > this.ACTIVITY_LOG_MAX) {
+      this.activityLog = this.activityLog.slice(-this.ACTIVITY_LOG_MAX);
+    }
+  }
+
+  /**
+   * Get recent activity entries for the dashboard.
+   */
+  getRecentActivity(limit = 50, account?: string): typeof this.activityLog {
+    let log = this.activityLog;
+    if (account) {
+      log = log.filter(e => e.account === account);
+    }
+    return log.slice(-limit).reverse();
+  }
+
+  /**
+   * Render buffered sections into a single formatted notification.
+   */
+  private formatConsolidatedNotification(entry: RentalNotifBufferEntry): string {
+    const m = entry.meta;
+    const lines: string[] = [];
+
+    // --- Header ---
+    const accountLabel = this.getAccountLabel(m.account);
+    const accountTag = accountLabel ? `[${accountLabel}] ` : '';
+    const title = m.rentalTitle || 'Unknown';
+    lines.push(`📦 ${accountTag}${title}`);
+
+    // Second header line: renter · profit · dates
+    const headerParts: string[] = [];
+    if (m.renterName) headerParts.push(`👤 ${m.renterName}`);
+    if (m.profit) headerParts.push(`💰 ${m.profit}`);
+    if (m.startDate && m.endDate) {
+      const fmt = (d: Date) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      const days = m.days || Math.max(1, Math.round((new Date(m.endDate).getTime() - new Date(m.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+      headerParts.push(`📅 ${fmt(m.startDate)}–${fmt(m.endDate)} (${days}d)`);
+    }
+    if (headerParts.length > 0) lines.push(headerParts.join(' · '));
+
+    lines.push(''); // blank line after header
+
+    // --- Sort sections by display priority ---
+    const displayOrder: Record<RentalSectionType, number> = {
+      new_rental: 0, message_processed: 1, message_blocked: 2, quality_alert: 3,
+      same_day_block: 4, availability_conflict: 5, availability_block: 6,
+      verification_block: 7, review_block: 8, auto_accept_failed: 9,
+      pipeline_error: 10, verification_failure: 11, damage: 12, info: 13,
+      blacklist: 14, scam: 15,
+    };
+    const sorted = [...entry.sections].sort((a, b) => (displayOrder[a.type] ?? 99) - (displayOrder[b.type] ?? 99));
+
+    for (const s of sorted) {
+      const d = s.data;
+      switch (s.type) {
+        case 'new_rental':
+          // Header already covers this — only add extra info if present
+          if (d.extraInfo) lines.push(`ℹ️ ${d.extraInfo}`);
+          break;
+
+        case 'message_processed': {
+          const msg = d.renterMsg ? `"${String(d.renterMsg).substring(0, 300)}${String(d.renterMsg).length > 300 ? '...' : ''}"` : '';
+          const reply = d.botReply ? String(d.botReply).substring(0, 500) : '';
+          if (msg) lines.push(`💬 ${msg}`);
+          if (reply) lines.push(`🤖 ${reply}${String(d.botReply || '').length > 500 ? '...' : ''}${d.status ? '\n📋 ' + d.status : ''}`);
+          break;
+        }
+
+        case 'message_blocked': {
+          const msg = d.renterMsg ? `"${String(d.renterMsg).substring(0, 300)}${String(d.renterMsg).length > 300 ? '...' : ''}"` : '';
+          if (msg) lines.push(`💬 ${msg}`);
+          lines.push(`🚫 Response BLOCKED: ${d.violations || 'validation failed'}`);
+          if (d.botReply) lines.push(`🤖 Blocked: "${String(d.botReply).substring(0, 500)}${String(d.botReply).length > 500 ? '...' : ''}"`);
+          lines.push(`↪️ Reply manually`);
+          break;
+        }
+
+        case 'quality_alert': {
+          const msg = d.renterMsg ? `"${String(d.renterMsg).substring(0, 300)}${String(d.renterMsg).length > 300 ? '...' : ''}"` : '';
+          if (msg) lines.push(`💬 ${msg}`);
+          const scoreStr = d.qualityScore?.overallQuality != null
+            ? ` ${(d.qualityScore.overallQuality as number).toFixed(2)}`
+            : '';
+          const details = d.qualityDetails || '';
+          lines.push(`⚠️ Quality${scoreStr}${details ? ' (' + details + ')' : ''}`);
+          if (d.botReply) lines.push(`🤖 "${String(d.botReply).substring(0, 500)}${String(d.botReply).length > 500 ? '...' : ''}"`);
+          if (d.status) lines.push(`↪️ ${d.status}`);
+          break;
+        }
+
+        case 'availability_conflict':
+          if (Array.isArray(d.overbookedItems)) {
+            for (const item of d.overbookedItems) {
+              lines.push(`🚨 OVERBOOKED: ${item.item_name} ${item.maxQuantity - item.availableSlots}/${item.maxQuantity} booked`);
+            }
+          } else {
+            lines.push(`🚨 OVERBOOKED — manual review needed`);
+          }
+          break;
+
+        case 'same_day_block':
+          lines.push(`⏰ Same-day — needs manual approval`);
+          break;
+
+        case 'verification_block':
+          lines.push(`🔐 Verification: ${d.status || 'incomplete'} — auto-accept blocked`);
+          break;
+
+        case 'review_block':
+          lines.push(`⚠️ Review escalation — manual review needed`);
+          break;
+
+        case 'availability_block':
+          lines.push(`❌ ${d.itemName || 'Item'} unavailable — auto-accept blocked`);
+          break;
+
+        case 'auto_accept_failed':
+          lines.push(`❌ Auto-accept failed: ${d.error || 'unknown'} — accept manually`);
+          break;
+
+        case 'pipeline_error':
+          lines.push(`❌ Pipeline error: ${d.error || 'unknown'}`);
+          break;
+
+        case 'verification_failure':
+          lines.push(`⚠️ Verification failed ${d.attemptCount || '?'}x — alternatives sent`);
+          break;
+
+        case 'damage': {
+          const score = d.damageScore != null ? `${(d.damageScore * 100).toFixed(0)}%` : '?';
+          const issues = d.issues || d.detected_issues?.join(', ') || 'General wear';
+          lines.push(`📸 Damage: ${score} — ${issues}`);
+          if (d.severity) lines.push(`├ Severity: ${d.severity.toUpperCase()}`);
+          if (d.damageCharge) lines.push(`├ Recommended charge: £${d.damageCharge}`);
+          if (d.recommendation) lines.push(`├ ${String(d.recommendation).substring(0, 150)}`);
+          if (d.checkoutScore != null && d.returnScore != null) {
+            lines.push(`├ Checkout: ${(d.checkoutScore * 100).toFixed(0)}% → Return: ${(d.returnScore * 100).toFixed(0)}%`);
+          }
+          break;
+        }
+
+        case 'blacklist':
+          lines.push(`🚫 BLACKLIST MATCH`);
+          if (d.matchedEntry) lines.push(`⚠️ Matched: ${d.matchedEntry}${d.reason ? ' — ' + d.reason : ''}`);
+          lines.push(`Polite decline sent`);
+          break;
+
+        case 'scam': {
+          const label = d.severity === 'confirmed_scam' ? '🚨 CONFIRMED SCAM'
+            : d.severity === 'likely_scam' ? '🚨 LIKELY SCAM'
+            : '⚠️ Suspicious';
+          lines.push(`${label} (score: ${d.score || '?'})`);
+          if (d.pattern) lines.push(`🔍 Pattern: ${d.pattern}`);
+          if (d.message) lines.push(`💬 "${String(d.message).substring(0, 120)}"`);
+          if (d.action) lines.push(`↪️ ${d.action}`);
+          break;
+        }
+
+        case 'info':
+          lines.push(`ℹ️ ${d.text || ''}`);
+          break;
+      }
+    }
+
+    return lines.join('\n');
   }
 
   private getAccountLabel(account?: string): string {
@@ -284,6 +719,373 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (account === 'dbcinema') return 'DB Cinema';
     if (account === 'leo') return 'Leo Adams';
     return account;
+  }
+
+  // --- Interactive Decision System ---
+
+  /**
+   * Send an interactive decision prompt to the owner with inline keyboard buttons.
+   * Returns the decision ID for tracking.
+   */
+  async sendDecisionPrompt(config: DecisionPromptConfig): Promise<string> {
+    const id = `D${++this.decisionCounter}`;
+
+    // Build inline keyboard rows: option buttons + custom reply button
+    const optionButtons = config.options.map((opt, idx) => ({
+      text: `${opt.emoji} ${opt.label}`,
+      callback_data: `dec:${id}:${idx}`,
+    }));
+
+    // Split into rows of 2 buttons max for readability
+    const rows: any[][] = [];
+    for (let i = 0; i < optionButtons.length; i += 2) {
+      rows.push(optionButtons.slice(i, i + 2));
+    }
+    // Recommended reply button (if pre-drafted reply available)
+    if (config.recommendedReply) {
+      const truncated = config.recommendedReply.length > 50
+        ? config.recommendedReply.substring(0, 47) + '...'
+        : config.recommendedReply;
+      rows.push([{ text: `\ud83d\udca1 "${truncated}"`, callback_data: `dec:${id}:recommended` }]);
+    }
+    rows.push([{ text: '\u270d\ufe0f Custom reply', callback_data: `dec:${id}:custom` }]);
+
+    // Append recommended reply preview to the display text
+    const fullDisplayText = config.recommendedReply
+      ? `${config.displayText}\n\n\ud83d\udca1 *Recommended reply:*\n"${config.recommendedReply.substring(0, 300)}${config.recommendedReply.length > 300 ? '...' : ''}"`
+      : config.displayText;
+
+    let sentMessageId: number;
+    try {
+      const sent = await this.bot.sendMessage(this.ownerChatId, fullDisplayText, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: rows },
+      });
+      sentMessageId = sent.message_id;
+    } catch (error) {
+      // Retry without Markdown if parsing failed
+      if (error.message?.includes("can't parse entities")) {
+        this.logger.warn('Decision prompt Markdown parse failed, retrying as plain text');
+        const plain = fullDisplayText.replace(/[*_`\[]/g, '');
+        const sent = await this.bot.sendMessage(this.ownerChatId, plain, {
+          reply_markup: { inline_keyboard: rows },
+        });
+        sentMessageId = sent.message_id;
+      } else {
+        this.logger.error(`Failed to send decision prompt: ${error.message}`);
+        // Fall back to plain notification
+        await this.sendProactiveMessage(config.displayText, 'Markdown', { force: true });
+        return id;
+      }
+    }
+
+    const decision: PendingDecision = {
+      id,
+      type: config.type,
+      telegramMessageId: sentMessageId,
+      rentalId: config.rentalId,
+      listingId: config.listingId,
+      account: config.account,
+      renterName: config.renterName,
+      renterLastMessage: config.renterLastMessage,
+      contextSummary: config.contextSummary,
+      displayText: config.displayText,
+      options: config.options,
+      createdAt: Date.now(),
+      resolved: false,
+      holdMessageSent: config.holdMessageSent,
+      recommendedReply: config.recommendedReply,
+    };
+
+    this.pendingDecisions.set(id, decision);
+    this.logger.log(`Decision prompt ${id} sent: ${config.type} for rental ${config.rentalId}`);
+    return id;
+  }
+
+  /**
+   * Handle Telegram inline keyboard callback queries for decision buttons.
+   */
+  private async handleCallbackQuery(query: any): Promise<void> {
+    const data = query.data;
+    if (!data?.startsWith('dec:')) return;
+
+    // Always acknowledge the callback immediately
+    try {
+      await this.bot.answerCallbackQuery(query.id);
+    } catch {
+      // Best-effort acknowledgment
+    }
+
+    const parts = data.split(':');
+    if (parts.length < 3) return;
+
+    const decisionId = parts[1];
+    const optionPart = parts[2];
+    const decision = this.pendingDecisions.get(decisionId);
+
+    if (!decision) {
+      try {
+        await this.bot.answerCallbackQuery(query.id, { text: 'Decision expired or not found', show_alert: true });
+      } catch { /* already answered */ }
+      return;
+    }
+
+    if (decision.resolved) {
+      try {
+        await this.bot.answerCallbackQuery(query.id, { text: 'Already resolved', show_alert: true });
+      } catch { /* already answered */ }
+      return;
+    }
+
+    if (optionPart === 'custom') {
+      // Enter custom reply mode
+      this.awaitingCustomReply.set(this.ownerChatId, decisionId);
+      await this.bot.sendMessage(this.ownerChatId, `Type your reply for ${decision.renterName}. Send /cancel_reply to abort.`);
+      return;
+    }
+
+    if (optionPart === 'recommended' && decision.recommendedReply) {
+      // Send pre-drafted recommended reply directly (no AI polishing)
+      decision.resolved = true;
+      const recOption: DecisionOption = { label: 'Recommended reply', emoji: '\ud83d\udca1', intent: 'recommended', aiInstruction: '' };
+      await this.resolveDecision(decision, recOption, decision.recommendedReply, true);
+      return;
+    }
+
+    const optionIndex = parseInt(optionPart, 10);
+    if (isNaN(optionIndex) || optionIndex < 0 || optionIndex >= decision.options.length) return;
+
+    decision.resolved = true;
+    await this.resolveDecision(decision, decision.options[optionIndex]);
+  }
+
+  /**
+   * Resolve a decision: AI-filter Daniel's intent, send polished response to renter via Hygglo.
+   */
+  private async resolveDecision(
+    decision: PendingDecision,
+    chosenOption: DecisionOption,
+    customText?: string,
+    skipPolish?: boolean,
+  ): Promise<void> {
+    const resolveLabel = customText
+      ? `Custom: "${customText.substring(0, 50)}${customText.length > 50 ? '...' : ''}"`
+      : `${chosenOption.emoji} ${chosenOption.label}`;
+
+    try {
+      // Edit the original message to show resolution + remove keyboard
+      const updatedText = `${decision.displayText}\n\n\u2705 *Resolved:* ${resolveLabel}`;
+      try {
+        await this.bot.editMessageText(updatedText, {
+          chat_id: this.ownerChatId,
+          message_id: decision.telegramMessageId,
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [] },
+        });
+      } catch (editErr) {
+        // Fallback: try without Markdown
+        try {
+          const plain = updatedText.replace(/[*_`\[]/g, '');
+          await this.bot.editMessageText(plain, {
+            chat_id: this.ownerChatId,
+            message_id: decision.telegramMessageId,
+            reply_markup: { inline_keyboard: [] },
+          });
+        } catch {
+          this.logger.warn(`Failed to edit decision message: ${editErr.message}`);
+        }
+      }
+
+      // "ignore" intent: skip Hygglo send, just log
+      if (chosenOption.intent === 'ignore') {
+        this.logger.log(`Decision ${decision.id} resolved as IGNORE — no message sent to renter`);
+        await this.logDecision(decision, chosenOption, 'Ignored — no message sent', customText);
+        return;
+      }
+
+      const chatId = `hygglo_${decision.listingId}`;
+      let replyText: string;
+
+      if (skipPolish && customText) {
+        // Recommended reply: send pre-drafted text directly, no AI polishing
+        replyText = customText;
+      } else {
+        // Build AI instruction for polishing Daniel's intent into a customer-friendly reply
+        const aiInstruction = customText
+          ? `Daniel wants to reply with this message to the renter: "${customText}". Polish it into a warm, professional response. Keep Daniel's intent and key details. Do NOT add new information or promises.`
+          : chosenOption.aiInstruction;
+
+        // Load conversation history for context
+        const conversationHistory = await this.memoryService.getConversationHistory(chatId, 6);
+        const rules = await this.rulesService.getCompactRules();
+
+        // AI polish the response
+        const response = await this.aiService.processRoutine(
+          `DECISION CONTEXT: ${decision.contextSummary}\n\nRenter's last message: "${decision.renterLastMessage}"\n\nINSTRUCTION: ${aiInstruction}\n\nWrite ONLY the message to send to the renter. No preamble, no explanation.`,
+          {
+            rules,
+            conversationHistory,
+            additionalContext: `You are responding as ${decision.account === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals'}. Be warm, professional, concise. This is a direct reply to the renter on Hygglo.`,
+            maxTokens: 256,
+          },
+        );
+
+        // Clean up response — strip any AI preamble
+        replyText = response.content.trim();
+        replyText = replyText.replace(/^(here'?s?\s+(the|a|my)\s+(message|response|reply)[:\s]*)/i, '').trim();
+      }
+
+      // Send to renter via Hygglo
+      let sent = false;
+      try {
+        sent = await this.hyggloService.sendMessage(decision.listingId, replyText);
+      } catch (sendErr) {
+        this.logger.warn(`Failed to send decision reply via Hygglo: ${sendErr.message}`);
+      }
+
+      // Store in conversation history
+      if (sent) {
+        await this.memoryService.storeConversation(chatId, 'assistant', replyText, { model: 'system' });
+      }
+
+      const actionTaken = sent
+        ? `Sent to renter: "${replyText.substring(0, 100)}..."`
+        : `Failed to send to renter`;
+
+      // Confirm to Daniel
+      const confirmEmoji = sent ? '\u2705' : '\u274c';
+      await this.bot.sendMessage(
+        this.ownerChatId,
+        `${confirmEmoji} *Sent to ${decision.renterName}:*\n${replyText}`,
+        { parse_mode: 'Markdown' },
+      ).catch(() => {
+        // Retry without markdown
+        this.bot.sendMessage(
+          this.ownerChatId,
+          `${confirmEmoji} Sent to ${decision.renterName}:\n${replyText}`,
+        ).catch(() => {});
+      });
+
+      await this.logDecision(decision, chosenOption, actionTaken, customText);
+
+      // Store decision context as notes on calendar bookings
+      if (chosenOption.intent !== 'ignore' && decision.rentalId) {
+        const noteText = customText
+          ? `Owner approved: ${customText}`
+          : `Owner approved: ${chosenOption.label}`;
+        try {
+          await this.calendarService.addDecisionNotesToBookings(decision.rentalId, noteText);
+        } catch (noteErr) {
+          this.logger.warn(`Failed to add decision notes to bookings: ${noteErr.message}`);
+        }
+      }
+
+      // review_flag: handle post-resolution actions
+      if (decision.type === 'review_flag' && decision.rentalId) {
+        try {
+          if (chosenOption.intent === 'accept_low_rating') {
+            // Clear escalation record so auto-accept can proceed
+            await this.prisma.ai_decision.deleteMany({
+              where: {
+                rental_id: decision.rentalId,
+                decision_type: 'escalate',
+                action_taken: 'review_escalation',
+              },
+            });
+            // Re-enable auto-accept on follow_up_state
+            await this.prisma.follow_up_state.updateMany({
+              where: { rental_id: decision.rentalId },
+              data: { auto_accept_eligible: true },
+            });
+            this.logger.log(`Review flag accepted for rental ${decision.rentalId} — escalation cleared, auto-accept re-enabled`);
+          } else if (chosenOption.intent === 'decline') {
+            // Mark rental as declined
+            await this.prisma.follow_up_state.updateMany({
+              where: { rental_id: decision.rentalId },
+              data: { status: 'declined', auto_accept_eligible: false },
+            });
+            this.logger.log(`Review flag declined for rental ${decision.rentalId}`);
+          }
+          // 'ignore' intent = "Wait & monitor" — keep escalation in place, auto-accept stays blocked
+        } catch (reviewResErr) {
+          this.logger.warn(`Failed to process review_flag resolution: ${reviewResErr.message}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Failed to resolve decision ${decision.id}: ${error.message}`);
+      await this.bot.sendMessage(
+        this.ownerChatId,
+        `Failed to process decision: ${error.message}. You may need to reply manually on Hygglo.`,
+      ).catch(() => {});
+    }
+  }
+
+  /**
+   * Log a decision resolution to the ai_decision table.
+   */
+  private async logDecision(
+    decision: PendingDecision,
+    chosenOption: DecisionOption,
+    actionTaken: string,
+    customText?: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: decision.rentalId || null,
+          decision_type: 'owner_decision',
+          input_summary: `${decision.type}: ${decision.contextSummary.substring(0, 200)}`,
+          output_summary: customText
+            ? `Custom reply: "${customText.substring(0, 200)}"`
+            : `Chose: ${chosenOption.emoji} ${chosenOption.label} (${chosenOption.intent})`,
+          confidence: 1.0,
+          action_taken: actionTaken,
+          notified: true,
+          was_sent: chosenOption.intent !== 'ignore',
+        },
+      });
+    } catch (logErr) {
+      this.logger.warn(`Failed to log decision: ${logErr.message}`);
+    }
+  }
+
+  /**
+   * Cleanup expired decisions — called every 30 minutes.
+   */
+  private cleanupExpiredDecisions(): void {
+    const cutoff = Date.now() - this.DECISION_EXPIRY_MS;
+    for (const [id, decision] of this.pendingDecisions) {
+      if (decision.createdAt < cutoff) {
+        if (!decision.resolved) {
+          // Edit message to show expired
+          this.bot.editMessageText(
+            `${decision.displayText}\n\n\u23f0 *EXPIRED* — no action taken`,
+            {
+              chat_id: this.ownerChatId,
+              message_id: decision.telegramMessageId,
+              parse_mode: 'Markdown',
+              reply_markup: { inline_keyboard: [] },
+            },
+          ).catch(() => {
+            this.bot.editMessageText(
+              `${decision.displayText}\n\nEXPIRED — no action taken`,
+              {
+                chat_id: this.ownerChatId,
+                message_id: decision.telegramMessageId,
+                reply_markup: { inline_keyboard: [] },
+              },
+            ).catch(() => {});
+          });
+        }
+        this.pendingDecisions.delete(id);
+      }
+    }
+    // Also clean up stale awaitingCustomReply entries
+    for (const [chatId, decId] of this.awaitingCustomReply) {
+      if (!this.pendingDecisions.has(decId)) {
+        this.awaitingCustomReply.delete(chatId);
+      }
+    }
   }
 
   // --- Command registration ---
@@ -315,8 +1117,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'blacklisted', description: 'List blacklisted renters' },
       // Phase 2: Demand + Revenue
       { command: 'demand', description: 'Demand report' },
-      { command: 'revenue', description: 'Earnings summary: /revenue [week|month|all]' },
-      { command: 'earnings', description: 'Monthly earnings (alias for /revenue month)' },
+      { command: 'revenue', description: 'Profit summary: /revenue [week|month|all]' },
+      { command: 'earnings', description: 'Monthly profit (alias for /revenue month)' },
       // Phase 3: Reminders + Simulator
       { command: 'today', description: "Today's schedule" },
       { command: 'simulate', description: 'Simulate renter: /simulate <dbcinema|leo>' },
@@ -405,6 +1207,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.onText(/\/autolearn_pause/, (msg: any) => this.handleAutolearnPause(msg));
     this.bot.onText(/\/autolearn_resume/, (msg: any) => this.handleAutolearnResume(msg));
 
+    // Vacation / Owner unavailability
+    this.bot.onText(/\/vacation\s+cancel\s+(\S+)/, (msg: any, match: any) => this.handleVacationCancel(msg, match));
+    this.bot.onText(/\/vacation$/, (msg: any) => this.handleVacationList(msg));
+
     // Renter commands (accessible to non-owner users)
     this.bot.onText(/\/reset$/, (msg: any) => this.handleRenterReset(msg));
     this.bot.onText(/\/account\s+(dbcinema|leo)/, (msg: any, match: any) => this.handleRenterAccount(msg, match));
@@ -422,6 +1228,32 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      // Owner: Custom reply for pending decision
+      const pendingDecisionId = this.awaitingCustomReply.get(String(msg.chat.id));
+      if (pendingDecisionId) {
+        this.awaitingCustomReply.delete(String(msg.chat.id));
+
+        if (msg.text === '/cancel_reply') {
+          await this.bot.sendMessage(msg.chat.id, 'Custom reply cancelled. Decision still pending.');
+          return;
+        }
+
+        const decision = this.pendingDecisions.get(pendingDecisionId);
+        if (decision && !decision.resolved) {
+          decision.resolved = true;
+          const customOption: DecisionOption = {
+            label: 'Custom reply',
+            emoji: '\u270d\ufe0f',
+            intent: 'custom',
+            aiInstruction: '',
+          };
+          await this.resolveDecision(decision, customOption, msg.text);
+        } else {
+          await this.bot.sendMessage(msg.chat.id, 'That decision has already been resolved or expired.');
+        }
+        return;
+      }
+
       // Owner: Improvement mode — classify message as a high-priority rule
       if (this.improvementMode) {
         await this.handleImprovementMessage(msg);
@@ -431,6 +1263,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Owner: Simulation mode — treat owner messages as renter messages
       if (this.simulationMode.active) {
         await this.handleSimulatedConversation(msg);
+        return;
+      }
+
+      // Owner: Detect vacation/unavailability intent and handle directly
+      const vacationIntent = this.parseVacationIntent(msg.text);
+      if (vacationIntent) {
+        await this.handleVacationFromChat(msg, vacationIntent);
         return;
       }
 
@@ -863,11 +1702,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       // MINIMUM FEE + UPSELL CONTEXT
       let discountContext = '';
-      const MINIMUM_RENTAL_FEE = 25;
-      if (estimatedTotal < MINIMUM_RENTAL_FEE && allRelevantItems.length > 0) {
-        discountContext = `\n--- LOW VALUE RENTAL (est. £${estimatedTotal}) ---\nThis is below the £${MINIMUM_RENTAL_FEE} minimum. Naturally suggest relevant add-ons (batteries, memory cards, lenses, mics) that complement what they're renting. NEVER mention a minimum fee — just recommend useful extras.`;
-      } else if (estimatedTotal < 50 && allRelevantItems.length > 0) {
-        discountContext = `\n--- UPSELL OPPORTUNITY (est. £${estimatedTotal}) ---\nSmall order. Suggest relevant accessories naturally — lenses, lights, audio, batteries, cards. Frame as "most people also grab X for this kind of shoot".`;
+      const MIN_PROFIT_THRESHOLD = 30; // £30 profit minimum (≈ £47 listing price after platform fees)
+      const estimatedProfit = Math.round(estimatedTotal * 0.64);
+      if (estimatedProfit < MIN_PROFIT_THRESHOLD && allRelevantItems.length > 0) {
+        discountContext = `\n--- LOW VALUE RENTAL (est. ~£${estimatedProfit} profit) ---\nThis is below the £${MIN_PROFIT_THRESHOLD} profit minimum. Naturally suggest relevant add-ons (batteries, memory cards, lenses, mics) that complement what they're renting. NEVER mention a minimum fee or profit — just recommend useful extras.`;
       } else if (estimatedTotal >= 500) {
         discountContext = `\n--- DISCOUNT ---\nINTERNAL: Top-tier discount applies (auto at checkout). Do NOT reveal percentage.`;
       } else if (estimatedTotal >= 250) {
@@ -904,18 +1742,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         stageContext = `\n--- STAGE: DEAD ---\nRenter has gone quiet. Do NOT send follow-ups (handled automatically). If they re-engage, welcome them back warmly.`;
       } else if (hasConfirmedItems) {
         stageContext = `\n--- STAGE: CONFIRMED ---\nFinal details only. Focus on pickup/return logistics.`;
-      } else if (hasVerificationMention) {
-        stageContext = `\n--- STAGE: AWAITING_VERIFICATION ---\nGuide renter through verification. Be helpful and reassuring.`;
-      } else if (hasBookingRequest) {
-        stageContext = `\n--- STAGE: BOOKING_SENT ---\nBooking requested. Confirm details, mention verification if needed.`;
+      } else if (hasVerificationMention || hasBookingRequest) {
+        stageContext = `\n--- STAGE: BOOKED ---\nBooking in progress. Guide through verification if needed, confirm details.`;
       } else if (hasPricingDiscussed && hasDeliveryDiscussed && !hasConfirmedItems) {
-        stageContext = `\n--- STAGE: BOOKING_READY ---\nPricing AND delivery discussed. IMPORTANT: Guide renter to submit a booking request through Hygglo. Tell them exactly how to proceed.`;
+        stageContext = `\n--- STAGE: READY_TO_BOOK ---\nPricing AND delivery discussed. IMPORTANT: Guide renter to submit a booking request through Hygglo. Tell them exactly how to proceed.`;
       } else if (hasPricingDiscussed && !hasDeliveryDiscussed && !hasConfirmedItems) {
-        stageContext = `\n--- STAGE: QUALIFIED ---\nPricing discussed. Push to booking — ask about dates, pickup/delivery preference.`;
+        stageContext = `\n--- STAGE: READY_TO_BOOK ---\nPricing discussed. Push to booking — ask about dates, pickup/delivery preference.`;
       } else if (msgCount === 0) {
         stageContext = `\n--- STAGE: INQUIRY ---\nFirst message. Welcome warmly, confirm needs, ask about their shoot. MUST ask what the project is for to give better recommendations.`;
       } else if (msgCount <= 2 && !hasPricingDiscussed) {
-        stageContext = `\n--- STAGE: INTEREST ---\nExploring options. Give pricing proactively, suggest bundles. Ask about their shoot/project.`;
+        stageContext = `\n--- STAGE: INTERESTED ---\nExploring options. Give pricing proactively, suggest bundles. Ask about their shoot/project.`;
       }
 
       // SMART CONVERSATION HISTORY: Keep first msg + last 4 exchanges + summarize middle
@@ -971,11 +1807,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         discountContext,
         sameDayContext,
         // CRITICAL BEHAVIORAL RULES (merged from autonomous service)
-        `CRITICAL — CONTEXTUAL RECOMMENDATIONS: If the renter has NOT mentioned what they are shooting, you MUST ask what the project is for (e.g., "What's the shoot for?"). This is essential for recommending the right gear. Once you know the use case, actively suggest complementary items.`,
+        `CRITICAL — CONTEXTUAL RECOMMENDATIONS: Only in EARLY conversation stages (before booking confirmed), if the renter has NOT mentioned what they are shooting, ask casually what the project is for (e.g., "What's the shoot for?"). This helps recommend the right gear. Do NOT ask this during pickup logistics, time confirmations, or after booking is confirmed. Once you know the use case, suggest complementary items naturally.`,
         `CRITICAL — NO DOWNSELLING: NEVER tell a renter they have "enough", are "set", are "all good", or "don't need" something. If they ask what else they might need, suggest relevant accessories — do NOT dismiss the question.`,
         `CRITICAL — RETURNING RENTERS: If conversation history shows familiarity, skip generic welcome. Say "Welcome back!" and get straight to confirming items and dates.`,
         `CRITICAL — WRITING STYLE: Keep messages concise and scannable. Use short paragraphs (2-3 sentences max). Lead with the answer, then add context. Make prices and key info easy to spot.`,
-        `CRITICAL — LOCATION EXCUSES: If the renter asks why an item is not at the advertised listing location, FIRST apologise, THEN use a natural excuse. NEVER reveal all items are at the same place.`,
+        `CRITICAL — LOCATION EXCUSES: When LISTING_LOCATION is non-central, acknowledge their specific location by name, apologise with a varied excuse (out of stock, on a rental, in for service, maintenance, consolidating pickups, all rented out), offer central branch + 10% distance discount, ask if that works or prefer delivery. NEVER reveal all items are at the same place.`,
         accountName === 'leo'
           ? `CRITICAL — LANGUAGE (HIGHEST PRIORITY): You are Leo. ALWAYS use "I" and "my" — say "I've got", "my gear", "my kit", "I can". NEVER say "we" or "our". You are one person, not a business.`
           : `CRITICAL — LANGUAGE (HIGHEST PRIORITY): You are Daniel from DB Cinema Rentals. NEVER say "my gear", "my items", "my equipment". Use "our", "the gear", "the equipment", "we have".`,
@@ -1346,9 +2182,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/blacklist "<name>" <reason> - Blacklist renter\n' +
       '/unblacklist <name> - Remove from blacklist\n' +
       '/blacklisted - List all blacklisted\n\n' +
-      '*Earnings & Demand*\n' +
-      '/revenue [week|month|all] - Earnings summary\n' +
-      '/earnings - Monthly earnings\n' +
+      '*Profit & Demand*\n' +
+      '/revenue [week|month|all] - Profit summary\n' +
+      '/earnings - Monthly profit\n' +
       '/demand - Demand report\n\n' +
       '*Inventory*\n' +
       '/inventory - Full inventory status with quantities & availability\n\n' +
@@ -1370,6 +2206,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/veto <id> [reason] - Veto a pending proposal\n' +
       '/autolearn\\_pause - Pause analysis cycles\n' +
       '/autolearn\\_resume - Resume analysis cycles\n\n' +
+      '*Vacation / Unavailability*\n' +
+      '/vacation - List active unavailability blocks\n' +
+      '/vacation cancel <id> - Cancel an unavailability block\n' +
+      'Or just tell me: "vacation Saturday from 3pm" / "day off tomorrow" / "away Friday"\n\n' +
       '*Chat*\nJust send any message to chat with AI about your rentals.\n' +
       'I also learn from our conversations automatically.',
       { parse_mode: 'Markdown' },
@@ -1672,8 +2512,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      // Use AI to extract a good subject and classify the memory
-      const response = await this.aiService.processRoutine(
+      // Use lightweight AI to extract a good subject and classify the memory
+      const response = await this.aiService.processLightweight(
         `Extract a short subject (3-6 words) and classify this memory.\n` +
         `Memory text: "${text}"\n\n` +
         `Respond ONLY in this exact format:\n` +
@@ -2011,7 +2851,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const report = await this.revenueService.getFormattedRevenue(period);
-      await this.bot.sendMessage(msg.chat.id, `💰 *Earnings Report*\n\n${report}`, { parse_mode: 'Markdown' });
+      await this.bot.sendMessage(msg.chat.id, `💰 *Profit Report*\n\n${report}`, { parse_mode: 'Markdown' });
     } catch (error) {
       await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
     }
@@ -2025,7 +2865,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const report = await this.revenueService.getFormattedRevenue('month');
-      await this.bot.sendMessage(msg.chat.id, `💰 *Earnings This Month*\n\n${report}`, { parse_mode: 'Markdown' });
+      await this.bot.sendMessage(msg.chat.id, `💰 *Profit This Month*\n\n${report}`, { parse_mode: 'Markdown' });
     } catch (error) {
       await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
     }
@@ -2071,7 +2911,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           b.return_time ? `return ${b.return_time}` : null,
         ].filter(Boolean).join(', ');
         const timeStr = timeParts ? ` | ${timeParts}` : '';
-        bookingLines.push(`  ${b.item_name} — ${b.renter_name}: £${b.revenue || 0} earnings${timeStr}`);
+        bookingLines.push(`  ${b.item_name} — ${b.renter_name}: £${b.revenue || 0} profit${timeStr}`);
       }
 
       let response = `📅 *Today's Schedule*\n\n${schedule}`;
@@ -2317,6 +3157,313 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error(`Renter message error: ${error.message}`);
       await this.bot.sendMessage(msg.chat.id, 'Sorry, something went wrong. Try again.');
+    }
+  }
+
+  // === Vacation / Owner Unavailability ===
+
+  /**
+   * Parse natural language vacation intent from owner messages.
+   * Detects: "vacation Saturday from 10:30", "day off tomorrow", "away Friday afternoon", "free from 3pm today"
+   */
+  private parseVacationIntent(text: string): { start_time: Date; end_time: Date | null; reason: string; all_day: boolean } | null {
+    const lower = text.toLowerCase().trim();
+
+    // Trigger words — natural conversational phrases for setting unavailability
+    const triggerPattern = /\b(vacation|day off|away|unavailable|not working|off work|free day|taking off|out of office|holiday|on leave|on break|no pickups|can'?t do pickups|won'?t be around|won'?t be available|i'?m off|going away|stepping out|not around|not in)\b/i;
+    if (!triggerPattern.test(lower)) return null;
+
+    const now = new Date();
+
+    // Detect day reference
+    let targetDate: Date | null = null;
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+    // Check for specific day names
+    for (let i = 0; i < dayNames.length; i++) {
+      if (lower.includes(dayNames[i])) {
+        targetDate = this.getNextDayOfWeek(i);
+        break;
+      }
+    }
+
+    // Check for "today" / "tomorrow"
+    if (lower.includes('today')) {
+      targetDate = new Date(now);
+    } else if (lower.includes('tomorrow')) {
+      targetDate = new Date(now);
+      targetDate.setDate(targetDate.getDate() + 1);
+    }
+
+    // Check for date ordinals like "8th", "15th", "22nd"
+    if (!targetDate) {
+      const ordinalMatch = lower.match(/\b(\d{1,2})(st|nd|rd|th)\b/);
+      if (ordinalMatch) {
+        const dayNum = parseInt(ordinalMatch[1], 10);
+        targetDate = new Date(now);
+        targetDate.setDate(dayNum);
+        // If day is in the past this month, use next month
+        if (targetDate < now) {
+          targetDate.setMonth(targetDate.getMonth() + 1);
+        }
+      }
+    }
+
+    // Check for YYYY-MM-DD or DD/MM format
+    if (!targetDate) {
+      const isoMatch = lower.match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (isoMatch) {
+        targetDate = new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]));
+      }
+    }
+
+    if (!targetDate) return null;
+
+    // Detect time: "from 10:30", "after 3pm", "from 3pm", "at 15:00", "onwards from 10:30"
+    let startHour = 0;
+    let startMin = 0;
+    let hasTime = false;
+
+    const timePatterns = [
+      /(?:from|after|at|starting)\s+(\d{1,2}):(\d{2})\s*(am|pm)?/i,
+      /(?:from|after|at|starting)\s+(\d{1,2})\s*(am|pm)/i,
+      /(\d{1,2}):(\d{2})\s*(am|pm)?\s*(?:onwards|onward)/i,
+      /(\d{1,2})\s*(am|pm)\s*(?:onwards|onward)/i,
+    ];
+
+    for (const pattern of timePatterns) {
+      const match = lower.match(pattern);
+      if (match) {
+        startHour = parseInt(match[1], 10);
+        startMin = match[2] && !['am', 'pm'].includes(match[2].toLowerCase()) ? parseInt(match[2], 10) : 0;
+        const meridiem = match[3] || match[2];
+        if (meridiem && typeof meridiem === 'string') {
+          if (meridiem.toLowerCase() === 'pm' && startHour < 12) startHour += 12;
+          if (meridiem.toLowerCase() === 'am' && startHour === 12) startHour = 0;
+        }
+        hasTime = true;
+        break;
+      }
+    }
+
+    // Detect "afternoon" / "morning" / "evening"
+    if (!hasTime) {
+      if (lower.includes('afternoon')) { startHour = 12; hasTime = true; }
+      else if (lower.includes('morning')) { startHour = 0; hasTime = true; }
+      else if (lower.includes('evening')) { startHour = 17; hasTime = true; }
+    }
+
+    // Detect end time
+    let endTime: Date | null = null;
+    const endTimePatterns = [
+      /(?:until|to|till)\s+(\d{1,2}):(\d{2})\s*(am|pm)?/i,
+      /(?:until|to|till)\s+(\d{1,2})\s*(am|pm)/i,
+    ];
+    for (const pattern of endTimePatterns) {
+      const match = lower.match(pattern);
+      if (match) {
+        let endH = parseInt(match[1], 10);
+        const endM = match[2] && !['am', 'pm'].includes(match[2].toLowerCase()) ? parseInt(match[2], 10) : 0;
+        const endMeridiem = match[3] || match[2];
+        if (endMeridiem && typeof endMeridiem === 'string') {
+          if (endMeridiem.toLowerCase() === 'pm' && endH < 12) endH += 12;
+          if (endMeridiem.toLowerCase() === 'am' && endH === 12) endH = 0;
+        }
+        endTime = new Date(targetDate);
+        endTime.setHours(endH, endM, 0, 0);
+        break;
+      }
+    }
+
+    const allDay = !hasTime;
+    const startTime = new Date(targetDate);
+    if (hasTime) {
+      startTime.setHours(startHour, startMin, 0, 0);
+    } else {
+      startTime.setHours(0, 0, 0, 0);
+    }
+
+    // Extract reason — use the trigger word
+    const reasonMatch = lower.match(triggerPattern);
+    const reason = reasonMatch ? reasonMatch[1] : 'personal';
+
+    return { start_time: startTime, end_time: endTime, reason, all_day: allDay };
+  }
+
+  private getNextDayOfWeek(dayIndex: number): Date {
+    const now = new Date();
+    const current = now.getDay();
+    let daysAhead = dayIndex - current;
+    if (daysAhead <= 0) daysAhead += 7;
+    const target = new Date(now);
+    target.setDate(target.getDate() + daysAhead);
+    return target;
+  }
+
+  /**
+   * Handle vacation intent detected from chat message.
+   */
+  private async handleVacationFromChat(msg: any, intent: { start_time: Date; end_time: Date | null; reason: string; all_day: boolean }) {
+    try {
+      const record = await this.calendarService.createUnavailability({
+        start_time: intent.start_time,
+        end_time: intent.end_time,
+        reason: intent.reason,
+        all_day: intent.all_day,
+      });
+
+      const dayStr = intent.start_time.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
+      let timeDesc: string;
+      if (intent.all_day) {
+        timeDesc = 'all day';
+      } else {
+        const startStr = `${String(intent.start_time.getHours()).padStart(2, '0')}:${String(intent.start_time.getMinutes()).padStart(2, '0')}`;
+        timeDesc = intent.end_time
+          ? `${startStr} to ${String(intent.end_time.getHours()).padStart(2, '0')}:${String(intent.end_time.getMinutes()).padStart(2, '0')}`
+          : `${startStr} onwards`;
+      }
+
+      // Check for booking conflicts
+      const conflicts = await this.getVacationConflicts(intent.start_time, intent.end_time);
+      let conflictWarning = '';
+      if (conflicts.length > 0) {
+        conflictWarning = `\n\n⚠️ *Booking conflicts:*\n`;
+        for (const c of conflicts) {
+          conflictWarning += `- ${c.item_name} (${c.renter_name}) pickup ${c.pickup_time || 'TBC'} / return ${c.return_time || 'TBC'}\n`;
+        }
+        conflictWarning += `\nThese renters may need their times adjusted.`;
+      }
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `✅ *Unavailability saved*\n\n` +
+        `📅 ${dayStr}\n` +
+        `⏰ ${timeDesc}\n` +
+        `📝 ${intent.reason}\n` +
+        `🔑 ID: \`${record.id.substring(0, 8)}\`\n\n` +
+        `Schedule, auto-assign, and renter AI will respect this.` +
+        conflictWarning,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      this.logger.error(`Vacation save error: ${error.message}`);
+      await this.bot.sendMessage(msg.chat.id, `Failed to save unavailability: ${error.message}`);
+    }
+  }
+
+  /**
+   * Find bookings with pickups/returns overlapping a vacation window.
+   */
+  private async getVacationConflicts(startTime: Date, endTime: Date | null): Promise<any[]> {
+    const dayStart = new Date(startTime);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(startTime);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    // Use actual pickup/return dates when available (pickup_date/return_date > start_date/end_date)
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        OR: [
+          { pickup_date: { gte: dayStart, lte: dayEnd } },
+          { pickup_date: null, start_date: { gte: dayStart, lte: dayEnd } },
+          { return_date: { gte: dayStart, lte: dayEnd } },
+          { return_date: null, end_date: { gte: dayStart, lte: dayEnd } },
+        ],
+      },
+    });
+
+    if (bookings.length === 0) return [];
+
+    // Deduplicate (OR query can match same booking multiple ways)
+    const seen = new Set<string>();
+    const unique = bookings.filter(b => {
+      if (seen.has(b.id)) return false;
+      seen.add(b.id);
+      return true;
+    });
+
+    // Filter to bookings with times overlapping the vacation window
+    const vacStartMin = startTime.getHours() * 60 + startTime.getMinutes();
+    const vacEndMin = endTime ? endTime.getHours() * 60 + endTime.getMinutes() : 24 * 60;
+
+    return unique.filter(b => {
+      // Check pickup time (using actual pickup date when available)
+      const effectivePickupDate = b.pickup_date || b.start_date;
+      if (b.pickup_time && effectivePickupDate >= dayStart && effectivePickupDate <= dayEnd) {
+        const [h, m] = b.pickup_time.split(':').map(Number);
+        const timeMin = h * 60 + m;
+        if (timeMin >= vacStartMin && timeMin <= vacEndMin) return true;
+      }
+      // Check return time (using actual return date when available)
+      const effectiveReturnDate = b.return_date || b.end_date;
+      if (b.return_time && effectiveReturnDate >= dayStart && effectiveReturnDate <= dayEnd) {
+        const [h, m] = b.return_time.split(':').map(Number);
+        const timeMin = h * 60 + m;
+        if (timeMin >= vacStartMin && timeMin <= vacEndMin) return true;
+      }
+      return false;
+    });
+  }
+
+  private async handleVacationList(msg: any) {
+    if (!this.isOwner(msg.chat.id)) {
+      await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
+      return;
+    }
+
+    try {
+      const blocks = await this.calendarService.getActiveUnavailabilities();
+      if (blocks.length === 0) {
+        await this.bot.sendMessage(msg.chat.id, 'No active unavailability blocks.');
+        return;
+      }
+
+      const lines = blocks.map(b => {
+        const dayStr = b.start_time.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+        let timeDesc: string;
+        if (b.all_day) {
+          timeDesc = 'ALL DAY';
+        } else {
+          const startStr = `${String(b.start_time.getHours()).padStart(2, '0')}:${String(b.start_time.getMinutes()).padStart(2, '0')}`;
+          const endStr = b.end_time
+            ? `${String(b.end_time.getHours()).padStart(2, '0')}:${String(b.end_time.getMinutes()).padStart(2, '0')}`
+            : 'onwards';
+          timeDesc = `${startStr} ${endStr === 'onwards' ? 'onwards' : `to ${endStr}`}`;
+        }
+        return `\`${b.id.substring(0, 8)}\` ${dayStr} ${timeDesc}${b.reason ? ` (${b.reason})` : ''}`;
+      });
+
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `*Active Unavailability Blocks*\n\n${lines.join('\n')}\n\nCancel: /vacation cancel <id>`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+    }
+  }
+
+  private async handleVacationCancel(msg: any, match: any) {
+    if (!this.isOwner(msg.chat.id)) {
+      await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
+      return;
+    }
+
+    try {
+      const partialId = match[1];
+      const cancelled = await this.calendarService.cancelUnavailability(partialId);
+      if (!cancelled) {
+        await this.bot.sendMessage(msg.chat.id, 'No matching active unavailability block found.');
+        return;
+      }
+      await this.bot.sendMessage(
+        msg.chat.id,
+        `✅ Unavailability block \`${cancelled.id.substring(0, 8)}\` cancelled.`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (error) {
+      await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
     }
   }
 
@@ -2568,13 +3715,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const health = await this.dspyService.getHealth();
 
       if (!this.dspyService.isEnabled()) {
+        // Even when DSPy is disabled, show AI performance stats
+        const aiStats = await this.getAiPerformanceStats();
         await this.bot.sendMessage(
           msg.chat.id,
-          `*DSPy Prompt Optimizer*\n\n` +
-          `├ Status: Disabled\n` +
-          `└ Set DSPY\\_ENABLED=true in .env to enable\n\n` +
-          `_Start the Python service:_\n` +
-          '`cd python-services/dspy-optimizer && source venv/bin/activate && python app.py`',
+          `*AI Performance Dashboard*\n\n` +
+          `⚡ DSPy: Disabled\n\n` +
+          aiStats +
+          `\n_Set DSPY\\_ENABLED=true to enable DSPy optimization._`,
           { parse_mode: 'Markdown' },
         );
         return;
@@ -2592,20 +3740,97 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         `  ├ ${name}: quality ${(data.quality_score != null ? (data.quality_score * 100).toFixed(0) : 'N/A')}%, ${data.training_examples || 0} examples`,
       );
 
+      const aiStats = await this.getAiPerformanceStats();
+
       await this.bot.sendMessage(
         msg.chat.id,
-        `*DSPy Prompt Optimizer*\n\n` +
+        `*AI Performance Dashboard*\n\n` +
+        `*DSPy Optimizer*\n` +
         `├ ${statusEmoji} Service: ${health.healthy ? 'Running' : 'Offline'}\n` +
-        `├ Optimization: ${health.status}\n` +
         `├ Last optimized: ${lastOpt}\n` +
         `├ Training examples: ${health.trainingExamples}\n` +
         `└ Token savings: ${health.tokenSavingsPct}%\n` +
-        (moduleLines.length > 0 ? `\n*Optimized Modules:*\n${moduleLines.join('\n')}\n` : '') +
+        (moduleLines.length > 0 ? `\n*Modules:*\n${moduleLines.join('\n')}\n` : '') +
+        `\n` + aiStats +
         `\n_Use /optimize [rental|pricing|delivery] to run optimization._`,
         { parse_mode: 'Markdown' },
       );
     } catch (error) {
       await this.bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+    }
+  }
+
+  private async getAiPerformanceStats(): Promise<string> {
+    try {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+      // Today's decisions
+      const todayDecisions = await this.prisma.ai_decision.count({
+        where: { created_at: { gte: today }, decision_type: 'message' },
+      });
+      const todaySent = await this.prisma.ai_decision.count({
+        where: { created_at: { gte: today }, decision_type: 'message', was_sent: true },
+      });
+      const todayBlocked = await this.prisma.ai_decision.count({
+        where: { created_at: { gte: today }, decision_type: 'message', was_sent: false },
+      });
+
+      // Quality scores today
+      const todayQuality: { avg: number | null }[] = await this.prisma.$queryRaw`
+        SELECT AVG(rq.overall_quality)::float AS avg
+        FROM response_quality rq
+        JOIN ai_decision ad ON ad.id = rq.ai_decision_id
+        WHERE ad.created_at >= ${today} AND ad.decision_type = 'message'
+      `;
+      const avgQuality = todayQuality[0]?.avg;
+
+      // Weekly trend
+      const weekQuality: { avg: number | null }[] = await this.prisma.$queryRaw`
+        SELECT AVG(rq.overall_quality)::float AS avg
+        FROM response_quality rq
+        JOIN ai_decision ad ON ad.id = rq.ai_decision_id
+        WHERE ad.created_at >= ${weekAgo} AND ad.decision_type = 'message'
+      `;
+      const weekAvg = weekQuality[0]?.avg;
+
+      // Model breakdown today
+      const modelBreakdown: { model: string; cnt: string }[] = await this.prisma.$queryRaw`
+        SELECT
+          CASE
+            WHEN action_taken LIKE '%Sonnet%' THEN 'Sonnet'
+            WHEN action_taken LIKE '%DSPy%' THEN 'DSPy'
+            ELSE 'Haiku'
+          END AS model,
+          COUNT(*)::text AS cnt
+        FROM ai_decision
+        WHERE created_at >= ${today} AND decision_type = 'message'
+        GROUP BY 1 ORDER BY cnt DESC
+      `;
+
+      // Confidence distribution
+      const highConf = await this.prisma.ai_decision.count({
+        where: { created_at: { gte: today }, decision_type: 'message', confidence: { gte: 0.8 } },
+      });
+
+      const qualityStr = avgQuality != null ? `${Math.round(avgQuality * 100)}%` : 'N/A';
+      const weekStr = weekAvg != null ? `${Math.round(weekAvg * 100)}%` : 'N/A';
+      const trendEmoji = avgQuality != null && weekAvg != null
+        ? (avgQuality > weekAvg ? '📈' : avgQuality < weekAvg - 0.02 ? '📉' : '➡️')
+        : '';
+
+      const modelStr = modelBreakdown.map(m => `${m.model}: ${m.cnt}`).join(', ') || 'none';
+      const autoRate = todayDecisions > 0 ? Math.round((todaySent / todayDecisions) * 100) : 0;
+
+      return `*Today's AI Stats*\n` +
+        `├ Messages: ${todayDecisions} (${todaySent} sent, ${todayBlocked} blocked)\n` +
+        `├ Auto-send rate: ${autoRate}%\n` +
+        `├ Avg quality: ${qualityStr} ${trendEmoji} (week: ${weekStr})\n` +
+        `├ High confidence: ${highConf}/${todayDecisions}\n` +
+        `├ Models: ${modelStr}\n`;
+    } catch (err) {
+      return `_Stats unavailable: ${err.message}_\n`;
     }
   }
 

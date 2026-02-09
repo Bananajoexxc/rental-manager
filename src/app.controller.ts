@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Query, Res, Header } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Param, Res, Header, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { Prisma } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AppService } from './app.service';
@@ -11,10 +12,22 @@ import { CalendarService } from './calendar/calendar.service';
 import { BlacklistService } from './blacklist/blacklist.service';
 import { PrismaService } from './prisma/prisma.service';
 import { TelegramService } from './telegram/telegram.service';
+import { RevenueService } from './revenue/revenue.service';
+import { TitleParserService } from './revenue/title-parser.service';
+import { HyggloService } from './hygglo/hygglo.service';
+import { ACCESSORY_ITEMS, isAccessoryItem } from './utils/item-matcher';
+import { LostRevenueService } from './lost-revenue/lost-revenue.service';
+import { AutonomousService } from './autonomous/autonomous.service';
+import { CompetitorIntelService } from './competitor-intel/competitor-intel.service';
+import { MarketReleasesService } from './market/market-releases.service';
+import { ConversationStageService } from './conversation-tree/conversation-stage.service';
+import { ItemMatcherAiService } from './item-matcher-ai/item-matcher-ai.service';
 
 @ApiTags('Health')
 @Controller()
 export class AppController {
+  private readonly logger = new Logger(AppController.name);
+
   constructor(
     private readonly appService: AppService,
     private readonly aiService: AiService,
@@ -24,6 +37,15 @@ export class AppController {
     private readonly blacklistService: BlacklistService,
     private readonly prisma: PrismaService,
     private readonly telegramService: TelegramService,
+    private readonly revenueService: RevenueService,
+    private readonly titleParserService: TitleParserService,
+    private readonly hyggloService: HyggloService,
+    private readonly lostRevenueService: LostRevenueService,
+    private readonly competitorIntelService: CompetitorIntelService,
+    private readonly marketReleasesService: MarketReleasesService,
+    private readonly autonomousService: AutonomousService,
+    private readonly conversationStageService: ConversationStageService,
+    private readonly itemMatcherAi: ItemMatcherAiService,
   ) {}
 
   // In-memory session store for renter chat testing
@@ -64,192 +86,241 @@ export class AppController {
     description:
       'Returns the health status of the service including uptime, scanner state, and authentication status',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'Health status retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        status: { type: 'string', example: 'healthy' },
-        uptime: { type: 'number', example: 3600 },
-        timestamp: { type: 'string', example: '2026-01-29T12:00:00.000Z' },
-        scanner: {
-          type: 'object',
-          properties: {
-            isScanning: { type: 'boolean', example: false },
-            currentScanInterval: { type: 'number', example: 60000 },
-            lastActivityTime: { type: 'string', example: '2026-01-29T11:55:00.000Z' },
-            authenticated: { type: 'boolean', example: true },
-          },
-        },
-      },
-    },
-  })
+  @ApiResponse({ status: 200, description: 'Health status retrieved successfully' })
   async getHealth() {
     return await this.appService.getHealthStatus();
   }
 
   @Get('scanner/status')
   @ApiTags('Scanner')
-  @ApiOperation({
-    summary: 'Scanner status',
-    description:
-      'Returns detailed status information about the rental scanner including scan intervals and activity tracking',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Scanner status retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        isScanning: { type: 'boolean', example: false },
-        currentScanInterval: { type: 'number', example: 60000 },
-        lastActivityTime: { type: 'string', example: '2026-01-29T11:55:00.000Z' },
-        authenticated: { type: 'boolean', example: true },
-      },
-    },
-  })
+  @ApiOperation({ summary: 'Scanner status' })
+  @ApiResponse({ status: 200, description: 'Scanner status retrieved successfully' })
   getScannerStatus() {
     return this.appService.getScannerStatus();
   }
 
   @Get('rentals/stats')
   @ApiTags('Rentals')
-  @ApiOperation({
-    summary: 'Rental statistics',
-    description: 'Returns statistics about tracked rentals including counts by status',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Rental statistics retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        total: { type: 'number', example: 42 },
-        ongoing: { type: 'number', example: 15 },
-        upcoming: { type: 'number', example: 27 },
-      },
-    },
-  })
-  async getRentalStats() {
-    return await this.appService.getRentalStats();
+  @ApiOperation({ summary: 'Rental statistics (uses booking data grouped by rental)' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Rental statistics retrieved successfully' })
+  async getRentalStats(@Query('account') account?: string) {
+    // Forward to booking stats for backward compat — rental-level counts come from bookings now
+    const stats = await this.appService.getBookingStats(account || undefined);
+    return {
+      total: stats.activeRentals,
+      ongoing: stats.ongoingRentals,
+      upcoming: stats.upcomingRentals,
+    };
+  }
+
+  @Get('bookings/stats')
+  @ApiTags('Bookings')
+  @ApiOperation({ summary: 'Booking statistics with profit data' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Booking stats with today/week profit' })
+  async getBookingStats(@Query('account') account?: string) {
+    return await this.appService.getBookingStats(account || undefined);
+  }
+
+  @Get('bookings/by-stage')
+  @ApiTags('Bookings')
+  @ApiOperation({ summary: 'Bookings by funnel stage' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Stage distribution counts' })
+  async getBookingsByStage(@Query('account') account?: string) {
+    return await this.appService.getBookingsByStage(account || undefined);
   }
 
   @Get('rentals/recent')
   @ApiTags('Rentals')
-  @ApiOperation({
-    summary: 'Recent rentals',
-    description: 'Returns the most recently tracked rental listings',
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    type: Number,
-    description: 'Number of rentals to return (default: 10, max: 100)',
-    example: 10,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Recent rentals retrieved successfully',
-    schema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', example: '123e4567-e89b-12d3-a456-426614174000' },
-          listing_id: { type: 'string', example: 'hygglo_12345' },
-          title: { type: 'string', example: 'Vintage Camera Equipment' },
-          status: { type: 'string', example: 'ongoing' },
-          created_at: { type: 'string', example: '2026-01-29T12:00:00.000Z' },
-          updated_at: { type: 'string', example: '2026-01-29T12:00:00.000Z' },
-        },
-      },
-    },
-  })
-  async getRecentRentals(@Query('limit') limit?: string) {
+  @ApiOperation({ summary: 'Recent rentals' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Recent rentals retrieved successfully' })
+  async getRecentRentals(@Query('limit') limit?: string, @Query('account') account?: string) {
     const parsed = parseInt(limit || '10', 10);
     const limitNum = Math.min(Number.isNaN(parsed) ? 10 : Math.max(1, parsed), 100);
-    return await this.appService.getRecentRentals(limitNum);
+    return await this.appService.getRecentRentals(limitNum, account || undefined);
   }
 
   @Get('items/recent')
   @ApiTags('Items')
-  @ApiOperation({
-    summary: 'Recently extracted items',
-    description: 'Returns the most recently extracted items from rental photos',
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    type: Number,
-    description: 'Number of items to return (default: 20, max: 100)',
-    example: 20,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Recent items retrieved successfully',
-    schema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', example: '123e4567-e89b-12d3-a456-426614174000' },
-          item_name: { type: 'string', example: 'camera' },
-          source: { type: 'string', example: 'photo' },
-          confidence_score: { type: 'number', example: 0.95 },
-          created_at: { type: 'string', example: '2026-01-29T12:00:00.000Z' },
-          rental: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', example: 'Vintage Camera Equipment' },
-              listing_id: { type: 'string', example: 'hygglo_12345' },
-            },
-          },
-        },
-      },
-    },
-  })
-  async getRecentItems(@Query('limit') limit?: string) {
+  @ApiOperation({ summary: 'Recently extracted items' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Recent items retrieved successfully' })
+  async getRecentItems(@Query('limit') limit?: string, @Query('account') account?: string) {
     const parsed = parseInt(limit || '20', 10);
     const limitNum = Math.min(Number.isNaN(parsed) ? 20 : Math.max(1, parsed), 100);
-    return await this.appService.getRecentItems(limitNum);
+    return await this.appService.getRecentItems(limitNum, account || undefined);
   }
 
   @Get('items/catalog')
   @ApiTags('Items')
-  @ApiOperation({
-    summary: 'Item catalog',
-    description: 'Returns the catalog of items extracted from listing descriptions',
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    type: Number,
-    description: 'Number of catalog items to return (default: 50, max: 100)',
-    example: 50,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Item catalog retrieved successfully',
-    schema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', example: '123e4567-e89b-12d3-a456-426614174000' },
-          listing_id: { type: 'string', example: 'hygglo_12345' },
-          item_name: { type: 'string', example: 'tripod' },
-          description: { type: 'string', example: 'Professional camera tripod...' },
-          first_seen_at: { type: 'string', example: '2026-01-29T12:00:00.000Z' },
-        },
-      },
-    },
-  })
+  @ApiOperation({ summary: 'Item catalog' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Item catalog retrieved successfully' })
   async getItemCatalog(@Query('limit') limit?: string) {
     const parsed = parseInt(limit || '50', 10);
     const limitNum = Math.min(Number.isNaN(parsed) ? 50 : Math.max(1, parsed), 100);
     return await this.appService.getItemCatalog(limitNum);
   }
+
+  @Get('debug/item-match')
+  @ApiTags('Debug')
+  @ApiOperation({ summary: 'Compare AI vs legacy item matching' })
+  @ApiQuery({ name: 'title', required: true, type: String })
+  @ApiExcludeEndpoint()
+  async debugItemMatch(@Query('title') title: string) {
+    return await this.itemMatcherAi.debugMatch(title || '');
+  }
+
+  // --- Revenue/Profit endpoints ---
+
+  @Get('revenue/weekly')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Weekly profit totals' })
+  @ApiQuery({ name: 'weeks', required: false, type: Number })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Weekly profit data for charts' })
+  async getWeeklyRevenue(@Query('weeks') weeks?: string, @Query('account') account?: string) {
+    const w = Math.min(parseInt(weeks || '8', 10) || 8, 52);
+    return await this.revenueService.getWeeklyTotals(w, account || undefined);
+  }
+
+  @Get('revenue/monthly')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Monthly profit totals' })
+  @ApiQuery({ name: 'months', required: false, type: Number })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Monthly profit data for charts' })
+  async getMonthlyRevenue(@Query('months') months?: string, @Query('account') account?: string) {
+    const m = Math.min(parseInt(months || '6', 10) || 6, 24);
+    return await this.revenueService.getMonthlyTotals(m, account || undefined);
+  }
+
+  @Get('revenue/lifetime')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Lifetime revenue growth (all months from first rental)' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Monthly revenue with cumulative totals for growth chart' })
+  async getLifetimeRevenue(@Query('account') account?: string) {
+    return await this.revenueService.getLifetimeRevenue(account || undefined);
+  }
+
+  @Get('revenue/summary')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Revenue summary for period' })
+  @ApiQuery({ name: 'period', required: false, enum: ['week', 'month', 'all'] })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Revenue summary with account breakdown' })
+  async getRevenueSummary(@Query('period') period?: string, @Query('account') account?: string) {
+    const p = (['week', 'month', 'all'].includes(period || '') ? period : 'month') as 'week' | 'month' | 'all';
+    const acct = account || undefined;
+    const [summary, accounts, topItems] = await Promise.all([
+      this.revenueService.getRevenueForPeriod(p, acct),
+      this.revenueService.getAccountBreakdown(p, acct),
+      this.revenueService.getTopEarningItems(p, acct),
+    ]);
+    return { summary, accounts, topItems };
+  }
+
+  @Get('revenue/top-items')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Top profit items with proportional bundle attribution' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all, or YYYY-MM' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Top earning items' })
+  async getTopItems(
+    @Query('period') period?: string,
+    @Query('account') account?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const p = period || 'month';
+    const l = limit ? parseInt(limit, 10) : 10;
+    return await this.revenueService.getTopEarningItems(p, account || undefined, l);
+  }
+
+  @Get('revenue/items')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Full item revenue breakdown with monthly detail' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all, or YYYY-MM' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'All items with revenue and monthly breakdown' })
+  async getItemRevenue(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.revenueService.getItemRevenueBreakdown(period || '6m', account || undefined);
+  }
+
+  @Get('revenue/projection')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Expected monthly revenue projection' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Current month revenue with projection' })
+  async getMonthlyProjection(@Query('account') account?: string) {
+    return await this.revenueService.getMonthlyProjection(account || undefined);
+  }
+
+  @Get('revenue/ai-boost')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'AI revenue boost estimate (uses weekly self-evaluated rate)' })
+  @ApiQuery({ name: 'period', required: false, enum: ['month', 'year'] })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Estimated additional revenue from AI automation' })
+  async getAiBoost(@Query('period') period?: string, @Query('account') account?: string) {
+    const p = (period === 'year' ? 'year' : 'month') as 'month' | 'year';
+    return await this.revenueService.getAiBoostMetric(p, account || undefined);
+  }
+
+  @Get('revenue/ai-boost/evaluate')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Force re-evaluation of AI boost rate (normally runs weekly)' })
+  @ApiResponse({ status: 200, description: 'Fresh AI boost evaluation results' })
+  async evaluateAiBoost() {
+    return await this.revenueService.evaluateAiPerformance();
+  }
+
+  @Get('revenue/ai-boost/calibrate')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Recalculate AI boost baselines from real data (conversion rate, quality score, response coverage)' })
+  @ApiResponse({ status: 200, description: 'Calibrated baselines with data provenance' })
+  async calibrateAiBoostBaselines() {
+    return await this.revenueService.calibrateBaselines();
+  }
+
+  // --- Calendar ---
+
+  @Get('calendar/bookings')
+  @ApiTags('Calendar')
+  @ApiOperation({ summary: 'Calendar bookings for date range' })
+  @ApiQuery({ name: 'start', required: true, type: String, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'end', required: true, type: String, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Calendar bookings grouped by rental' })
+  async getCalendarBookings(
+    @Query('start') start: string,
+    @Query('end') end: string,
+    @Query('account') account?: string,
+  ) {
+    if (!start || !end) return [];
+    return await this.appService.getCalendarBookings(start, end, account || undefined);
+  }
+
+  // --- Activity feed ---
+
+  @Get('activity/recent')
+  @ApiTags('Activity')
+  @ApiOperation({ summary: 'Recent activity feed from notification system' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Recent activity events' })
+  getRecentActivity(@Query('limit') limit?: string, @Query('account') account?: string) {
+    const l = Math.min(parseInt(limit || '50', 10) || 50, 200);
+    return this.telegramService.getRecentActivity(l, account || undefined);
+  }
+
+  // --- Chat endpoints ---
 
   @Post('api/chat')
   @ApiTags('Chat')
@@ -329,7 +400,25 @@ export class AppController {
         }
       } catch { /* availability lookup optional */ }
 
-      const response = await this.aiService.processRoutine(userMessage, {
+      // Revenue intelligence: lost revenue, ROI scores, item pricing, unmatched demand
+      try {
+        const revenueIntelligence = await this.lostRevenueService.buildAIContext();
+        if (revenueIntelligence) {
+          additionalParts.push(`\n\nREVENUE INTELLIGENCE:\n${revenueIntelligence}`);
+          additionalParts.push('\nUse this data to recommend inventory purchases and advise on business strategy. Confidence: high=strong demand, medium=decent, low=weak.');
+        }
+      } catch { /* revenue intelligence optional */ }
+
+      // Competitor intelligence: competitor catalog, pricing, reviews, market gaps
+      try {
+        const competitorIntelligence = await this.competitorIntelService.buildAIContext();
+        if (competitorIntelligence) {
+          additionalParts.push(`\n\nCOMPETITOR INTELLIGENCE:\n${competitorIntelligence}`);
+          additionalParts.push('\nUse this competitor data for strategic advice only. Compare competitor pricing to our pricing, identify gaps in our inventory, and suggest business moves. This is INTERNAL data — never share competitor details with renters.');
+        }
+      } catch { /* competitor intelligence optional */ }
+
+      const response = await this.aiService.processComplex(userMessage, {
         rules,
         memories,
         conversationHistory: history,
@@ -388,11 +477,864 @@ export class AppController {
     return { status: 'session reset', sessionId };
   }
 
+  // --- Backfill & Cleanup endpoints ---
+
+  /**
+   * Full sync: reconcile active bookings + import all completed history from Hygglo.
+   * 1. Scans Hygglo for REAL ongoing + upcoming → cancels phantom DB bookings
+   * 2. Scans ALL completed bookings (paginated) → imports with ownerEarnings
+   * 3. Updates existing bookings with correct revenue from Hygglo
+   */
+  @Get('sync/full')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Full Hygglo sync: reconcile active bookings + import completed history' })
+  @ApiResponse({ status: 200, description: 'Sync results' })
+  async syncFull() {
+    const accounts = this.hyggloService.getAccounts();
+    const syncResults = {
+      reconcile: { cancelled: 0, kept: 0, details: [] as string[] },
+      completed: { imported: 0, updated: 0, skipped: 0, errors: [] as string[] },
+      byAccount: {} as Record<string, { ongoing: number; upcoming: number; completed: number }>,
+    };
+
+    // ======= STEP 1: Reconcile active bookings against Hygglo =======
+    this.logger.log('=== SYNC STEP 1: Reconciling active bookings ===');
+
+    // Collect REAL active listing_ids from Hygglo (ongoing + upcoming ONLY — pending = unaccepted requests, don't count)
+    const activeListingIds = new Set<string>();
+    for (const account of accounts) {
+      try {
+        const ongoing = await this.hyggloService.scanRentalsForAccountPublic(account.name, 'ongoing');
+        const upcoming = await this.hyggloService.scanRentalsForAccountPublic(account.name, 'upcoming');
+
+        const acctKey = account.name;
+        syncResults.byAccount[acctKey] = {
+          ongoing: ongoing.length,
+          upcoming: upcoming.length,
+          completed: 0,
+        };
+
+        for (const r of [...ongoing, ...upcoming]) {
+          activeListingIds.add(r.listingId);
+        }
+
+        this.logger.log(`Hygglo ${account.name}: ${ongoing.length} ongoing, ${upcoming.length} upcoming`);
+      } catch (err) {
+        this.logger.error(`Failed to scan active for ${account.name}: ${err.message}`);
+      }
+    }
+
+    // Find confirmed bookings whose rental is NOT on Hygglo anymore
+    const allConfirmedBookings = await this.prisma.booking.findMany({
+      where: { status: 'confirmed' },
+      select: { id: true, rental_id: true, item_name: true, renter_name: true, start_date: true, end_date: true },
+    });
+
+    // Get rental listing_id for each booking
+    const rentalIds = [...new Set(allConfirmedBookings.map(b => b.rental_id).filter(Boolean))];
+    const rentals = await this.prisma.rental.findMany({
+      where: { id: { in: rentalIds as string[] } },
+      select: { id: true, listing_id: true },
+    });
+    const rentalToListing = new Map(rentals.map(r => [r.id, r.listing_id]));
+
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    for (const booking of allConfirmedBookings) {
+      if (!booking.rental_id) continue;
+      const listingId = rentalToListing.get(booking.rental_id);
+      if (!listingId) continue;
+
+      if (activeListingIds.has(listingId)) {
+        syncResults.reconcile.kept++;
+      } else {
+        // This booking's rental is not on Hygglo active list — it's either completed or cancelled
+        // If end_date is in the future, it's a phantom booking → cancel it
+        if (booking.end_date >= now) {
+          await this.prisma.booking.update({
+            where: { id: booking.id },
+            data: { status: 'cancelled' },
+          });
+          syncResults.reconcile.cancelled++;
+          syncResults.reconcile.details.push(
+            `Cancelled: ${booking.renter_name} - ${booking.item_name} (${booking.start_date.toISOString().split('T')[0]} → ${booking.end_date.toISOString().split('T')[0]})`,
+          );
+        } else {
+          // Past booking not on Hygglo — it's completed, keep it
+          syncResults.reconcile.kept++;
+        }
+      }
+    }
+
+    this.logger.log(`Reconcile: cancelled ${syncResults.reconcile.cancelled}, kept ${syncResults.reconcile.kept}`);
+
+    // ======= STEP 2: Import completed bookings from Hygglo =======
+    this.logger.log('=== SYNC STEP 2: Importing completed bookings ===');
+
+    for (const account of accounts) {
+      try {
+        const completedRentals = await this.hyggloService.scanCompletedRentalsPaginated(account.name);
+        if (syncResults.byAccount[account.name]) {
+          syncResults.byAccount[account.name].completed = completedRentals.length;
+        }
+
+        this.logger.log(`Hygglo ${account.name}: ${completedRentals.length} completed rentals fetched`);
+
+        for (const rental of completedRentals) {
+          try {
+            if (!rental.startDate || !rental.endDate) {
+              syncResults.completed.skipped++;
+              continue;
+            }
+
+            // Check if rental already exists in DB
+            const existingRental = await this.prisma.rental.findFirst({
+              where: { listing_id: rental.listingId },
+            });
+
+            if (existingRental) {
+              // UPDATE revenue on existing bookings if it changed
+              const ownerEarnings = rental.rentalPrice || 0;
+              if (ownerEarnings > 0) {
+                const existingBookings = await this.prisma.booking.findMany({
+                  where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review'] } },
+                });
+                const mainBookings = existingBookings.filter(b => !isAccessoryItem(b.item_name));
+                const perItem = mainBookings.length > 0 ? Math.round((ownerEarnings / mainBookings.length) * 100) / 100 : ownerEarnings;
+
+                let anyUpdated = false;
+                for (const b of mainBookings) {
+                  if (b.revenue !== perItem) {
+                    await this.prisma.booking.update({
+                      where: { id: b.id },
+                      data: { revenue: perItem, net_profit: perItem, status: 'confirmed' },
+                    });
+                    anyUpdated = true;
+                  }
+                }
+
+                // Also update rental record
+                if (existingRental.rental_price !== ownerEarnings || existingRental.status !== 'completed') {
+                  // Parse items if not already parsed
+                  let parsedUpdate: any = {};
+                  if (!existingRental.parsed_items) {
+                    try {
+                      parsedUpdate.parsed_items = await this.titleParserService.parseTitleWithAI(rental.title) as any;
+                    } catch { /* non-critical */ }
+                  }
+                  await this.prisma.rental.update({
+                    where: { id: existingRental.id },
+                    data: { rental_price: ownerEarnings, status: 'completed', ...parsedUpdate },
+                  });
+                  anyUpdated = true;
+                }
+
+                if (anyUpdated) syncResults.completed.updated++;
+                else syncResults.completed.skipped++;
+              } else {
+                syncResults.completed.skipped++;
+              }
+              continue;
+            }
+
+            // Parse items from title using AI
+            let parsedItems: any = null;
+            try {
+              parsedItems = await this.titleParserService.parseTitleWithAI(rental.title);
+            } catch { /* non-critical */ }
+
+            // CREATE new rental + bookings
+            const savedRental = await this.prisma.rental.create({
+              data: {
+                listing_id: rental.listingId,
+                title: rental.title,
+                status: 'completed',
+                start_date: rental.startDate,
+                end_date: rental.endDate,
+                renter_info: rental.renterInfo || null,
+                listing_url: rental.listingUrl || '',
+                account: rental.account || account.name,
+                rental_price: rental.rentalPrice || null,
+                price_per_day: rental.pricePerDay || null,
+                ...(parsedItems ? { parsed_items: parsedItems } : {}),
+              },
+            });
+
+            // Extract items from detail
+            const itemNames: string[] = [];
+            if (rental._detail?.items && Array.isArray(rental._detail.items)) {
+              for (const item of rental._detail.items) {
+                if (item.type === 'PRODUCT' && item.title) {
+                  itemNames.push(item.title);
+                }
+              }
+            }
+
+            await this.calendarService.createBookingsFromRental(
+              { ...savedRental, rental_price: rental.rentalPrice || savedRental.rental_price },
+              itemNames,
+            );
+
+            syncResults.completed.imported++;
+          } catch (err) {
+            syncResults.completed.errors.push(`${rental.title}: ${err.message}`);
+          }
+        }
+      } catch (err) {
+        syncResults.completed.errors.push(`Account ${account.name}: ${err.message}`);
+      }
+    }
+
+    this.logger.log(`Completed import: ${syncResults.completed.imported} new, ${syncResults.completed.updated} updated, ${syncResults.completed.skipped} skipped`);
+
+    // ======= STEP 3: Reconcile past entries not in Hygglo completed =======
+    this.logger.log('=== SYNC STEP 3: Reconciling phantom revenue entries ===');
+    const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    let totalCancelled = 0;
+
+    for (const account of accounts) {
+      try {
+        const completedRentals = await this.hyggloService.scanCompletedRentalsPaginated(account.name);
+        const completedIds = new Set(completedRentals.map(r => r.listingId));
+
+        const phantomEntries = await this.prisma.rental.findMany({
+          where: {
+            account: account.name,
+            end_date: { lt: cutoffDate },
+            status: { notIn: ['cancelled'] },
+            listing_id: { notIn: [...completedIds] },
+          },
+          select: { id: true, listing_id: true, rental_price: true },
+        });
+
+        for (const entry of phantomEntries) {
+          await this.prisma.rental.update({ where: { id: entry.id }, data: { status: 'cancelled' } });
+          await this.prisma.booking.updateMany({
+            where: { rental_id: entry.id, status: { notIn: ['cancelled'] } },
+            data: { status: 'cancelled' },
+          });
+          totalCancelled++;
+        }
+
+        if (phantomEntries.length > 0) {
+          const phantomRev = phantomEntries.reduce((s, e) => s + Number(e.rental_price || 0), 0);
+          this.logger.warn(`Reconcile ${account.name}: Cancelled ${phantomEntries.length} phantom entries (£${phantomRev.toFixed(0)})`);
+        }
+      } catch (err) {
+        this.logger.error(`Reconcile ${account.name} failed: ${err.message}`);
+      }
+    }
+
+    (syncResults as any).reconcilePhantom = { cancelled: totalCancelled };
+    this.logger.log(`Reconcile: cancelled ${totalCancelled} phantom entries`);
+
+    return syncResults;
+  }
+
+  @Get('revenue/parse-titles')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Backfill AI-parsed items for all rentals missing parsed_items' })
+  @ApiResponse({ status: 200, description: 'Backfill results' })
+  async parseTitles() {
+    return this.titleParserService.backfillParsedItems();
+  }
+
+  @Get('revenue/reanalyze-photos')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Re-run photo vision analysis on all rentals with photos (fixes misidentified items)' })
+  @ApiResponse({ status: 200, description: 'Reanalysis results with before/after changes' })
+  async reanalyzePhotos() {
+    return this.titleParserService.reanalyzeAllPhotos();
+  }
+
+  @Get('backfill/historical')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Backfill historical rentals from Hygglo completed orders (legacy — use /sync/full instead)' })
+  @ApiResponse({ status: 200, description: 'Redirects to full sync' })
+  async backfillHistorical() {
+    return this.syncFull();
+  }
+
+  @Get('cleanup/accessories')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Remove accessory bookings and fix platform fees on existing bookings' })
+  @ApiResponse({ status: 200, description: 'Cleanup results' })
+  async cleanupAccessories() {
+    const accessoryNames = Array.from(ACCESSORY_ITEMS);
+
+    // 1. Find and delete accessory bookings
+    const accessoryBookings = await this.prisma.booking.findMany({
+      where: { item_name: { in: accessoryNames } },
+      select: { id: true, item_name: true, rental_id: true, revenue: true },
+    });
+
+    const deletedCount = accessoryBookings.length;
+    if (deletedCount > 0) {
+      await this.prisma.booking.deleteMany({
+        where: { item_name: { in: accessoryNames } },
+      });
+      this.logger.log(`Deleted ${deletedCount} accessory bookings`);
+    }
+
+    // 2. For rentals that had accessories deleted, redistribute revenue to remaining main items
+    const affectedRentalIds = [...new Set(accessoryBookings.filter(b => b.rental_id).map(b => b.rental_id!))];
+    let redistributed = 0;
+
+    for (const rentalId of affectedRentalIds) {
+      const rental = await this.prisma.rental.findUnique({ where: { id: rentalId } });
+      if (!rental) continue;
+
+      const remainingBookings = await this.prisma.booking.findMany({
+        where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
+      });
+
+      if (remainingBookings.length === 0) continue;
+
+      // Get the actual ownerEarnings from the rental price
+      const totalRevenue = rental.rental_price || 0;
+      const perItemRevenue = Math.round((totalRevenue / remainingBookings.length) * 100) / 100;
+
+      for (const booking of remainingBookings) {
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: {
+            revenue: perItemRevenue > 0 ? perItemRevenue : null,
+            platform_fee: 0,
+            net_profit: perItemRevenue > 0 ? perItemRevenue : null,
+          },
+        });
+      }
+      redistributed++;
+    }
+
+    // 3. Fix platform fees on ALL bookings: net_profit should equal revenue (ownerEarnings already has fees deducted)
+    const allBookingsWithFees = await this.prisma.booking.findMany({
+      where: {
+        revenue: { not: null },
+        OR: [
+          { platform_fee: { not: null, gt: 0 } },
+          { net_profit: { not: null } },
+        ],
+      },
+      select: { id: true, revenue: true, platform_fee: true, net_profit: true },
+    });
+
+    let feesCorrected = 0;
+    for (const b of allBookingsWithFees) {
+      if (b.revenue && (b.platform_fee !== 0 || b.net_profit !== b.revenue)) {
+        await this.prisma.booking.update({
+          where: { id: b.id },
+          data: {
+            platform_fee: 0,
+            net_profit: b.revenue,
+          },
+        });
+        feesCorrected++;
+      }
+    }
+
+    this.logger.log(`Cleanup: ${deletedCount} accessories deleted, ${redistributed} rentals redistributed, ${feesCorrected} fees corrected`);
+    return {
+      accessoriesDeleted: deletedCount,
+      rentalsRedistributed: redistributed,
+      feesFixed: feesCorrected,
+    };
+  }
+
+  @Get('backfill/bookings')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Backfill missing bookings from parsed_items + fetch empty titles from Hygglo' })
+  @ApiResponse({ status: 200, description: 'Backfill results' })
+  async backfillMissingBookings() {
+    const results = {
+      titlesFetched: 0,
+      titlesFailed: 0,
+      itemsParsed: 0,
+      bookingsCreated: 0,
+      rentalsProcessed: 0,
+      skipped: 0,
+    };
+
+    // Step 1: Find rentals with empty titles — fetch from Hygglo API
+    const emptyTitleRentals = await this.prisma.rental.findMany({
+      where: {
+        title: '',
+        status: { in: ['completed', 'ongoing', 'upcoming'] },
+      },
+      select: { id: true, listing_id: true, account: true },
+    });
+
+    this.logger.log(`Backfill: ${emptyTitleRentals.length} rentals with empty titles`);
+
+    for (const rental of emptyTitleRentals) {
+      try {
+        const accountName = (rental.account || 'dbcinema') as 'dbcinema' | 'leo';
+        const detail = await this.hyggloService.getOrderDetailPublic(rental.listing_id, accountName);
+        if (detail) {
+          const rawTitle = detail.labels?.name || detail.title || '';
+          const title = rawTitle.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
+          const updateData: any = {};
+          if (title) updateData.title = title;
+
+          // Also extract renter info if missing
+          if (detail.users?.otherPart?.name) {
+            updateData.renter_info = detail.users.otherPart.name;
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            await this.prisma.rental.update({ where: { id: rental.id }, data: updateData });
+            results.titlesFetched++;
+          }
+        }
+      } catch (err) {
+        this.logger.debug(`Failed to fetch title for ${rental.listing_id}: ${err.message}`);
+        results.titlesFailed++;
+      }
+      // Rate limit: 300ms between requests
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // Step 2: Parse items for rentals that have titles but no parsed_items
+    const unparsedRentals = await this.prisma.rental.findMany({
+      where: {
+        parsed_items: { equals: Prisma.DbNull },
+        title: { not: '' },
+        status: { in: ['completed', 'ongoing', 'upcoming'] },
+      },
+      select: { id: true, title: true },
+    });
+
+    this.logger.log(`Backfill: ${unparsedRentals.length} rentals need item parsing`);
+
+    for (const rental of unparsedRentals) {
+      try {
+        const parsed = await this.titleParserService.parseTitleWithAI(rental.title);
+        if (parsed) {
+          await this.prisma.rental.update({
+            where: { id: rental.id },
+            data: { parsed_items: parsed as any },
+          });
+          results.itemsParsed++;
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // Step 3: Create bookings for all rentals that have parsed_items but no bookings
+    const rentalsNeedingBookings = await this.prisma.$queryRaw<
+      { id: string; title: string; start_date: Date; end_date: Date; renter_info: string; account: string; rental_price: number; status: string; parsed_items: any }[]
+    >`
+      SELECT r.id, r.title, r.start_date, r.end_date, r.renter_info, r.account, r.rental_price, r.status, r.parsed_items
+      FROM rental r
+      WHERE r.status IN ('completed', 'ongoing', 'upcoming')
+        AND r.rental_price > 0
+        AND r.start_date IS NOT NULL
+        AND r.end_date IS NOT NULL
+        AND r.parsed_items IS NOT NULL
+        AND (SELECT COUNT(*) FROM booking b WHERE b.rental_id = r.id AND b.status IN ('confirmed', 'pending_review')) = 0
+    `;
+
+    this.logger.log(`Backfill: ${rentalsNeedingBookings.length} rentals need booking creation`);
+
+    for (const rental of rentalsNeedingBookings) {
+      try {
+        // Extract item names from parsed_items
+        const items: string[] = [];
+        const parsedItems = Array.isArray(rental.parsed_items) ? rental.parsed_items : [];
+        for (const pi of parsedItems) {
+          if (pi.item) {
+            // parsed_items already has MASTER_INVENTORY names, add qty times
+            for (let i = 0; i < (pi.qty || 1); i++) {
+              items.push(pi.item);
+            }
+          }
+        }
+
+        if (items.length === 0) {
+          results.skipped++;
+          continue;
+        }
+
+        const created = await this.calendarService.createBookingsFromRental(rental, items);
+        results.bookingsCreated += created.length;
+        results.rentalsProcessed++;
+      } catch (err) {
+        this.logger.debug(`Backfill booking failed for ${rental.id}: ${err.message}`);
+        results.skipped++;
+      }
+    }
+
+    this.logger.log(`Backfill complete: ${JSON.stringify(results)}`);
+    return results;
+  }
+
+  @Get('backfill/times')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Extract missing pickup/return times from chat history for confirmed bookings' })
+  @ApiResponse({ status: 200, description: 'Extraction results per rental' })
+  async backfillMissingTimes() {
+    // Only check RECENT ongoing/upcoming bookings — never historical
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        end_date: { gte: oneWeekAgo }, // Only ongoing or upcoming (ended within last week or future)
+        OR: [{ pickup_time: null }, { return_time: null }, { pickup_date: null }, { return_date: null }],
+      },
+      select: {
+        id: true, rental_id: true, renter_name: true, pickup_time: true, return_time: true,
+      },
+      distinct: ['rental_id'],
+    });
+
+    const results: { total: number; extracted: number; noTimes: number; failed: number; details: any[] } = {
+      total: bookings.length, extracted: 0, noTimes: 0, failed: 0, details: [],
+    };
+
+    // Process in parallel batches of 5 (fail-safe: each rental isolated)
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < bookings.length; i += BATCH_SIZE) {
+      const batch = bookings.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (b) => {
+          if (!b.rental_id) return { renter: b.renter_name, status: 'no_rental_id' };
+
+          const rental = await this.prisma.rental.findUnique({
+            where: { id: b.rental_id },
+          });
+          if (!rental) return { renter: b.renter_name, status: 'no_rental' };
+
+          const extracted = await this.autonomousService.extractTimesFromChatHistory(rental);
+          if (extracted && (extracted.pickupTime || extracted.returnTime)) {
+            return {
+              renter: b.renter_name,
+              pickup: extracted.pickupTime || b.pickup_time || null,
+              pickupDate: extracted.pickupDate || null,
+              return: extracted.returnTime || b.return_time || null,
+              returnDate: extracted.returnDate || null,
+              status: 'extracted',
+            };
+          }
+          return { renter: b.renter_name, status: 'no_times_in_chat' };
+        }),
+      );
+
+      for (const result of batchResults) {
+        if (result.status === 'fulfilled') {
+          const d = result.value;
+          results.details.push(d);
+          if (d.status === 'extracted') results.extracted++;
+          else if (d.status === 'no_times_in_chat') results.noTimes++;
+          else results.failed++;
+        } else {
+          results.details.push({ status: `error: ${result.reason?.message || 'unknown'}` });
+          results.failed++;
+        }
+      }
+    }
+
+    this.logger.log(`Times backfill: ${results.extracted} extracted, ${results.noTimes} no times, ${results.failed} failed from ${results.total} rentals`);
+    return results;
+  }
+
+  @Get('reconcile/stages')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Reconcile conversation stages with rental status — fixes stuck stages' })
+  @ApiResponse({ status: 200, description: 'Reconciliation results' })
+  async reconcileStages() {
+    // Reassess stages for all active pipeline rentals (matches dashboard funnel scope)
+    const twoWeeksAgo = new Date();
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+
+    const states = await this.prisma.follow_up_state.findMany({
+      where: {
+        status: 'active',
+        rental: {
+          OR: [
+            { status: { in: ['pending', 'upcoming', 'ongoing'] } },
+            { end_date: { gte: twoWeeksAgo } },
+          ],
+        },
+      },
+      select: { rental_id: true, conversation_stage: true },
+    });
+
+    const before: Record<string, number> = {};
+    const after: Record<string, number> = {};
+
+    for (const s of states) {
+      const stage = s.conversation_stage || 'null';
+      before[stage] = (before[stage] || 0) + 1;
+    }
+
+    // Run reassessStage on each — this handles both status-based and conversation-based transitions
+    let changed = 0;
+    for (const s of states) {
+      try {
+        const result = await this.conversationStageService.reassessStage(s.rental_id);
+        if (result.shouldTransition) changed++;
+      } catch (err) {
+        this.logger.warn(`Reconcile failed for ${s.rental_id}: ${err.message}`);
+      }
+    }
+
+    // Get after counts
+    const afterStates = await this.prisma.follow_up_state.findMany({
+      where: {
+        status: 'active',
+        rental: {
+          OR: [
+            { status: { in: ['pending', 'upcoming', 'ongoing'] } },
+            { end_date: { gte: twoWeeksAgo } },
+          ],
+        },
+      },
+      select: { conversation_stage: true },
+    });
+    for (const s of afterStates) {
+      const stage = s.conversation_stage || 'null';
+      after[stage] = (after[stage] || 0) + 1;
+    }
+
+    return { total: states.length, changed, before, after };
+  }
+
+  // --- Lost Revenue endpoints ---
+
+  @Get('lost-revenue/summary')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Lost revenue summary for period' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Lost revenue summary with top denied items (>£25 only)' })
+  async getLostRevenueSummary(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getLostRevenueSummary(period || '3m', account || undefined);
+  }
+
+  @Get('lost-revenue/items')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Denied items breakdown with inventory suggestions' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Per-item denied count and lost revenue (>£25 only)' })
+  async getLostRevenueItems(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getBlockedItemsBreakdown(period || '3m', account || undefined);
+  }
+
+  @Get('lost-revenue/sync')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Manually trigger obsolete booking sync' })
+  @ApiQuery({ name: 'since', required: false, description: 'Days back to scan (default 90)' })
+  @ApiResponse({ status: 200, description: 'Sync results per account' })
+  async syncLostRevenue(@Query('since') since?: string) {
+    const days = parseInt(since || '90', 10) || 90;
+    const accounts = this.hyggloService.getAccounts();
+    const results: Record<string, { imported: number; skipped: number }> = {};
+
+    for (const account of accounts) {
+      try {
+        results[account.name] = await this.lostRevenueService.syncObsoleteBookings(account.name, days);
+      } catch (error) {
+        results[account.name] = { imported: 0, skipped: -1 };
+        this.logger.error(`Lost revenue sync failed for ${account.name}: ${error.message}`);
+      }
+    }
+
+    return results;
+  }
+
+  @Get('lost-revenue/unmatched')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Demand for items we don\'t stock' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Unmatched item demand with estimated revenue' })
+  async getUnmatchedDemand(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getUnmatchedDemand(period || '6m', account || undefined);
+  }
+
+  @Get('revenue/potential')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Investment scorecard with confidence scoring for all items' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Items with confidence score, utilization, and earning potential' })
+  async getRevenuePotential(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getRevenuePotential(period || '6m', account || undefined);
+  }
+
+  @Get('inventory/unavailable')
+  @ApiTags('Inventory')
+  @ApiOperation({ summary: 'Items currently fully booked (all units out)' })
+  @ApiResponse({ status: 200, description: 'Items with all units currently out and return dates' })
+  async getCurrentlyUnavailable() {
+    return await this.lostRevenueService.getCurrentlyUnavailable();
+  }
+
+  // --- Competitor Intelligence endpoints ---
+
+  @Get('competitor-intel/insights')
+  @ApiTags('Competitor Intelligence')
+  @ApiOperation({ summary: 'AI-generated strategic recommendations from competitor data' })
+  @ApiQuery({ name: 'budget', required: false, description: '0-500, 500-2000, or 2000+' })
+  @ApiResponse({ status: 200, description: 'Strategic recommendations (budget-filtered if specified)' })
+  async getCompetitorInsights(@Query('budget') budget?: string) {
+    const validBudgets = ['0-500', '500-2000', '2000+'];
+    if (budget && validBudgets.includes(budget)) {
+      const revenueContext = await this.lostRevenueService.buildAIContext();
+      return await this.competitorIntelService.generateBudgetInsights(budget, revenueContext);
+    }
+    return await this.competitorIntelService.generateInsights();
+  }
+
+  @Get('competitor-intel/catalog')
+  @ApiTags('Competitor Intelligence')
+  @ApiOperation({ summary: 'Competitor listing catalog' })
+  @ApiQuery({ name: 'competitor', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Competitor listings grouped by competitor' })
+  async getCompetitorCatalog(@Query('competitor') competitor?: string) {
+    return await this.competitorIntelService.getCompetitorCatalog(competitor || undefined);
+  }
+
+  @Get('competitor-intel/reviews')
+  @ApiTags('Competitor Intelligence')
+  @ApiOperation({ summary: 'Recent competitor reviews' })
+  @ApiQuery({ name: 'competitor', required: false, type: String })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Competitor reviews' })
+  async getCompetitorReviews(
+    @Query('competitor') competitor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const l = Math.min(parseInt(limit || '20', 10) || 20, 100);
+    return await this.competitorIntelService.getCompetitorReviews(competitor || undefined, l);
+  }
+
+  @Get('competitor-intel/summary')
+  @ApiTags('Competitor Intelligence')
+  @ApiOperation({ summary: 'Aggregate competitor stats and market gaps' })
+  @ApiResponse({ status: 200, description: 'Competitor summary with market gaps' })
+  async getCompetitorSummary() {
+    return await this.competitorIntelService.getCompetitorSummary();
+  }
+
+  @Get('competitor-intel/sync')
+  @ApiTags('Competitor Intelligence')
+  @ApiOperation({ summary: 'Manually trigger competitor data scrape + insight generation' })
+  @ApiResponse({ status: 200, description: 'Sync results' })
+  async syncCompetitorIntel() {
+    const scraped = await this.competitorIntelService.scrapeCompetitorListings();
+    const reviews = await this.competitorIntelService.scrapeCompetitorReviews();
+
+    // Force regeneration with fresh data (both old format and all budget tiers)
+    const revenueContext = await this.lostRevenueService.buildAIContext();
+    const [insights] = await Promise.all([
+      this.competitorIntelService.generateInsights(true),
+      this.competitorIntelService.generateBudgetInsights('0-500', revenueContext, true),
+      this.competitorIntelService.generateBudgetInsights('500-2000', revenueContext, true),
+      this.competitorIntelService.generateBudgetInsights('2000+', revenueContext, true),
+    ]);
+
+    return {
+      scraped,
+      reviews,
+      insights: insights.recommendations.length > 0,
+    };
+  }
+
+  @Get('market-releases/insights')
+  @ApiTags('Market Intelligence')
+  @ApiOperation({ summary: 'Latest market release opportunities' })
+  @ApiResponse({ status: 200, description: 'New product opportunities based on similar item performance' })
+  async getMarketReleaseInsights() {
+    return await this.marketReleasesService.getLatestInsights();
+  }
+
+  @Get('market-releases/scan')
+  @ApiTags('Market Intelligence')
+  @ApiOperation({ summary: 'Manually trigger market release scan (monthly cron)' })
+  @ApiResponse({ status: 200, description: 'Scan results' })
+  async triggerMarketReleaseScan() {
+    await this.marketReleasesService.monthlyReleaseScan();
+    return await this.marketReleasesService.getLatestInsights();
+  }
+
+  // --- Vacation Mode ---
+
+  @Get('vacation/upcoming')
+  @ApiTags('Vacation')
+  @ApiOperation({ summary: 'Upcoming owner unavailability blocks (up to 3)' })
+  @ApiResponse({ status: 200, description: 'Upcoming vacation blocks' })
+  async getUpcomingVacation() {
+    const now = new Date();
+    const blocks = await this.prisma.owner_unavailability.findMany({
+      where: {
+        active: true,
+        OR: [
+          { end_time: { gte: now } },
+          { end_time: null, start_time: { gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) } },
+        ],
+      },
+      orderBy: { start_time: 'asc' },
+      take: 3,
+    });
+
+    return blocks.map(b => ({
+      id: b.id,
+      startTime: b.start_time,
+      endTime: b.end_time,
+      reason: b.reason,
+      allDay: b.all_day,
+    }));
+  }
+
+  // --- Return Hub ---
+
+  @Get('rentals/ongoing')
+  @ApiTags('Return Hub')
+  @ApiOperation({ summary: 'Ongoing rentals for return processing' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Ongoing rentals ready for return' })
+  async getOngoingRentals(@Query('account') account?: string) {
+    return await this.appService.getOngoingRentals(account || undefined);
+  }
+
+  @Post('rentals/:id/return')
+  @ApiTags('Return Hub')
+  @ApiOperation({ summary: 'Process a rental return' })
+  @ApiResponse({ status: 200, description: 'Return processed' })
+  async processReturn(
+    @Param('id') id: string,
+    @Body() body: { outcome: 'good' | 'issues'; blacklist?: boolean; reason?: string },
+  ) {
+    return await this.appService.processReturn(id, body);
+  }
+
+  @Post('rentals/:id/send-thankyou')
+  @ApiTags('Return Hub')
+  @ApiOperation({ summary: 'Manually send thank you + review request' })
+  @ApiResponse({ status: 200, description: 'Thank you sent' })
+  async sendThankYou(@Param('id') id: string) {
+    return await this.appService.sendThankYou(id);
+  }
+
   @Get('dashboard')
   @ApiExcludeEndpoint()
   @Header('Content-Type', 'text/html')
   getDashboard(@Res() res: Response) {
-    const htmlPath = path.join(__dirname, 'public', 'dashboard.html');
+    const htmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
+    const html = fs.readFileSync(htmlPath, 'utf-8');
+    res.send(html);
+  }
+
+  @Get('dashboard/mobile')
+  @ApiExcludeEndpoint()
+  @Header('Content-Type', 'text/html')
+  getMobileDashboard(@Res() res: Response) {
+    const htmlPath = path.join(__dirname, '..', 'public', 'dashboard-mobile.html');
     const html = fs.readFileSync(htmlPath, 'utf-8');
     res.send(html);
   }

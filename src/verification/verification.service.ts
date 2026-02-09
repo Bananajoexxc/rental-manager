@@ -209,11 +209,31 @@ export class VerificationService {
     // Mark as guided
     await this.renterProfileService.markVerificationGuidanceSent(renterProfileId);
 
+    // Calculate urgency based on rental start date
+    let urgencyPrefix = '';
+    if (rental.start_date) {
+      const hoursUntilStart = (new Date(rental.start_date).getTime() - Date.now()) / (1000 * 60 * 60);
+      if (hoursUntilStart > 0 && hoursUntilStart <= 24) {
+        urgencyPrefix = 'Your rental starts tomorrow — verification is needed before we can hand over gear. ';
+      } else if (hoursUntilStart > 0 && hoursUntilStart <= 48) {
+        urgencyPrefix = 'Since your rental is coming up soon, best to complete verification now so we don\'t run into any delays. ';
+      }
+    }
+
+    const rentalDates = rental.start_date
+      ? new Date(rental.start_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+      : 'your dates';
+
     const guidanceMessage =
-      `Just a heads up - the platform requires identity verification before the rental can be confirmed. ` +
-      `It's a quick process: you'll need to upload a photo of your ID (driving licence or passport) ` +
-      `through the app. Once verified, I can accept the booking right away. ` +
-      `Let me know if you need any help with it!`;
+      `${urgencyPrefix}Just a heads up — the platform requires identity verification before the rental can go through. ` +
+      `This usually takes a few minutes but can sometimes take longer depending on the checks needed. ` +
+      `To keep things moving smoothly, best to get it done now:\n` +
+      `1. Open the Hygglo app\n` +
+      `2. Upload a clear photo of your driving licence or passport\n` +
+      `3. Follow the prompts — it's usually quick\n\n` +
+      `Once verified, I can confirm the booking straight away. ` +
+      `The sooner you complete it, the sooner we can lock everything in for ${rentalDates}. ` +
+      `Let me know if you hit any issues!`;
 
     this.logger.log(`Verification guidance prepared for rental ${rental.title}`);
     return guidanceMessage;
@@ -260,13 +280,10 @@ export class VerificationService {
       `If it's still not working, feel free to get in touch with the platform's support and they'll sort it out.`;
 
     // Notify Daniel of persistent verification issue
-    await this.telegramService.sendProactiveMessage(
-      `⚠️ *Verification Failures (${attemptCount}x)*\n\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-      `├ ❌ ${attemptCount} failed attempts\n` +
-      `└ Suggested alternatives sent`,
-    );
+    await this.telegramService.sendRentalUpdate(rental.id, {
+      type: 'verification_failure', priority: 'normal',
+      data: { attemptCount },
+    }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
 
     this.logger.log(`Verification failure guidance prepared for rental ${rental.title} (${attemptCount} attempts)`);
     return failureMessage;
@@ -329,14 +346,10 @@ export class VerificationService {
       `Can you check your app and complete the verification? Once it's done, we're good to go!`;
 
     // Urgent notification to Daniel
-    await this.telegramService.sendProactiveMessage(
-      `🚨 *ON MY WAY - VERIFICATION INCOMPLETE*\n\n` +
-      `├ 📦 ${rental.title}\n` +
-      `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-      `├ 🔐 Status: ${profile.verification_status}\n` +
-      `└ ⛔ Renter says they're coming but not verified!\n\n` +
-      `_Handover block message queued_`,
-    );
+    await this.telegramService.sendRentalUpdate(rental.id, {
+      type: 'info', priority: 'high',
+      data: { text: `ON MY WAY but not verified (${profile.verification_status}) — handover blocked` },
+    }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
 
     this.logger.warn(`On-my-way during verification: ${rental.title} (status: ${profile.verification_status})`);
     return warningMessage;

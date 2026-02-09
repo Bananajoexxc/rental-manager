@@ -45,14 +45,14 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   { item_name: 'Cinebloom filter mist', weight_kg: 0.1, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 4, size_score: 1, is_heavy_large: false, courier_note: 'Filter pouch, tiny', category: 'accessory' },
   { item_name: '256GB card', weight_kg: 0.01, packed_length_cm: 8, packed_width_cm: 6, packed_height_cm: 2, size_score: 1, is_heavy_large: false, courier_note: 'SD card in case, pocket-sized', category: 'accessory' },
   { item_name: 'CF Express Type A card', weight_kg: 0.01, packed_length_cm: 8, packed_width_cm: 6, packed_height_cm: 2, size_score: 1, is_heavy_large: false, courier_note: 'Card in case, pocket-sized', category: 'accessory' },
-  { item_name: 'Camera flash', weight_kg: 0.3, packed_length_cm: 15, packed_width_cm: 10, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Small pouch, fits in backpack', category: 'lighting' },
+  { item_name: 'Camera flash', weight_kg: 0.5, packed_length_cm: 15, packed_width_cm: 10, packed_height_cm: 8, size_score: 1, is_heavy_large: false, courier_note: 'Small pouch, fits in backpack', category: 'lighting' },
   { item_name: 'Tilta Nucleus Nano 2 follow focus', weight_kg: 0.3, packed_length_cm: 18, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small case, fits in backpack', category: 'accessory' },
-  { item_name: 'Sony NPF 970 batteries 2x sets', weight_kg: 0.4, packed_length_cm: 16, packed_width_cm: 10, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Battery case, fits in pocket', category: 'power' },
+  { item_name: 'Sony NPF 970 batteries 2x sets', weight_kg: 0.5, packed_length_cm: 16, packed_width_cm: 10, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Battery case, fits in pocket', category: 'power' },
   { item_name: '5-in-1 reflector panel', weight_kg: 0.5, packed_length_cm: 35, packed_width_cm: 35, packed_height_cm: 3, size_score: 1, is_heavy_large: false, courier_note: 'Folds flat, fits in bag', category: 'lighting' },
-  { item_name: 'PL to Sony E mount', weight_kg: 0.2, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
-  { item_name: 'PL to EF mount', weight_kg: 0.2, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
-  { item_name: 'PL to RF mount', weight_kg: 0.2, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
-  { item_name: 'PL to L mount', weight_kg: 0.2, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
+  { item_name: 'PL to Sony E mount', weight_kg: 0.25, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
+  { item_name: 'PL to EF mount', weight_kg: 0.25, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
+  { item_name: 'PL to RF mount', weight_kg: 0.25, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
+  { item_name: 'PL to L mount', weight_kg: 0.25, packed_length_cm: 12, packed_width_cm: 12, packed_height_cm: 6, size_score: 1, is_heavy_large: false, courier_note: 'Small adapter in pouch', category: 'accessory' },
 
   // ── S (score 2) - Motorcycle OK ──
   { item_name: 'Sony FX3', weight_kg: 0.7, packed_length_cm: 25, packed_width_cm: 18, packed_height_cm: 15, size_score: 2, is_heavy_large: false, courier_note: 'Camera body in padded case', category: 'camera' },
@@ -72,9 +72,9 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   { item_name: 'Anamorphic Blazar Remus 45mm', weight_kg: 0.9, packed_length_cm: 22, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
   { item_name: 'Anamorphic Blazar Remus 65mm', weight_kg: 0.9, packed_length_cm: 22, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
   { item_name: 'Anamorphic Blazar Remus 100mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
-  { item_name: 'Anamorphic Great Joy 35mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
-  { item_name: 'Anamorphic Great Joy 50mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
-  { item_name: 'Anamorphic Great Joy 85mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
+  { item_name: 'Anamorphic Great Joy lens 35mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
+  { item_name: 'Anamorphic Great Joy lens 50mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
+  { item_name: 'Anamorphic Great Joy lens 85mm', weight_kg: 1.0, packed_length_cm: 24, packed_width_cm: 12, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Anamorphic lens in case', category: 'lens' },
   { item_name: 'DJI Mini 4 Pro', weight_kg: 0.3, packed_length_cm: 25, packed_width_cm: 20, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: 'Compact drone in carry case', category: 'drone' },
   { item_name: 'DJI Osmo Action Pro 5', weight_kg: 0.2, packed_length_cm: 15, packed_width_cm: 10, packed_height_cm: 8, size_score: 2, is_heavy_large: false, courier_note: 'Tiny action cam in case', category: 'camera' },
   { item_name: 'GoPro 12 Hero', weight_kg: 0.2, packed_length_cm: 15, packed_width_cm: 10, packed_height_cm: 8, size_score: 2, is_heavy_large: false, courier_note: 'Tiny action cam in case', category: 'camera' },
@@ -86,7 +86,7 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   { item_name: 'Rode Video Mic Pro Plus', weight_kg: 0.2, packed_length_cm: 22, packed_width_cm: 8, packed_height_cm: 8, size_score: 2, is_heavy_large: false, courier_note: 'On-camera mic in case', category: 'audio' },
   { item_name: 'V-mount 95mAh', weight_kg: 0.7, packed_length_cm: 18, packed_width_cm: 10, packed_height_cm: 8, size_score: 2, is_heavy_large: false, courier_note: 'Battery in case', category: 'power' },
   { item_name: 'V-mount 150mAh', weight_kg: 1.0, packed_length_cm: 20, packed_width_cm: 12, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: 'Battery set in case', category: 'power' },
-  { item_name: 'DJI gimbal battery', weight_kg: 0.2, packed_length_cm: 14, packed_width_cm: 6, packed_height_cm: 6, size_score: 2, is_heavy_large: false, courier_note: 'Small battery in pouch', category: 'power' },
+  { item_name: 'DJI gimbal battery', weight_kg: 0.3, packed_length_cm: 14, packed_width_cm: 6, packed_height_cm: 6, size_score: 2, is_heavy_large: false, courier_note: 'Small battery grip in pouch', category: 'power' },
   { item_name: 'Suction cups', weight_kg: 0.5, packed_length_cm: 20, packed_width_cm: 15, packed_height_cm: 10, size_score: 2, is_heavy_large: false, courier_note: 'Suction mount in bag', category: 'accessory' },
 
   // ── S (score 2) - Motorcycle OK (fits in bike carrier when packed) ──
@@ -116,8 +116,8 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   // ── XL (score 5) - Van territory ──
   { item_name: 'DJ RX3 Pioneer controller', weight_kg: 5.5, packed_length_cm: 70, packed_width_cm: 45, packed_height_cm: 20, size_score: 5, is_heavy_large: true, courier_note: 'Large DJ controller in flight case, van if with speakers', category: 'dj' },
   { item_name: 'Smoke machine fogger', weight_kg: 4.0, packed_length_cm: 40, packed_width_cm: 30, packed_height_cm: 25, size_score: 2, is_heavy_large: false, courier_note: 'Fogger fits in bike carrier bag', category: 'effects' },
-  { item_name: 'Smoke Ninja Pro hazer', weight_kg: 3.0, packed_length_cm: 35, packed_width_cm: 25, packed_height_cm: 20, size_score: 2, is_heavy_large: false, courier_note: 'Compact hazer fits in bike carrier', category: 'effects' },
-  { item_name: 'Smoke Ninja', weight_kg: 1.5, packed_length_cm: 25, packed_width_cm: 15, packed_height_cm: 15, size_score: 2, is_heavy_large: false, courier_note: 'Compact hazer fits easily in bike carrier', category: 'effects' },
+  { item_name: 'Smoke Ninja Pro hazer', weight_kg: 1.0, packed_length_cm: 25, packed_width_cm: 15, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Compact hazer kit in small case, fits in bike carrier', category: 'effects' },
+  { item_name: 'Smoke Ninja', weight_kg: 0.8, packed_length_cm: 22, packed_width_cm: 12, packed_height_cm: 10, size_score: 1, is_heavy_large: false, courier_note: 'Pocket-sized hazer, fits in backpack', category: 'effects' },
 
   // ══════════════════════════════════════════════════════════════
   // BUNDLE / COMBO DELIVERY SPECS
@@ -331,11 +331,3 @@ export function getDeliverySpec(itemName: string): DeliverySpec | undefined {
   );
 }
 
-/** Format all delivery specs as text for AI context */
-export function formatDeliverySpecsForAI(): string {
-  const lines = DELIVERY_SPECS.map((s) => {
-    const tag = s.is_heavy_large ? ' [HEAVY/LARGE]' : '';
-    return `- ${s.item_name}: ${s.weight_kg}kg, ${s.packed_length_cm}x${s.packed_width_cm}x${s.packed_height_cm}cm, score ${s.size_score}/5${tag} -- ${s.courier_note}`;
-  });
-  return `=== DELIVERY ITEM SPECS ===\n${lines.join('\n')}`;
-}

@@ -132,7 +132,7 @@ export class MarketService {
       `4. Any competitive concerns\n` +
       `Keep it concise and actionable.`;
 
-    const response = await this.aiService.processRoutine(prompt, {});
+    const response = await this.aiService.processLightweight(prompt, {});
 
     await this.prisma.market_report.create({
       data: {

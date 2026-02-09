@@ -1,0 +1,164 @@
+SCENARIO 5: Music Video - Tight timeline
+Started at Wed Feb  4 15:50:34 UTC 2026
+
+=== MESSAGE 1 ===
+RENTER: Hey, need gear ASAP for a music video shoot. Can I rent the FX3 starting today?
+BOT REPLY: Hey! Same-day rentals need approval first. What time were you looking to pick up? I need to check with the team and get back to you within the hour.
+
+=== MESSAGE 2 ===
+RENTER: OK what about tomorrow then? Need FX3 plus anamorphic lenses.
+BOT REPLY: FX3 is available tomorrow. We've got the Blazar Remus anamorphic set (33mm, 45mm, 65mm, 100mm) and the Great Joy set (35mm, 50mm, 85mm). Which focal lengths do you need?
+
+FX3 runs around 50-60/day, anamorphics are about 25-30/day each. What dates are you looking at?
+
+=== MESSAGE 3 ===
+RENTER: Which anamorphic set do you have? I want the cinematic look.
+BOT REPLY: We have both sets available. The Blazar Remus (33/45/65/100mm) and Great Joy (35/50/85mm). Both give you proper anamorphic with the oval bokeh and flares.
+
+Remus has more range including the 100mm for tighter shots. Great Joy is a bit more compact. What kind of coverage do you need for your music video?
+
+=== MESSAGE 4 ===
+RENTER: How much for the Great Joy set plus FX3 for two days?
+BOT REPLY: FX3 is about 50-60/day and the Great Joy set runs around 50-99/day for all three lenses.
+
+Two days would work out to roughly 2.5x the daily rate after the platform discounts, so you're looking at around 250-400 total depending on exact dates.
+
+What are the pickup and return dates? All items are in Central London at Trafalgar Square for collection.
+
+=== MESSAGE 5 ===
+RENTER: I need it Thursday and Friday. Pick up Thursday morning.
+BOT REPLY: Thursday Feb 6th and Friday Feb 7th - pickup Thursday morning, return Friday evening?
+
+FX3 and Great Joy set are both available for those dates. Pickup time would be between 10am-12pm Thursday, return between 7pm-9pm Friday.
+
+What's your postcode? Need to check if you're eligible for the travel discount.
+
+=== MESSAGE 6 ===
+RENTER: We're shooting in Brixton. Is that close to your location?
+BOT REPLY: Brixton is about 7km from our Trafalgar Square location, so pretty close. You won't qualify for the travel discount but it's an easy trip up.
+
+You're good to go with FX3 and the Great Joy anamorphic set for Thursday 6th to Friday 7th. Since you mentioned a music video earlier, want to add the DJI RS3 Pro gimbal? Runs about 25-30/day and gives you those smooth tracking shots that work great with anamorphics.
+
+Total for FX3 plus Great Joy set is around 250-400 for the two days.
+
+=== MESSAGE 7 ===
+RENTER: The director wants some drone shots too. What drones do you have?
+BOT REPLY: We have the DJI Mavic 3 Pro and the DJI Mini 4 Pro.
+
+Mavic 3 Pro has the better camera with Hasselblad sensor, shoots 5.1K, better in low light. Mini 4 Pro is lighter and easier to fly in tighter spaces, shoots 4K.
+
+For a music video the Mavic 3 Pro would give you better image quality to match with the FX3 footage. Runs about 40-50/day.
+
+=== MESSAGE 8 ===
+RENTER: The DJI Mavic 3 Pro - how much per day?
+BOT REPLY: Mavic 3 Pro is 36-37/day.
+
+=== MESSAGE 9 ===
+RENTER: Add the drone. We need a big light for night shots. Forza 300?
+BOT REPLY: Forza 300 is available, runs about 40-50/day. Good output for night work.
+
+So you're at:
+FX3 50-60/day
+Great Joy anamorphic set 50-99/day
+Mavic 3 Pro 36-37/day
+Forza 300 40-50/day
+
+Two days puts you around 350-500 total. Once you hit 350 you get 10% off everything automatically.
+
+Want to send through the booking request for Thursday 6th pickup (10am-12pm) and Friday 7th return (7pm-9pm)?
+
+=== MESSAGE 10 ===
+RENTER: Pavotube lights too. Can I get the full lighting kit?
+BOT REPLY: We have 4x Nanlite Pavotube 30x available. They run about 25-30/day each.
+
+There's no pre-packaged lighting kit but I can add the tubes with the Forza 300. That gives you key light coverage plus RGB accent lighting for the music video vibe.
+
+Adding 2-4 Pavotubes puts your total over 500 which gets you 17% off everything instead of 10%.
+
+How many tubes do you want?
+
+=== MESSAGE 11 ===
+RENTER: How much is everything together for Thursday-Friday?
+BOT REPLY: Need to know how many Pavotubes you want to give you the total.
+
+If you go with 4x Pavotubes, your gear list is:
+FX3, Great Joy anamorphic set, Mavic 3 Pro, Forza 300, 4x Pavotube 30x
+
+That's around 550-650 for the two days before the 17% discount kicks in. After discount you're looking at roughly 450-540.
+
+If you just want 2x Pavotubes instead, total comes to about 400-500 before discount, around 350-430 after the 10% off.
+
+=== MESSAGE 12 ===
+RENTER: My cameraman wants to pick up his stuff separately. Can he collect from you under my booking?
+BOT REPLY: The booking holder must be the person using the equipment throughout the entire rental. If your cameraman needs gear, they can create their own Hygglo account and book directly.
+
+If you just can't physically come to collect but you'll still be the one using it, your cameraman can pick up on your behalf. You'd need to send a message here saying "I authorize [full name] to collect on my behalf" and they show their own photo ID at pickup. You remain fully responsible for everything.
+
+Which situation is it?
+
+=== MESSAGE 13 ===
+RENTER: We finish shooting at midnight Friday. When is latest return?
+BOT REPLY: Our return times are 10am-12pm and 7pm-9pm only. Which of those works for you?
+
+If you finish at midnight Friday, you'd return Saturday morning 10am-12pm or Saturday evening 7pm-9pm.
+
+=== MESSAGE 14 ===
+RENTER: So returning Saturday morning is free since this is well over 40 quid right?
+BOT REPLY: Yeah, morning-after return is free for rentals over 40. Saturday 10am-12pm works.
+
+So you're set for Thursday 10am-12pm pickup, Saturday 10am-12pm return. Let me know how many Pavotubes you want (2 or 4) and you can send the booking request through.
+
+=== MESSAGE 15 ===
+RENTER: What if we need to extend to Saturday for extra shots?
+BOT REPLY: If you need Saturday for shooting, book it as a 3-day rental (Thursday-Saturday) and return Sunday morning 10am-12pm free.
+
+Trying to extend last minute depends on availability and you'd pay the extra day rate. Better to book the full time upfront if you think you might need it.
+
+Want me to check availability for Thursday-Saturday instead?
+
+=== MESSAGE 16 ===
+RENTER: Actually we're now shooting in Shoreditch not Brixton. Update the location.
+BOT REPLY: No problem, but your pickup and return is still from Trafalgar Square regardless of where you're shooting. That stays the same.
+
+=== MESSAGE 17 ===
+RENTER: Do you have smoke machines or haze machines for the music video?
+BOT REPLY: Yeah, we've got a few options:
+
+Smoke Ninja Pro hazer (continuous haze, professional level) runs about 35-40/day
+
+Smoke Ninja smoke machine (burst effects) around 25-30/day
+
+Event fogger (basic smoke effects) about 20-25/day
+
+What kind of effect are you after? The Pro hazer gives you that continuous atmospheric look, the others are more for bursts and dramatic effects.
+
+=== MESSAGE 18 ===
+RENTER: Need extra memory cards. What do you have?
+BOT REPLY: We have 256GB SD cards (3 available) and 1x CF Express Type A card.
+
+The 256GB cards run about 8-10/day each. CF Express is around 15-18/day.
+
+How many do you need and which camera are you using?
+
+=== MESSAGE 19 ===
+RENTER: Can I get the 3-body FX3 kit instead of single? For backup cameras.
+BOT REPLY: Yeah, we have 3x FX3s available. The 3-body kit runs around 380-420/day depending on dates.
+
+What dates are you looking at?
+
+=== MESSAGE 20 ===
+RENTER: OK final list: FX3 3-body kit, Great Joy anamorphics, Mavic 3, full lighting kit, Thursday to Friday. Book it.
+BOT REPLY: To confirm your order:
+
+3x FX3 cameras
+Great Joy anamorphic set (35/50/85mm)
+DJI Mavic 3 Pro drone
+Full lighting kit (need you to specify which lights you want - we have LED panels, Forza 300, Forza 500B, Pavotube 30x, softboxes, reflector)
+
+Thursday Feb 6 to Friday Feb 7 pickup and return.
+
+Once you specify the lights, send the rental request through Hygglo and I'll verify it. You're well over the 17% discount threshold at 500+ so you'll see that applied at checkout.
+
+Need delivery or picking up from Trafalgar Square?
+
+Scenario 5 done at Wed Feb  4 15:51:54 UTC 2026

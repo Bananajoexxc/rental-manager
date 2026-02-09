@@ -13,7 +13,7 @@ interface UpsellRecommendation {
 
 interface RevenueContext {
   currentTotal: number;
-  isUnderMinimum: boolean; // Under £25
+  isUnderMinimum: boolean; // Under ~£47 listing (£30 profit)
   nearDiscount: boolean; // Close to £250 or £500
   discountTier?: 'none' | '10_percent' | '17_percent';
   discountMessage?: string;
@@ -26,9 +26,21 @@ interface ItemCategory {
   averagePrice: number;
 }
 
+interface CoOccurrence {
+  itemName: string;
+  coCount: number;
+  avgRevenue: number;
+  conversionRate: number;
+  compositeScore: number;
+}
+
 @Injectable()
 export class UpsellService {
   private readonly logger = new Logger(UpsellService.name);
+
+  // Co-occurrence cache (24h TTL)
+  private coOccurrenceCache: Map<string, { data: CoOccurrence[]; cachedAt: number }> = new Map();
+  private readonly CO_OCCURRENCE_TTL = 24 * 60 * 60 * 1000; // 24h
 
   // Complementary item mappings
   private readonly complementaryItems = {
@@ -98,7 +110,7 @@ export class UpsellService {
     },
     music_video: {
       keywords: /\b(music video|mv|artist|performance|band)\b/i,
-      recommendations: ['DJI RS3 Pro gimbal', 'Anamorphic Great Joy 50mm', 'LED light panels RGB', 'Smoke machine fogger', 'Motorized slider'],
+      recommendations: ['DJI RS3 Pro gimbal', 'Anamorphic Great Joy lens 50mm', 'LED light panels RGB', 'Smoke machine fogger', 'Motorized slider'],
       reasoning: "Music videos benefit from cinematic movement (gimbal/slider), creative lighting (RGB), and shallow depth (anamorphic lenses)"
     },
     corporate: {
@@ -131,12 +143,102 @@ export class UpsellService {
     private configService: ConfigService,
     private calendarService: CalendarService,
   ) {
-    this.MINIMUM_ORDER = Number(this.configService.get('UPSELL_MIN_ORDER', '25'));
+    this.MINIMUM_ORDER = Number(this.configService.get('UPSELL_MIN_ORDER', '47')); // ~£30 profit after ~36% platform fees
     this.DISCOUNT_TIER_1 = Number(this.configService.get('UPSELL_DISCOUNT_TIER_1', '250'));
     this.DISCOUNT_TIER_1_PCT = Number(this.configService.get('UPSELL_DISCOUNT_TIER_1_PCT', '10'));
     this.DISCOUNT_TIER_2 = Number(this.configService.get('UPSELL_DISCOUNT_TIER_2', '500'));
     this.DISCOUNT_TIER_2_PCT = Number(this.configService.get('UPSELL_DISCOUNT_TIER_2_PCT', '17'));
     this.PLATFORM_FEE_RATE = Number(this.configService.get('PLATFORM_FEE_RATE', '0.15'));
+  }
+
+  /**
+   * Get items frequently rented together, scored by co-occurrence + conversion.
+   */
+  async getCoOccurrenceData(itemNames: string[]): Promise<CoOccurrence[]> {
+    if (itemNames.length === 0) return [];
+
+    const cacheKey = itemNames.sort().join('|');
+    const cached = this.coOccurrenceCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < this.CO_OCCURRENCE_TTL) {
+      return cached.data;
+    }
+
+    try {
+      // Find items that appear in the same rental as the requested items
+      const coRows: { item_name: string; co_count: string; avg_revenue: string }[] =
+        await this.prisma.$queryRaw`
+          SELECT b2.item_name, COUNT(DISTINCT b1.rental_id)::text AS co_count,
+                 COALESCE(AVG(b2.revenue), 0)::text AS avg_revenue
+          FROM booking b1
+          JOIN booking b2 ON b1.rental_id = b2.rental_id
+            AND b1.item_name != b2.item_name
+            AND b2.status != 'cancelled'
+          WHERE b1.item_name = ANY(${itemNames})
+            AND b1.status != 'cancelled'
+            AND b2.item_name != ALL(${itemNames})
+          GROUP BY b2.item_name
+          HAVING COUNT(DISTINCT b1.rental_id) >= 2
+          ORDER BY COUNT(DISTINCT b1.rental_id) DESC
+          LIMIT 20
+        `;
+
+      if (coRows.length === 0) {
+        this.coOccurrenceCache.set(cacheKey, { data: [], cachedAt: Date.now() });
+        return [];
+      }
+
+      // Get conversion rates from upsell_log
+      const coItemNames = coRows.map(r => r.item_name);
+      const conversionRows: { item_name: string; total: string; accepted: string }[] =
+        await this.prisma.$queryRaw`
+          SELECT unnest(items_suggested) AS item_name,
+                 COUNT(*)::text AS total,
+                 COUNT(*) FILTER (WHERE outcome IN ('accepted', 'partial'))::text AS accepted
+          FROM upsell_log
+          WHERE outcome != 'pending'
+          GROUP BY unnest(items_suggested)
+          HAVING unnest(items_suggested) = ANY(${coItemNames})
+        `;
+
+      const conversionMap = new Map<string, number>();
+      for (const row of conversionRows) {
+        const total = parseInt(row.total, 10);
+        if (total > 0) {
+          conversionMap.set(row.item_name, parseInt(row.accepted, 10) / total);
+        }
+      }
+
+      // Normalize and compute composite scores
+      const maxCount = Math.max(...coRows.map(r => parseInt(r.co_count, 10)));
+      const maxRevenue = Math.max(...coRows.map(r => parseFloat(r.avg_revenue)), 1);
+
+      const results: CoOccurrence[] = coRows.map(row => {
+        const coCount = parseInt(row.co_count, 10);
+        const avgRevenue = parseFloat(row.avg_revenue);
+        const conversionRate = conversionMap.get(row.item_name) || 0;
+
+        const compositeScore =
+          (coCount / maxCount) * 0.4 +
+          (avgRevenue / maxRevenue) * 0.3 +
+          conversionRate * 0.3;
+
+        return {
+          itemName: row.item_name,
+          coCount,
+          avgRevenue,
+          conversionRate,
+          compositeScore,
+        };
+      });
+
+      results.sort((a, b) => b.compositeScore - a.compositeScore);
+
+      this.coOccurrenceCache.set(cacheKey, { data: results, cachedAt: Date.now() });
+      return results;
+    } catch (err) {
+      this.logger.warn(`Co-occurrence query failed: ${err.message}`);
+      return [];
+    }
   }
 
   /**
@@ -162,7 +264,7 @@ export class UpsellService {
     const revenueContext = this.analyzeRevenueContext(currentTotal);
 
     // Generate recommendations based on all factors
-    const recommendations = this.buildRecommendations(
+    const recommendations = await this.buildRecommendations(
       itemCategories,
       useCase,
       revenueContext,
@@ -336,45 +438,65 @@ export class UpsellService {
   /**
    * Build comprehensive recommendations
    */
-  private buildRecommendations(
+  private async buildRecommendations(
     itemCategories: ItemCategory[],
     useCase: ReturnType<typeof this.detectUseCase>,
     revenueContext: RevenueContext,
     conversationText: string,
-  ): UpsellRecommendation {
+  ): Promise<UpsellRecommendation> {
     const recommendations: string[] = [];
     let reasoning = '';
     let priority: UpsellRecommendation['priority'] = 'medium';
     const questionsToAsk: string[] = [];
 
-    // CRITICAL: Under minimum - aggressive upsell
-    if (revenueContext.isUnderMinimum) {
-      priority = 'critical';
-      const needed = this.MINIMUM_ORDER - revenueContext.currentTotal;
-      reasoning = `INTERNAL: Order value is low — suggest relevant add-ons naturally. NEVER mention minimums or thresholds to the renter. `;
-
-      // Suggest contextual essentials - filters first for camera/lens rentals
-      if (itemCategories.some(i => i.category === 'camera')) {
-        recommendations.push('ND filter', 'Cinebloom filter mist', 'Rode Wireless Mic Pro set');
-        reasoning += 'ND filter and mist filter are essential for cinema work - plus a wireless mic for clean audio';
-      } else if (itemCategories.some(i => i.category === 'lens')) {
-        recommendations.push('ND filter', 'Cinebloom filter mist', 'Tilta Nucleus Nano 2 follow focus');
-        reasoning += 'ND filter and mist filter are must-haves for cinema lenses';
-      } else {
-        recommendations.push('Rode Wireless Mic Pro set', 'ND filter', 'Cinebloom filter mist');
-        reasoning += 'Consider adding a wireless mic - essential for most shoots and hits the minimum';
+    // Data-driven: co-occurrence recommendations take priority
+    const requestedNames = itemCategories.map(i => i.name);
+    const coData = await this.getCoOccurrenceData(requestedNames);
+    if (coData.length >= 2) {
+      // Use co-occurrence data as primary source
+      for (const co of coData.slice(0, 4)) {
+        if (!requestedNames.some(n => n.toLowerCase() === co.itemName.toLowerCase())) {
+          recommendations.push(co.itemName);
+          reasoning += `Renters who booked ${requestedNames[0]} also booked ${co.itemName} (${co.coCount} times). `;
+        }
+      }
+      if (recommendations.length > 0) {
+        priority = 'high';
       }
     }
 
-    // Use case-based recommendations (if detected)
-    else if (useCase) {
+    // Fall through to hard-coded logic only when co-occurrence data is insufficient
+    const hasCoData = recommendations.length >= 2;
+
+    // CRITICAL: Under minimum - aggressive upsell (always applies regardless of co-data)
+    if (revenueContext.isUnderMinimum) {
+      priority = 'critical';
+      reasoning = `INTERNAL: Order value is low — suggest relevant add-ons naturally. NEVER mention minimums or thresholds to the renter. ` + reasoning;
+
+      if (!hasCoData) {
+        // Suggest contextual essentials - filters first for camera/lens rentals
+        if (itemCategories.some(i => i.category === 'camera')) {
+          recommendations.push('ND filter', 'Cinebloom filter mist', 'Rode Wireless Mic Pro set');
+          reasoning += 'ND filter and mist filter are essential for cinema work - plus a wireless mic for clean audio';
+        } else if (itemCategories.some(i => i.category === 'lens')) {
+          recommendations.push('ND filter', 'Cinebloom filter mist', 'Tilta Nucleus Nano 2 follow focus');
+          reasoning += 'ND filter and mist filter are must-haves for cinema lenses';
+        } else {
+          recommendations.push('Rode Wireless Mic Pro set', 'ND filter', 'Cinebloom filter mist');
+          reasoning += 'Consider adding a wireless mic - essential for most shoots and hits the minimum';
+        }
+      }
+    }
+
+    // Use case-based recommendations (if detected) — fallback if no co-data
+    else if (!hasCoData && useCase) {
       priority = 'high';
       reasoning = `Detected ${useCase.useCase} shoot. ${useCase.reasoning}. `;
       recommendations.push(...useCase.recommendations);
     }
 
-    // Category-based complementary items
-    else {
+    // Category-based complementary items — fallback if no co-data
+    else if (!hasCoData) {
       const hasCamera = itemCategories.some(i => i.category === 'camera');
       const hasLens = itemCategories.some(i => i.category === 'lens');
       const hasAudio = itemCategories.some(i => i.category === 'audio');
@@ -437,7 +559,6 @@ export class UpsellService {
     }
 
     // Feature-aware recommendations: if renter mentions specific needs, find items that match
-    const requestedNames = itemCategories.map(i => i.name);
     const featureMatches = this.extractFeatureRecommendations(conversationText, requestedNames);
     if (featureMatches.length > 0) {
       for (const match of featureMatches) {
@@ -474,6 +595,10 @@ export class UpsellService {
       endDate,
     );
 
+    // Fetch co-occurrence data for enriching the message
+    const coData = await this.getCoOccurrenceData(requestedItems);
+    const coMap = new Map(coData.map(c => [c.itemName, c]));
+
     let message = '';
 
     // Revenue context message (discounts)
@@ -492,6 +617,10 @@ export class UpsellService {
       }
 
       message += recommendations.items.slice(0, 3).map(item => {
+        const co = coMap.get(item);
+        if (co && co.coCount >= 2) {
+          return `• ${item} — rented together ${co.coCount} times by other customers`;
+        }
         const highlight = getSpecHighlight(item);
         return highlight ? `• ${item} — ${highlight}` : `• ${item}`;
       }).join('\n');

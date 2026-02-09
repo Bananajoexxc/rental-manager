@@ -369,7 +369,7 @@ export class AutolearnService {
       `Quality: ${todayQuality?.toFixed(2) || '?'} (${qualityDayChange}% vs yesterday, ${qualityWeekChange}% vs 7d avg)\n` +
       `Tokens: ${avgTokens} avg/msg\n` +
       (Object.keys(stages).length > 0
-        ? `Funnel: ${['inquiry', 'interest', 'qualified', 'booking_ready', 'confirmed'].map(s => `${stages[s] || 0} ${s}`).join(' → ')}\n`
+        ? `Funnel: ${['inquiry', 'interested', 'ready_to_book', 'booked', 'confirmed'].map(s => `${stages[s] || 0} ${s}`).join(' → ')}\n`
         : '') +
       (topViolations.length > 0
         ? `Top violations: ${topViolations.join(', ')}\n`

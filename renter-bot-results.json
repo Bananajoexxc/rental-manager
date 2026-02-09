@@ -1,0 +1,139 @@
+{
+  "tests": [
+    {
+      "test_num": 1,
+      "issue": "Pricing Accuracy",
+      "prompt": "How much is the Sony FX3 per day?",
+      "reply": "Hey! FX3 runs around £40/day. Longer rentals get cheaper - 3 days works out to about 2.5x the daily rate, week is roughly 5x.\n\nComes with 3x NP-FZ100 batteries and 128GB card included.\n\nWhat dates are you looking at?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 32505,
+      "outputTokens": 77
+    },
+    {
+      "test_num": 2,
+      "issue": "Pricing Accuracy",
+      "prompt": "What's the price for renting the BMPCC 6K Pro for 3 days?",
+      "reply": "The BMPCC 6K Pro runs around £35-50/day. For 3 days you're looking at roughly £90-125 total depending on exact dates.\n\nThe camera comes with 5x LP-E6NH batteries and a 128GB SD card. Uses Canon EF mount lenses.\n\nQuick heads up though — just checked availability and the BMPCC 6K Pro is currently booked out for your dates (8-9 Feb). It's available again from 10 Feb onwards.\n\nIf you need it for those specific dates, the BMPCC 6K Full Frame is available — same sensor size, shoots in RAW, comes with the same 5x LP-E6NH batteries. Runs about the same price.\n\nOr if you want to shift your dates to 10 Feb or later, the 6K Pro is free then.\n\nWhat works better for you?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 31963,
+      "outputTokens": 203
+    },
+    {
+      "test_num": 3,
+      "issue": "Pricing Accuracy",
+      "prompt": "Can I get a quote for the DJI RS3 Pro gimbal and a V-mount battery?",
+      "reply": "Hey! The DJI RS3 Pro gimbal runs around £18-25/day and comes with a BG30 grip battery, quick release plate, and cables.\n\nFor V-mount batteries we have two options - the 95mAh (around £11-15/day) or the 150mAh (around £20-28/day). Both come with all necessary plates, adapters, and cables included.\n\nLonger rentals get better rates - 3 days works out cheaper per day, week is about 5x the daily rate.\n\nAll items are based in Central London, Trafalgar Square area. What dates are you looking at?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 32177,
+      "outputTokens": 149
+    },
+    {
+      "test_num": 4,
+      "issue": "Availability and Schedule",
+      "prompt": "Is the Sony FX3 available this weekend?",
+      "reply": "Yeah, FX3's available this weekend. Runs around £40-50 a day depending on dates.\n\nAll gear is based in Central London near Trafalgar Square. Pickup times are 10am-12pm or 7pm-9pm.\n\nWhat dates are you looking at?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 30967,
+      "outputTokens": 68
+    },
+    {
+      "test_num": 5,
+      "issue": "Availability and Schedule",
+      "prompt": "I need the Atomos Ninja V tomorrow, can I pick it up at 10am?",
+      "reply": "Hey! The Atomos Ninja V is available for tomorrow. This is a same-day rental so I need to check final availability with our system before confirming. What time would you need to return it?\n\nJust so you know, this current booking is for the A7 III with gimbal and lens. If you want to add the Ninja V to this booking or need it separately, let me know and I can sort that out once I confirm availability.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 29299,
+      "outputTokens": 100
+    },
+    {
+      "test_num": 6,
+      "issue": "Availability and Schedule",
+      "prompt": "What gear do you have available for next Monday to Wednesday?",
+      "reply": "Hey! We've got a huge range available. What kind of shoot are you planning for Monday to Wednesday? That'll help me recommend the best gear for you.\n\nJust so you know, all our items are based in Central London (Trafalgar Square area) and collection is from there. Opening times are 10am-12pm and 7pm-9pm.\n\nWhat are you filming?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 29656,
+      "outputTokens": 87
+    },
+    {
+      "test_num": 7,
+      "issue": "Bundle Intelligence and Upselling",
+      "prompt": "I'm shooting a short film this weekend, I need a cinema camera",
+      "reply": "Hey! For cinema cameras we've got the BMPCC 6K Pro and BMPCC 6K Full Frame available this weekend. Both shoot RAW with incredible color science, proper cinema look. BMPCC 6K Pro is around £50/day and comes with 5x LP-E6NH batteries and 1TB card. BMPCC 6K FF is the same price with 5x LP-E6NH batteries and 1TB card as well.\n\nWhat kind of short film are you shooting? That'll help me suggest the right lenses and support gear to go with it.\n\nAll our gear is based in Central London at the Trafalgar Square rental hub. What dates are you looking at exactly?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 29522,
+      "outputTokens": 163
+    },
+    {
+      "test_num": 8,
+      "issue": "Bundle Intelligence and Upselling",
+      "prompt": "I want the Sony FX3, do you have any lenses that go with it?",
+      "reply": "Yeah, FX3's available. Works with all our Sony E-mount lenses.\n\nGot the GM 24-70mm f2.8 (runs around £15-20/day), GM 16-35mm f2.8 (wide angle, same price range), or the GM 70-200mm f2.8 (telephoto, about £16-22/day). All three together in a bundle works out cheaper if you need multiple focal lengths.\n\nWe've also got anamorphic options if you're doing something cinematic - Great Joy set or Blazar Remus set.\n\nWhat are you shooting? Can point you to what would work best.\n\nAll items are based in Central London (Trafalgar Square area) for collection.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 30372,
+      "outputTokens": 170
+    },
+    {
+      "test_num": 9,
+      "issue": "Bundle Intelligence and Upselling",
+      "prompt": "I'll take the FX3 and the 24-70mm lens, anything else I might need?",
+      "reply": "Hey! Just to clarify - looks like your current booking is for the A7III + gimbal + 24-70mm lens. Are you looking to change that to the FX3 instead, or wanting to add the FX3 as well?\n\nFor the shoot, couple things that usually come in handy:\n\nExtra batteries - the FX3 comes with 3x NP-FZ100 batteries but having spares never hurts, runs about £8/day for a 2-pack.\n\nMemory cards - comes with a 128GB card but if you're shooting a lot, extra 256GB cards are £8/day.\n\nND filters help manage exposure outdoors, about £12/day.\n\nWireless mic if you need audio - Rode Wireless Pro set is around £26/day, DJI Mic 2 is £18/day.\n\nWhat are you shooting? That'd help me suggest what actually makes sense for your project.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 30271,
+      "outputTokens": 216
+    },
+    {
+      "test_num": 10,
+      "issue": "Rule Compliance",
+      "prompt": "Where exactly are you located? Can I get the address?",
+      "reply": "Hey! We're based in Central London, Trafalgar Square area. I'll send you the exact meetup point once your booking is confirmed and verified.\n\nThe A7 III kit with the gimbal and 24-70mm is all set for your dates. Comes with 3x NP-FW50 batteries and a 128GB card.\n\nWhat are you shooting?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 29643,
+      "outputTokens": 87
+    },
+    {
+      "test_num": 11,
+      "issue": "Rule Compliance",
+      "prompt": "Are there any platform fees on top of the rental price?",
+      "reply": "The price you see when you book is the total. That's £112.50 for the two days with everything included.\n\nThe A7III comes with 3x NP-FW50 batteries and a 128GB card. The RS2 gimbal has its own battery. The 24-70mm GM is the f2.8 version.\n\nAll items are based in Central London, Trafalgar Square area. Collection and return from there. Opening times are 10am-12pm and 7pm-9pm.\n\nLet me know if you need anything else added or have questions about the setup.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 31684,
+      "outputTokens": 137
+    },
+    {
+      "test_num": 12,
+      "issue": "Rule Compliance",
+      "prompt": "How many batteries come with the BMPCC 6K Pro?",
+      "reply": "The BMPCC 6K Pro comes with 5x Canon LP-E6NH batteries and a 128GB SD card.\n\nJust so you know, your current booking is for the Sony A7 III with gimbal and lens. If you want the BMPCC 6K Pro instead, let me know and I can check availability for your dates.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 29606,
+      "outputTokens": 81
+    },
+    {
+      "test_num": 13,
+      "issue": "Delivery and Complex Queries",
+      "prompt": "Can you deliver to East London? I'm in E14",
+      "reply": "Yeah we can deliver to E14. That's in the Inner London zone, so delivery would run around £38-52 for a car courier (the A7III + gimbal + lens needs a car due to the combined size).\n\nThat's one-way. If you need both pickup and dropoff, it's roughly 1.8x the one-way price, so about £68-93 total for round-trip delivery.\n\nWant to go ahead with delivery? If so, I'll need your full address to get the exact quote sorted and book the courier.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 30365,
+      "outputTokens": 124
+    },
+    {
+      "test_num": 14,
+      "issue": "Delivery and Complex Queries",
+      "prompt": "I need the DJ deck and speakers delivered to SW1A 1AA",
+      "reply": "Hey! Just to confirm - this booking is for the A7III + gimbal + 24-70mm lens. The DJ deck and speakers would need to be a separate rental request since they are not part of this booking.\n\nFor DJ deck + speakers delivery to SW1A 1AA, delivery is mandatory for this combination due to weight and size. That postcode is very close to our Trafalgar Square location (under 2km), so delivery would run around £25-30 by car courier.\n\nIf you want to add the DJ equipment, you would need to create a new rental request for those items and we can arrange delivery. Let me know if you want to go ahead with that.\n\nFor your current A7III booking - what pickup and return times work for you? Opening hours are 10am-12pm and 7pm-9pm.",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 29785,
+      "outputTokens": 186
+    },
+    {
+      "test_num": 15,
+      "issue": "Delivery and Complex Queries",
+      "prompt": "I want to add the Rode Wireless mic to my existing order, will delivery change?",
+      "reply": "Yeah, we can add the Rode Wireless Mic Pro to your booking. That'll bring your total to around £135-140 for the two days.\n\nFor delivery, the camera, gimbal, lens, and mic would all fit in a small car courier. Price depends on where you're located though. What's your postcode?",
+      "model": "claude-sonnet-4-5-20250929",
+      "inputTokens": 30576,
+      "outputTokens": 75
+    }
+  ]
+}

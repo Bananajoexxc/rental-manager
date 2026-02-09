@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
+import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames, isAccessoryItem } from '../utils/item-matcher';
 import { PRICING_CATALOG } from '../data/pricing-catalog';
 import { DELIVERY_SPECS } from '../data/delivery-specs';
 
@@ -144,12 +144,16 @@ export class CalendarService implements OnModuleInit {
     const bufferStart = new Date(startDate.getTime() - 60 * 60 * 1000);
     const bufferEnd = new Date(endDate.getTime() + 60 * 60 * 1000);
 
+    // Use return_date when available (actual physical return may differ from rental end_date)
     const overlapping = await this.prisma.booking.findMany({
       where: {
         item_name: matched,
         status: 'confirmed',
         start_date: { lt: bufferEnd },
-        end_date: { gt: bufferStart },
+        OR: [
+          { return_date: { gt: bufferStart } },
+          { return_date: null, end_date: { gt: bufferStart } },
+        ],
       },
     });
 
@@ -169,26 +173,43 @@ export class CalendarService implements OnModuleInit {
     const dayEnd = new Date(date);
     dayEnd.setHours(23, 59, 59, 999);
 
+    // Wider query: catch bookings by standard dates OR actual pickup/return dates
     const bookings = await this.prisma.booking.findMany({
       where: {
         status: 'confirmed',
-        start_date: { lte: dayEnd },
-        end_date: { gte: dayStart },
+        OR: [
+          { start_date: { lte: dayEnd }, end_date: { gte: dayStart } },
+          { return_date: { gte: dayStart, lte: dayEnd } },
+          { pickup_date: { gte: dayStart, lte: dayEnd } },
+        ],
       },
       orderBy: { start_date: 'asc' },
     });
 
-    const pickups = bookings.filter(
-      (b) => b.start_date >= dayStart && b.start_date <= dayEnd,
-    );
-    const returns = bookings.filter(
-      (b) => b.end_date >= dayStart && b.end_date <= dayEnd,
-    );
-    const active = bookings.filter(
-      (b) => b.start_date < dayStart && b.end_date > dayEnd,
-    );
+    // Deduplicate (OR query can match same booking multiple ways)
+    const seen = new Set<string>();
+    const unique = bookings.filter(b => {
+      if (seen.has(b.id)) return false;
+      seen.add(b.id);
+      return true;
+    });
 
-    return { pickups, returns, active, all: bookings };
+    // Use actual dates when available (pickup_date/return_date > start_date/end_date)
+    const pickups = unique.filter(b => {
+      const d = b.pickup_date || b.start_date;
+      return d >= dayStart && d <= dayEnd;
+    });
+    const returns = unique.filter(b => {
+      const d = b.return_date || b.end_date;
+      return d >= dayStart && d <= dayEnd;
+    });
+    const active = unique.filter(b => {
+      const effectiveStart = b.pickup_date || b.start_date;
+      const effectiveEnd = b.return_date || b.end_date;
+      return effectiveStart < dayStart && effectiveEnd > dayEnd;
+    });
+
+    return { pickups, returns, active, all: unique };
   }
 
   getItemMaxQuantity(itemName: string): number {
@@ -221,11 +242,15 @@ export class CalendarService implements OnModuleInit {
     const futureDate = new Date(now);
     futureDate.setDate(futureDate.getDate() + days);
 
+    // Include bookings where actual return (return_date) extends past end_date
     const bookings = await this.prisma.booking.findMany({
       where: {
         status: 'confirmed',
-        end_date: { gte: now },
         start_date: { lte: futureDate },
+        OR: [
+          { return_date: { gte: now } },
+          { return_date: null, end_date: { gte: now } },
+        ],
       },
       orderBy: { start_date: 'asc' },
     });
@@ -235,11 +260,11 @@ export class CalendarService implements OnModuleInit {
     }
 
     const lines = bookings.map((b) => {
-      const start = b.start_date.toISOString().split('T')[0];
-      const end = b.end_date.toISOString().split('T')[0];
+      const start = (b.pickup_date || b.start_date).toISOString().split('T')[0];
+      const end = (b.return_date || b.end_date).toISOString().split('T')[0];
       const times = [
         b.pickup_time ? `pickup ${b.pickup_time}` : null,
-        b.return_time ? `return ${b.return_time}` : null,
+        b.return_time ? `return ${b.return_time} on ${end}` : null,
       ].filter(Boolean).join(', ');
       return `- ${b.item_name} x${b.quantity}: ${start} to ${end} (${b.renter_name}) [${b.account}]${times ? ` [${times}]` : ''}`;
     });
@@ -275,15 +300,18 @@ export class CalendarService implements OnModuleInit {
     const bufferMinutes = 60; // 1-hour buffer
 
     if (type === 'pickup') {
-      // For pickup: find bookings for the same item whose end_date falls on this day
-      // Check if any return_time is within 60 min of proposed pickup
+      // For pickup: find bookings for the same item whose actual return falls on this day
+      // Use return_date when available, fall back to end_date
       const returnsOnDay = await this.prisma.booking.findMany({
         where: {
           item_name: matched,
           status: 'confirmed',
-          end_date: { gte: dayStart, lte: dayEnd },
           return_time: { not: null },
           ...(excludeRentalId ? { rental_id: { not: excludeRentalId } } : {}),
+          OR: [
+            { return_date: { gte: dayStart, lte: dayEnd } },
+            { return_date: null, end_date: { gte: dayStart, lte: dayEnd } },
+          ],
         },
       });
 
@@ -306,15 +334,18 @@ export class CalendarService implements OnModuleInit {
         };
       }
     } else {
-      // For return: find bookings for the same item whose start_date falls on this day
-      // Check if any pickup_time is within 60 min of proposed return
+      // For return: find bookings for the same item whose actual pickup falls on this day
+      // Use pickup_date when available, fall back to start_date
       const pickupsOnDay = await this.prisma.booking.findMany({
         where: {
           item_name: matched,
           status: 'confirmed',
-          start_date: { gte: dayStart, lte: dayEnd },
           pickup_time: { not: null },
           ...(excludeRentalId ? { rental_id: { not: excludeRentalId } } : {}),
+          OR: [
+            { pickup_date: { gte: dayStart, lte: dayEnd } },
+            { pickup_date: null, start_date: { gte: dayStart, lte: dayEnd } },
+          ],
         },
       });
 
@@ -336,10 +367,182 @@ export class CalendarService implements OnModuleInit {
       }
     }
 
+    // Vacation conflict gate: check if proposed time falls during owner unavailability
+    const vacationCheck = await this.checkVacationConflict(date, proposedTime);
+    if (vacationCheck.conflict) {
+      return {
+        conflict: true,
+        reason: vacationCheck.reason,
+        suggestedAlternative: vacationCheck.suggestedAlternative,
+      } as any;
+    }
+
     return { conflict: false };
   }
 
-  async updateBookingTimes(rentalId: string, pickupTime?: string, returnTime?: string): Promise<any> {
+  // === Owner Unavailability / Vacation ===
+
+  async createUnavailability(data: {
+    start_time: Date;
+    end_time?: Date | null;
+    reason?: string;
+    all_day?: boolean;
+  }) {
+    const record = await this.prisma.owner_unavailability.create({
+      data: {
+        start_time: data.start_time,
+        end_time: data.end_time || null,
+        reason: data.reason || null,
+        all_day: data.all_day || false,
+        active: true,
+      },
+    });
+    // Invalidate compact inventory cache so next AI call sees vacation blocks
+    this.compactInventoryCache = null;
+    this.logger.log(`Owner unavailability created: ${record.id} (${data.start_time.toISOString()}${data.end_time ? ' - ' + data.end_time.toISOString() : ' onwards'})`);
+    return record;
+  }
+
+  async getActiveUnavailabilities(from?: Date, to?: Date) {
+    const where: any = { active: true };
+    if (from || to) {
+      // Overlapping range query
+      if (from) {
+        where.OR = [
+          { end_time: { gte: from } },
+          { end_time: null }, // open-ended blocks always overlap future
+        ];
+      }
+      if (to) {
+        where.start_time = { lte: to };
+      }
+    }
+    return this.prisma.owner_unavailability.findMany({
+      where,
+      orderBy: { start_time: 'asc' },
+    });
+  }
+
+  async cancelUnavailability(partialId: string) {
+    const blocks = await this.prisma.owner_unavailability.findMany({
+      where: { id: { startsWith: partialId }, active: true },
+    });
+    if (blocks.length === 0) return null;
+    if (blocks.length > 1) throw new Error('Multiple blocks match. Be more specific.');
+    const updated = await this.prisma.owner_unavailability.update({
+      where: { id: blocks[0].id },
+      data: { active: false },
+    });
+    this.compactInventoryCache = null;
+    return updated;
+  }
+
+  /**
+   * Check if the owner is unavailable during a given time range.
+   * For null end_time, treats as end-of-day (23:59:59).
+   */
+  async isOwnerUnavailable(checkStart: Date, checkEnd: Date): Promise<{ unavailable: boolean; blocks: any[] }> {
+    const allBlocks = await this.prisma.owner_unavailability.findMany({
+      where: {
+        active: true,
+        start_time: { lte: checkEnd },
+      },
+      orderBy: { start_time: 'asc' },
+    });
+
+    const overlapping = allBlocks.filter(block => {
+      const blockEnd = block.end_time || this.endOfDay(block.start_time);
+      return block.start_time < checkEnd && blockEnd > checkStart;
+    });
+
+    return { unavailable: overlapping.length > 0, blocks: overlapping };
+  }
+
+  /**
+   * Check if a proposed time on a given date conflicts with owner vacation.
+   * Returns conflict info + suggested alternative time.
+   */
+  async checkVacationConflict(
+    date: Date,
+    proposedTime: string,
+  ): Promise<{ conflict: boolean; reason?: string; suggestedAlternative?: string }> {
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(date);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    const blocks = await this.prisma.owner_unavailability.findMany({
+      where: {
+        active: true,
+        start_time: { lte: dayEnd },
+      },
+    });
+
+    // Filter to blocks overlapping this day
+    const dayBlocks = blocks.filter(b => {
+      const bEnd = b.end_time || this.endOfDay(b.start_time);
+      return b.start_time < dayEnd && bEnd > dayStart;
+    });
+
+    if (dayBlocks.length === 0) return { conflict: false };
+
+    const [propH, propM] = proposedTime.split(':').map(Number);
+    const proposedMinutes = propH * 60 + propM;
+
+    for (const block of dayBlocks) {
+      // If all_day, the entire day is blocked
+      if (block.all_day) {
+        return {
+          conflict: true,
+          reason: `Owner unavailable all day (${block.reason || 'personal'})`,
+        };
+      }
+
+      const blockStartOnDay = block.start_time >= dayStart ? block.start_time : dayStart;
+      const blockEndOnDay = (block.end_time || this.endOfDay(block.start_time));
+      const effectiveEnd = blockEndOnDay <= dayEnd ? blockEndOnDay : dayEnd;
+
+      const blockStartMin = blockStartOnDay.getHours() * 60 + blockStartOnDay.getMinutes();
+      const blockEndMin = effectiveEnd.getHours() * 60 + effectiveEnd.getMinutes();
+
+      // 30-min buffer around vacation
+      if (proposedMinutes >= (blockStartMin - 30) && proposedMinutes <= blockEndMin) {
+        // Suggest 30 min before vacation starts, clamped to 10:00-21:00
+        let suggestedMin = blockStartMin - 30;
+        if (suggestedMin < 600) suggestedMin = 600; // 10:00
+        if (suggestedMin > 1260) suggestedMin = 1260; // 21:00
+        const sugH = Math.floor(suggestedMin / 60);
+        const sugM = suggestedMin % 60;
+        const suggestedAlternative = `${String(sugH).padStart(2, '0')}:${String(sugM).padStart(2, '0')}`;
+
+        return {
+          conflict: true,
+          reason: `Owner unavailable from ${this.formatTimeFromDate(blockStartOnDay)}${block.end_time ? ' to ' + this.formatTimeFromDate(effectiveEnd) : ' onwards'} (${block.reason || 'personal'})`,
+          suggestedAlternative,
+        };
+      }
+    }
+
+    return { conflict: false };
+  }
+
+  private endOfDay(date: Date): Date {
+    const d = new Date(date);
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }
+
+  private formatTimeFromDate(date: Date): string {
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  }
+
+  async updateBookingTimes(
+    rentalId: string,
+    pickupTime?: string,
+    returnTime?: string,
+    pickupDate?: string,
+    returnDate?: string,
+  ): Promise<any> {
     // Find bookings linked to this rental
     const bookings = await this.prisma.booking.findMany({
       where: { rental_id: rentalId, status: 'confirmed' },
@@ -353,6 +556,8 @@ export class CalendarService implements OnModuleInit {
     const updateData: any = {};
     if (pickupTime) updateData.pickup_time = pickupTime;
     if (returnTime) updateData.return_time = returnTime;
+    if (pickupDate) updateData.pickup_date = new Date(pickupDate);
+    if (returnDate) updateData.return_date = new Date(returnDate);
 
     if (Object.keys(updateData).length === 0) return null;
 
@@ -361,7 +566,7 @@ export class CalendarService implements OnModuleInit {
       data: updateData,
     });
 
-    this.logger.log(`Updated ${updated.count} booking(s) for rental ${rentalId}: pickup=${pickupTime || 'unchanged'}, return=${returnTime || 'unchanged'}`);
+    this.logger.log(`Updated ${updated.count} booking(s) for rental ${rentalId}: pickup=${pickupTime || 'unchanged'} ${pickupDate || ''}, return=${returnTime || 'unchanged'} ${returnDate || ''}`);
     return updated;
   }
 
@@ -375,6 +580,7 @@ export class CalendarService implements OnModuleInit {
       account?: string | null;
       rental_price?: number | null;
       price_per_day?: number | null;
+      status?: string | null;
     },
     extractedItems: string[],
   ): Promise<any[]> {
@@ -398,27 +604,34 @@ export class CalendarService implements OnModuleInit {
       matchedItems.push({ name: matched, quantity: 1 });
     }
 
-    // If no items extracted, try matching the rental title to inventory
-    if (matchedItems.length === 0) {
-      const matched = findBestMatch(rental.title, getInventoryItemNames());
-      if (!matched) {
-        this.logger.warn(`Cannot create bookings for rental ${rental.id}: title "${rental.title}" does not match any inventory item`);
-        return [];
-      }
-      matchedItems.push({ name: matched, quantity: 1 });
+    // Separate main items from accessories — accessories don't get their own bookings
+    const mainItems = matchedItems.filter(i => !isAccessoryItem(i.name));
+    const accessoryItems = matchedItems.filter(i => isAccessoryItem(i.name));
+
+    if (accessoryItems.length > 0) {
+      this.logger.log(`Filtered ${accessoryItems.length} accessory item(s) from booking creation: ${accessoryItems.map(i => i.name).join(', ')}`);
     }
 
-    // Distribute revenue across items
+    // If only accessories matched (no main items), fall back to rental title match
+    if (mainItems.length === 0) {
+      const matched = findBestMatch(rental.title, getInventoryItemNames());
+      if (!matched || isAccessoryItem(matched)) {
+        this.logger.warn(`Cannot create bookings for rental ${rental.id}: title "${rental.title}" does not match any main inventory item`);
+        return [];
+      }
+      mainItems.push({ name: matched, quantity: 1 });
+    }
+
+    // All revenue goes to main items only (accessories are bundled, not separate revenue items)
+    // rental_price is set to ownerEarnings by the scanner — platform fees already deducted by Hygglo
     const totalRevenue = rental.rental_price || 0;
-    const perItemRevenue = matchedItems.length > 0 ? totalRevenue / matchedItems.length : 0;
-    // Estimate 15% platform fee (Hygglo standard)
-    const platformFeeRate = 0.15;
+    const perItemRevenue = mainItems.length > 0 ? totalRevenue / mainItems.length : 0;
 
     const createdBookings: any[] = [];
     const renterName = rental.renter_info || 'Unknown';
     const account = rental.account || 'dbcinema';
 
-    for (const item of matchedItems) {
+    for (const item of mainItems) {
       // Check if a booking already exists for this rental + item (any status)
       const existing = await this.prisma.booking.findFirst({
         where: {
@@ -437,10 +650,24 @@ export class CalendarService implements OnModuleInit {
       const availability = await this.checkAvailability(item.name, rental.start_date, rental.end_date);
 
       const itemRevenue = Math.round(perItemRevenue * 100) / 100;
-      const itemFee = Math.round(itemRevenue * platformFeeRate * 100) / 100;
+      // Platform fee is 0: rental_price is already ownerEarnings (Hygglo fees pre-deducted)
+      const itemFee = 0;
 
-      // Auto-block overbooked items: set status to 'pending_review' instead of 'confirmed'
-      const bookingStatus = availability.available ? 'confirmed' : 'pending_review';
+      // Booking status depends on BOTH rental acceptance AND inventory availability:
+      // - pending rental → always pending_review (not yet accepted on Hygglo)
+      // - accepted rental + available → confirmed
+      // - accepted rental + overbooked → pending_review
+      const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+      const bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
+
+      // Build rich notes JSON: all bundle items (main + accessories) + auto-block info
+      const bundleNotes: any = {
+        allItems: matchedItems.map(i => i.name),
+        accessories: accessoryItems.map(i => i.name),
+      };
+      if (!availability.available) {
+        bundleNotes.autoBlocked = `${item.name} overbooked (${availability.booked}/${availability.maxQuantity} already booked)`;
+      }
 
       const booking = await this.prisma.booking.create({
         data: {
@@ -452,12 +679,10 @@ export class CalendarService implements OnModuleInit {
           account,
           rental_id: rental.id,
           revenue: itemRevenue > 0 ? itemRevenue : null,
-          platform_fee: itemFee > 0 ? itemFee : null,
-          net_profit: itemRevenue > 0 ? Math.round((itemRevenue - itemFee) * 100) / 100 : null,
+          platform_fee: itemFee,
+          net_profit: itemRevenue > 0 ? itemRevenue : null,
           status: bookingStatus,
-          notes: !availability.available
-            ? `AUTO-BLOCKED: ${item.name} overbooked (${availability.booked}/${availability.maxQuantity} already booked)`
-            : null,
+          notes: JSON.stringify(bundleNotes),
         },
       });
 
@@ -476,6 +701,97 @@ export class CalendarService implements OnModuleInit {
     }
 
     return createdBookings;
+  }
+
+  /**
+   * Add owner decision notes to all bookings for a rental.
+   * Called when Daniel approves/confirms something via Telegram decision prompts.
+   */
+  async addDecisionNotesToBookings(
+    rentalId: string,
+    decisionNote: string,
+  ): Promise<number> {
+    const bookings = await this.prisma.booking.findMany({
+      where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
+      select: { id: true, notes: true },
+    });
+
+    let updated = 0;
+    for (const booking of bookings) {
+      let notesObj: any = {};
+      try { notesObj = booking.notes ? JSON.parse(booking.notes) : {}; } catch { notesObj = {}; }
+      if (!notesObj.ownerNotes) notesObj.ownerNotes = [];
+      notesObj.ownerNotes.push({
+        note: decisionNote,
+        timestamp: new Date().toISOString(),
+      });
+      await this.prisma.booking.update({
+        where: { id: booking.id },
+        data: { notes: JSON.stringify(notesObj) },
+      });
+      updated++;
+    }
+    this.logger.log(`Added decision note to ${updated} booking(s) for rental ${rentalId}`);
+    return updated;
+  }
+
+  /**
+   * Cascade rental status changes to related bookings.
+   * When a rental goes from pending → accepted (upcoming/ongoing), promote bookings to confirmed.
+   * When a rental goes to cancelled/obsolete, cancel bookings.
+   */
+  async cascadeRentalStatusToBookings(rentalId: string, newRentalStatus: string, oldRentalStatus?: string): Promise<number> {
+    const accepted = ['upcoming', 'ongoing', 'completed'];
+    const wasAccepted = oldRentalStatus && accepted.includes(oldRentalStatus);
+    const isNowAccepted = accepted.includes(newRentalStatus);
+    const isCancelled = ['cancelled', 'obsolete'].includes(newRentalStatus);
+
+    let updated = 0;
+
+    if (!wasAccepted && isNowAccepted) {
+      // Rental accepted — promote pending_review bookings to confirmed (if available)
+      const bookings = await this.prisma.booking.findMany({
+        where: { rental_id: rentalId, status: 'pending_review' },
+      });
+      for (const booking of bookings) {
+        const availability = await this.checkAvailability(
+          booking.item_name, booking.start_date, booking.end_date,
+        );
+        const newStatus = availability.available ? 'confirmed' : 'pending_review';
+        if (newStatus !== booking.status) {
+          await this.prisma.booking.update({
+            where: { id: booking.id },
+            data: { status: newStatus },
+          });
+          updated++;
+        }
+      }
+      if (updated > 0) {
+        this.logger.log(`Promoted ${updated} booking(s) to confirmed for rental ${rentalId}`);
+      }
+    } else if (isCancelled) {
+      // Rental cancelled — cancel all active bookings
+      const result = await this.prisma.booking.updateMany({
+        where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
+        data: { status: 'cancelled' },
+      });
+      updated = result.count;
+      if (updated > 0) {
+        this.logger.log(`Cancelled ${updated} booking(s) for cancelled rental ${rentalId}`);
+      }
+    } else if (wasAccepted && !isNowAccepted && !isCancelled) {
+      // Rental went from accepted back to pending — demote bookings
+      const result = await this.prisma.booking.updateMany({
+        where: { rental_id: rentalId, status: 'confirmed' },
+        data: { status: 'pending_review' },
+      });
+      updated = result.count;
+      if (updated > 0) {
+        this.logger.log(`Demoted ${updated} booking(s) to pending_review for rental ${rentalId}`);
+      }
+    }
+
+    return updated;
   }
 
   async getFullInventoryStatus(daysAhead = 7): Promise<string> {
@@ -586,13 +902,36 @@ export class CalendarService implements OnModuleInit {
       }
     }
 
+    // Owner unavailability blocks for this day
+    try {
+      const dayStart = new Date(date);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(date);
+      dayEnd.setHours(23, 59, 59, 999);
+      const vacationBlocks = await this.getActiveUnavailabilities(dayStart, dayEnd);
+      if (vacationBlocks.length > 0) {
+        lines.push('\nOWNER UNAVAILABLE:');
+        for (const block of vacationBlocks) {
+          if (block.all_day) {
+            lines.push(`  - ALL DAY${block.reason ? ` (${block.reason})` : ''}`);
+          } else {
+            const startStr = this.formatTimeFromDate(block.start_time);
+            const endStr = block.end_time ? this.formatTimeFromDate(block.end_time) : 'onwards';
+            lines.push(`  - ${startStr} ${endStr === 'onwards' ? 'onwards' : `to ${endStr}`}${block.reason ? ` (${block.reason})` : ''}`);
+          }
+        }
+      }
+    } catch (vacErr) {
+      this.logger.debug(`Vacation block fetch for schedule failed: ${vacErr.message}`);
+    }
+
     return lines.join('\n');
   }
 
   // Compact inventory context cache (5-minute TTL)
   private compactInventoryCache: string | null = null;
   private compactInventoryCacheTime = 0;
-  private static readonly COMPACT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private static readonly COMPACT_CACHE_TTL = 60 * 1000; // 60 seconds — fresh availability for AI context
 
   /**
    * Generate a compact inventory + availability context for the AI.
@@ -693,8 +1032,47 @@ export class CalendarService implements OnModuleInit {
       lines.push('\nCURRENTLY BOOKED: None — all items available.');
     }
 
+    // Upcoming owner unavailability blocks (next 5)
+    try {
+      const upcomingVacations = await this.prisma.owner_unavailability.findMany({
+        where: {
+          active: true,
+          OR: [
+            { end_time: { gte: new Date() } },
+            { end_time: null },
+          ],
+        },
+        orderBy: { start_time: 'asc' },
+        take: 5,
+      });
+      if (upcomingVacations.length > 0) {
+        lines.push('\nOWNER UNAVAILABLE (no pickups/returns during these times):');
+        for (const v of upcomingVacations) {
+          const dayStr = v.start_time.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+          if (v.all_day) {
+            lines.push(`- ${dayStr}: ALL DAY${v.reason ? ` (${v.reason})` : ''}`);
+          } else {
+            const startStr = this.formatTimeFromDate(v.start_time);
+            const endStr = v.end_time ? this.formatTimeFromDate(v.end_time) : 'onwards';
+            lines.push(`- ${dayStr} from ${startStr} ${endStr === 'onwards' ? 'onwards' : `to ${endStr}`}${v.reason ? ` (${v.reason})` : ''}`);
+          }
+        }
+      }
+    } catch (vacErr) {
+      this.logger.debug(`Vacation blocks for inventory context failed: ${vacErr.message}`);
+    }
+
+    // Marketing-only items: listed on Hygglo for visibility but NOT physically available
+    const marketingOnlyItems = PRICING_CATALOG.filter(p => p.marketing_only).map(p => p.item_name);
+    if (marketingOnlyItems.length > 0) {
+      lines.push(
+        `\nMARKETING-ONLY LISTINGS (listed for visibility, NOT physically available): ${marketingOnlyItems.join(', ')}`,
+        'If renter asks about these, say "currently unavailable" and suggest closest owned alternative from inventory above.',
+      );
+    }
+
     lines.push(
-      '\nRULES: This is ALL we stock. If renter asks for something NOT on this list, say "we don\'t currently stock [item]" and suggest the closest alternative from this list. NEVER confirm items not listed above.',
+      '\nRULES: This is ALL we stock. If renter asks for something NOT on this list, say it is "currently unavailable" and suggest the closest alternative from this list. Frame as a temporary stock issue, NEVER as a permanent gap. NEVER confirm items not listed above.',
       'For lenses, note the mount system (Sony E-mount, Canon EF mount) — different mounts are NOT interchangeable. We do NOT stock Canon RF lenses.',
       'NEVER offer to source, procure, or find additional units beyond what is listed — our inventory is fixed.',
     );

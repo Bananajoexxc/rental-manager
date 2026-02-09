@@ -6,6 +6,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { HyggloService } from '../hygglo/hygglo.service';
 import { AiService } from '../ai/ai.service';
 import { CalendarService } from '../calendar/calendar.service';
+import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
@@ -20,6 +21,7 @@ export class FollowUpService {
     private hyggloService: HyggloService,
     private aiService: AiService,
     private calendarService: CalendarService,
+    private conversationStageService: ConversationStageService,
   ) {}
 
   /**
@@ -39,6 +41,7 @@ export class FollowUpService {
       data: {
         rental_id: rentalId,
         status: 'active',
+        conversation_stage: 'inquiry',
       },
     });
 
@@ -59,7 +62,10 @@ export class FollowUpService {
 
     try {
       const activeStates = await this.prisma.follow_up_state.findMany({
-        where: { status: 'active' },
+        where: {
+          status: 'active',
+          conversation_stage: { notIn: ['dead', 'completed'] },
+        },
         include: {
           rental: true,
         },
@@ -169,9 +175,13 @@ export class FollowUpService {
       if (state.followup_count === 1 && hoursSinceFollowup < 10) {
         return;
       }
-      // Final follow-up: wait for 24h since last renter message
+      // Save attempt: wait for 18h since last renter message
       if (state.followup_count === 2) {
-        return; // Handled by the 24h check below
+        return; // Handled by the 18h check below
+      }
+      // After save: wait for DEAD threshold
+      if (state.followup_count >= 3) {
+        return; // Handled by DEAD check below
       }
     }
 
@@ -187,26 +197,34 @@ export class FollowUpService {
       return;
     }
 
-    // 8. 24+ hours AND followup_count === 2 -> final follow-up
-    if (hoursSinceRenter >= 24 && state.followup_count === 2) {
-      await this.sendFollowUp(state, state.rental, 'final_attempt_24h');
+    // 8. 18+ hours AND followup_count === 2 -> SAVE ATTEMPT (scarcity + bundle)
+    if (hoursSinceRenter >= 18 && state.followup_count === 2) {
+      await this.sendSaveAttempt(state, state.rental);
       return;
     }
 
-    // 9. followup_count >= 3 AND auto_accept_eligible -> trigger auto-accept (2h after final)
+    // 9. followup_count >= 3 AND auto_accept_eligible -> trigger auto-accept (2h after save)
     if (hoursSinceRenter >= 26 && state.followup_count >= 3 && state.auto_accept_eligible) {
       await this.triggerAutoAccept(state, state.rental);
       return;
     }
 
-    // 10. followup_count >= 3 AND NOT eligible -> mark as exhausted (no notification)
-    if (hoursSinceRenter >= 26 && state.followup_count >= 3 && !state.auto_accept_eligible) {
+    // 10. followup_count >= 3 AND 24h+ -> mark as exhausted + DEAD
+    if (hoursSinceRenter >= 24 && state.followup_count >= 3) {
       if (!state.auto_accepted) {
+        // Store current stage before marking DEAD (for smart revival)
+        const currentStage = state.conversation_stage || 'inquiry';
         await this.prisma.follow_up_state.update({
           where: { id: state.id },
-          data: { auto_accepted: true },
+          data: { auto_accepted: true, stage_before_dead: currentStage },
         });
-        this.logger.log(`Follow-ups exhausted for ${state.rental?.title} — no response after ${state.followup_count} attempts`);
+        // Mark conversation as DEAD — follow-ups + save attempt exhausted
+        try {
+          await this.conversationStageService.setStage(state.rental_id, 'dead' as any);
+          this.logger.log(`Follow-ups exhausted for ${state.rental?.title} — marked DEAD after ${state.followup_count} attempts (save attempt sent)`);
+        } catch {
+          this.logger.log(`Follow-ups exhausted for ${state.rental?.title} — no response after ${state.followup_count} attempts`);
+        }
       }
     }
   }
@@ -220,9 +238,7 @@ export class FollowUpService {
     const followupNumber = state.followup_count + 1;
     const followUpMessage = followupNumber === 1
       ? `Just checking in - let me know if you had any other questions about the ${itemName}!`
-      : followupNumber === 2
-      ? `Still interested in the ${itemName}? Happy to hold it for you if needed.`
-      : `Last check-in on the ${itemName} - no worries if plans changed, just let me know either way!`;
+      : `Still interested in the ${itemName}? Happy to hold it for you if needed.`;
 
     // Send via Hygglo (sendMessage handles READ_ONLY_MODE with per-rental exceptions)
     try {
@@ -245,6 +261,81 @@ export class FollowUpService {
   }
 
   /**
+   * SAVE ATTEMPT: Last-ditch effort to retain a cold lead before marking DEAD.
+   * Uses scarcity ("another inquiry on your dates") + bundle suggestion if applicable.
+   * Fires as follow-up #3, replacing the old generic "no worries" message.
+   */
+  private async sendSaveAttempt(state: any, rental: any): Promise<void> {
+    const itemName = rental?.title || 'the rental';
+
+    // Build bundle suggestion from extracted items
+    let bundleSuggestion = '';
+    try {
+      const extractedItems = await this.prisma.extracteditem.findMany({
+        where: { rental_id: rental.id },
+        select: { item_name: true },
+      });
+      if (extractedItems.length > 0) {
+        // Detect item category and suggest complementary gear
+        const itemNames = extractedItems.map(e => e.item_name.toLowerCase());
+        const hasCamera = itemNames.some(n => /fx3|a7|bmpcc|camera|pocket/i.test(n));
+        const hasLens = itemNames.some(n => /lens|mm|gm|24-70|70-200|50mm/i.test(n));
+        const hasAudio = itemNames.some(n => /mic|rode|sennheiser|audio|wireless/i.test(n));
+        const hasGimbal = itemNames.some(n => /gimbal|rs3|rs2|ronin/i.test(n));
+        const hasLight = itemNames.some(n => /light|aputure|led|panel/i.test(n));
+
+        // Suggest what they DON'T have yet
+        if (hasCamera && !hasAudio) {
+          bundleSuggestion = `\n\nBy the way, if you need clean audio for the shoot I could bundle in a wireless mic set at a good rate — saves you sourcing it separately.`;
+        } else if (hasCamera && !hasGimbal) {
+          bundleSuggestion = `\n\nAlso, if you need smooth handheld shots, I could bundle a gimbal with the camera package — works out better value together.`;
+        } else if (hasLens && !hasCamera) {
+          bundleSuggestion = `\n\nIf you need a camera body to go with that lens, I could put together a bundle that works out better value than renting separately.`;
+        } else if (hasLight && extractedItems.length === 1) {
+          bundleSuggestion = `\n\nIf you're setting up a lighting rig, I've got stands and modifiers that pair well with it — happy to put a bundle together.`;
+        }
+      }
+    } catch {
+      // Non-critical — skip bundle if extraction fails
+    }
+
+    // Check if rejected_suggestions exist — don't re-suggest rejected items
+    if (state.rejected_suggestions && bundleSuggestion) {
+      const rejected = state.rejected_suggestions.toLowerCase();
+      if (
+        (rejected.includes('mic') && bundleSuggestion.includes('mic')) ||
+        (rejected.includes('gimbal') && bundleSuggestion.includes('gimbal'))
+      ) {
+        bundleSuggestion = ''; // They already declined this category
+      }
+    }
+
+    // Compose save message: scarcity + optional bundle
+    const saveMessage = `Just a heads up — I've had another inquiry for the ${itemName} on your dates. ` +
+      `Happy to hold it for you if you're still keen, just let me know!` +
+      bundleSuggestion;
+
+    // Send via Hygglo
+    try {
+      await this.hyggloService.sendMessage(rental.listing_id, saveMessage);
+    } catch (error) {
+      this.logger.warn(`Failed to send save attempt for ${rental?.title}: ${error.message}`);
+    }
+
+    // Update state
+    await this.prisma.follow_up_state.update({
+      where: { id: state.id },
+      data: {
+        followup_count: { increment: 1 },
+        last_bot_followup_at: new Date(),
+        last_bot_message_at: new Date(),
+      },
+    });
+
+    this.logger.log(`SAVE ATTEMPT sent for ${rental?.title} (scarcity${bundleSuggestion ? ' + bundle' : ''})`);
+  }
+
+  /**
    * Rule 3: Auto-accept after follow-ups exhausted.
    * Double-check availability, then Playwright accept.
    */
@@ -263,13 +354,9 @@ export class FollowUpService {
         startDate.getDate() === today.getDate()
       ) {
         this.logger.warn(`Auto-accept blocked: same-day rental ${rental.title} requires Daniel's manual approval`);
-        await this.telegramService.sendProactiveMessage(
-          `⏰ *Auto-Accept Blocked (Same-Day Rental)*\n\n` +
-          `├ 📦 ${rental.title}\n` +
-          `├ 👤 ${rental.renter_info || 'Unknown'}\n` +
-          `├ 📅 Start: ${startDate.toLocaleDateString('en-GB')}\n` +
-          `└ 🚫 Same-day rentals need your manual approval`,
-        );
+        await this.telegramService.sendRentalUpdate(rental.id, {
+          type: 'same_day_block', priority: 'high', data: {},
+        }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
         return;
       }
     }
@@ -289,13 +376,10 @@ export class FollowUpService {
         // Block if verification is not complete
         if (profile && profile.verification_status !== 'verified' && profile.verification_status !== 'unknown') {
           this.logger.warn(`Auto-accept blocked: verification not complete for ${rental.title} (${profile.verification_status})`);
-          await this.telegramService.sendProactiveMessage(
-            `⛔ *Auto-Accept Blocked (Verification)*\n\n` +
-            `├ 📦 ${rental.title}\n` +
-            `├ 👤 ${profile.name || rental.renter_info || 'Unknown'}\n` +
-            `├ 🔐 Status: ${profile.verification_status}\n` +
-            `└ Verification must complete before acceptance`,
-          );
+          await this.telegramService.sendRentalUpdate(rental.id, {
+            type: 'verification_block', priority: 'high',
+            data: { status: profile.verification_status },
+          }, { rentalTitle: rental.title, renterName: profile.name || rental.renter_info, account: rental.account });
           return;
         }
       }
@@ -314,12 +398,9 @@ export class FollowUpService {
       });
       if (reviewDecisions) {
         this.logger.warn(`Auto-accept blocked: review escalation exists for ${rental.title}`);
-        await this.telegramService.sendProactiveMessage(
-          `⛔ *Auto-Accept Blocked (Reviews)*\n\n` +
-          `├ 📦 ${rental.title}\n` +
-          `├ ⚠️ Review-related escalation exists\n` +
-          `└ Manual review required`,
-        );
+        await this.telegramService.sendRentalUpdate(rental.id, {
+          type: 'review_block', priority: 'high', data: {},
+        }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
         return;
       }
     } catch (reviewErr) {
@@ -342,18 +423,40 @@ export class FollowUpService {
           );
           if (!availability.available) {
             this.logger.warn(`Auto-accept blocked: ${item.item_name} not available for ${rental.title}`);
-            await this.telegramService.sendProactiveMessage(
-              `⛔ *Auto-Accept Blocked*\n\n` +
-              `├ 📦 ${rental.title}\n` +
-              `├ ❌ ${item.item_name} is not available\n` +
-              `└ Manual review required`,
-            );
+            await this.telegramService.sendRentalUpdate(rental.id, {
+              type: 'availability_block', priority: 'high',
+              data: { itemName: item.item_name },
+            }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
             return;
           }
         }
       }
     } catch (error) {
       this.logger.warn(`Availability check failed during auto-accept: ${error.message}`);
+    }
+
+    // Apply location-based discount before accepting (if eligible and not already applied)
+    try {
+      const discountCheck = await this.checkAndApplyDiscount(rental);
+      if (discountCheck.applied && discountCheck.percentage) {
+        const discountResult = await this.playwrightService.applyDiscount(
+          rental.listing_id,
+          account,
+          discountCheck.percentage,
+        );
+        if (discountResult.success) {
+          this.logger.log(`Pre-accept discount applied for ${rental.title}: £${discountResult.originalPrice} → £${discountResult.discountedPrice}`);
+          // Mark discount as applied in follow-up state
+          await this.prisma.follow_up_state.updateMany({
+            where: { rental_id: rental.id },
+            data: { discount_applied: true },
+          });
+        } else {
+          this.logger.warn(`Discount application failed for ${rental.title}: ${discountResult.error} — proceeding with acceptance`);
+        }
+      }
+    } catch (discountErr) {
+      this.logger.warn(`Discount check/apply failed during auto-accept: ${discountErr.message}`);
     }
 
     // Attempt Playwright accept
@@ -381,12 +484,10 @@ export class FollowUpService {
 
       this.logger.log(`Auto-accepted: ${rental.title}`);
     } else {
-      await this.telegramService.sendProactiveMessage(
-        `⚠️ *Auto-Accept Failed*\n\n` +
-        `├ 📦 ${rental.title}\n` +
-        `├ ❌ Error: ${result.error}\n` +
-        `└ Please accept manually`,
-      );
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'auto_accept_failed', priority: 'high',
+        data: { error: result.error },
+      }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
     }
 
     this.logger.log(`Auto-accept for ${rental.title}: ${result.success ? 'SUCCESS' : 'FAILED'}`);
@@ -394,9 +495,23 @@ export class FollowUpService {
 
   /**
    * Called when a renter sends a message. Resets follow-up counters.
+   * If conversation was DEAD, revives to previous stage (smart revival).
    */
   async onRenterMessage(rentalId: string): Promise<void> {
     try {
+      // Check if this rental was DEAD — if so, revive it
+      const state = await this.prisma.follow_up_state.findUnique({
+        where: { rental_id: rentalId },
+      });
+      if (state?.conversation_stage === 'dead') {
+        // Smart revival: restore to previous stage instead of always resetting to INTERESTED
+        const reviveStage = state.stage_before_dead || 'interested';
+        // Don't revive to inquiry — minimum is interested (they had a conversation)
+        const safeStage = reviveStage === 'inquiry' ? 'interested' : reviveStage;
+        this.logger.log(`Reviving DEAD conversation for rental ${rentalId} → ${safeStage} (was ${state.stage_before_dead || 'unknown'})`);
+        await this.conversationStageService.setStage(rentalId, safeStage as any);
+      }
+
       await this.prisma.follow_up_state.updateMany({
         where: { rental_id: rentalId, status: 'active' },
         data: {
@@ -404,6 +519,7 @@ export class FollowUpService {
           last_renter_message_at: new Date(),
           custom_reminder_at: null,
           custom_reminder_reason: null,
+          auto_accepted: false, // Reset so follow-ups can run again if they go cold again
         },
       });
     } catch {
@@ -523,6 +639,16 @@ export class FollowUpService {
     const startDate = rental.start_date ? new Date(rental.start_date) : null;
     const endDate = rental.end_date ? new Date(rental.end_date) : null;
 
+    // Non-central listing location → automatic 10% distance discount
+    if (rental.listing_location) {
+      const centralLocations = ['trafalgar', 'whitehall', 'central london', 'charing cross', 'pall mall', 'national gallery', 'westminster', 'covent garden'];
+      const loc = rental.listing_location.toLowerCase();
+      const isCentral = centralLocations.some(c => loc.includes(c));
+      if (!isCentral) {
+        return { eligible: true, reason: `Non-central location (${rental.listing_location})` };
+      }
+    }
+
     // >350 profit (uses combined value for multi-item requests)
     if (price > 350) {
       return { eligible: true, reason: `High value order (>£350${rental._multiItemContext ? ' combined' : ''})` };
@@ -530,7 +656,7 @@ export class FollowUpService {
 
     // 7+ day rental
     if (startDate && endDate) {
-      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
       if (days >= 7) {
         return { eligible: true, reason: 'Long rental (7+ days)' };
       }
@@ -648,13 +774,12 @@ export class FollowUpService {
   async checkDeliveryTCs(state: any, rental: any): Promise<void> {
     if (!rental) return;
 
-    // Stage gate: only send delivery T&Cs after QUALIFIED stage (not at inquiry/interest)
+    // Stage gate: only send delivery T&Cs when registry allows (QUALIFIED+)
     const followUpState = await this.prisma.follow_up_state.findUnique({
       where: { rental_id: rental.id },
       select: { conversation_stage: true },
     });
-    const qualifiedStages = ['qualified', 'booking_ready', 'booking_sent', 'awaiting_verification', 'confirmed'];
-    if (!followUpState || !qualifiedStages.includes(followUpState.conversation_stage)) return;
+    if (!followUpState || !this.conversationStageService.isActionAllowed(followUpState.conversation_stage, 'delivery_tcs')) return;
 
     // Check if this is a delivery order (look for delivery-related ai_decision records)
     const deliveryDecisions = await this.prisma.ai_decision.findFirst({
@@ -730,16 +855,26 @@ export class FollowUpService {
    * Returns true if a follow-up was sent.
    */
   private async evaluateTimeFollowUp(state: any, rental: any): Promise<boolean> {
-    // Gate: must be confirmed stage, time request sent, times still pending, not auto-assigned
+    // Gate: stage-gated via registry + time request sent, not auto-assigned
     if (
-      state.conversation_stage !== 'confirmed' ||
+      !this.conversationStageService.isActionAllowed(state.conversation_stage || '', 'time_followup') ||
       !state.time_request_sent ||
-      state.times_status !== 'none' ||
       state.times_auto_assigned ||
       state.time_followup_count >= 3
     ) {
       return false;
     }
+
+    // Check actual booking fields — both pickup AND return must be set
+    try {
+      const booking = await this.prisma.booking.findFirst({
+        where: { rental_id: rental.id, status: 'confirmed' },
+        select: { pickup_time: true, return_time: true },
+      });
+      if (booking?.pickup_time && booking?.return_time) {
+        return false; // Both times confirmed — no follow-up needed
+      }
+    } catch { /* continue with follow-up */ }
 
     const now = new Date();
 
@@ -755,15 +890,15 @@ export class FollowUpService {
       ? (now.getTime() - lastTimeFollowup.getTime()) / (1000 * 60 * 60)
       : Infinity;
 
-    // Follow-up schedule: 3h, 9h, 18h after request
+    // Follow-up schedule: 2h, 6h, 12h after request
     const followupCount = state.time_followup_count || 0;
     let shouldSend = false;
 
-    if (followupCount === 0 && hoursSinceRequest >= 3) {
+    if (followupCount === 0 && hoursSinceRequest >= 2) {
       shouldSend = true;
-    } else if (followupCount === 1 && hoursSinceRequest >= 9 && hoursSinceLastFollowup >= 5) {
+    } else if (followupCount === 1 && hoursSinceRequest >= 6 && hoursSinceLastFollowup >= 3) {
       shouldSend = true;
-    } else if (followupCount === 2 && hoursSinceRequest >= 18 && hoursSinceLastFollowup >= 8) {
+    } else if (followupCount === 2 && hoursSinceRequest >= 12 && hoursSinceLastFollowup >= 5) {
       shouldSend = true;
     }
 
@@ -779,10 +914,23 @@ export class FollowUpService {
   private async sendTimeFollowUp(state: any, rental: any, followupNumber: number): Promise<void> {
     const itemName = rental?.title || 'the rental';
 
+    // Check which time is actually missing
+    let missingTime = 'pickup and return times';
+    try {
+      const booking = await this.prisma.booking.findFirst({
+        where: { rental_id: rental.id, status: 'confirmed' },
+        select: { pickup_time: true, return_time: true },
+      });
+      if (booking) {
+        if (booking.pickup_time && !booking.return_time) missingTime = 'return time';
+        else if (!booking.pickup_time && booking.return_time) missingTime = 'pickup time';
+      }
+    } catch { /* use default */ }
+
     const messages = [
-      `Quick reminder — just need pickup and return times (with AM or PM) for the ${itemName}!`,
-      `Still need your exact times for the ${itemName}. Just drop a time with AM or PM and I'll lock it in.`,
-      `Last check on times — if I don't hear back, I'll assign the latest available slot for the ${itemName}. Just let me know if you have a preference!`,
+      `Quick reminder — just need your exact ${missingTime} (with AM or PM) for the ${itemName}!`,
+      `Still need your ${missingTime} for the ${itemName}. Just send a time like "6pm" and I'll lock it in.`,
+      `Last check — if I don't hear back, I'll assign the latest available slot for the ${itemName}. Just let me know your preferred ${missingTime}!`,
     ];
 
     const message = messages[Math.min(followupNumber, messages.length - 1)];

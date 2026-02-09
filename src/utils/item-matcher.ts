@@ -17,6 +17,30 @@ const ALIASES: Record<string, string> = {
   'full frame': 'ff',
   monolight: 'light',
   'led light': 'light',
+  // Camera model aliases
+  'a7v': 'a7 v',
+  'a75': 'a7 v',
+  'alpha 7 v': 'a7 v',
+  'a7 5': 'a7 v',
+  'xt5': 'x t5',
+  // Aputure model aliases (600X and 600D are DIFFERENT products — no alias)
+  '300d': '300d',
+  '300d2': '300d ii',
+  'amaran': 'amaran',
+  // DZO aliases
+  dzofilm: 'dzo',
+  'dzo film': 'dzo',
+  // DJ controller aliases
+  'xdj rx2': 'rx2',
+  'xdj rx3': 'rx3',
+  // Rode aliases
+  'wireless go': 'wireless go',
+  'wireless go ii': 'wireless go ii',
+  ntg5: 'ntg5',
+  'ntg 5': 'ntg5',
+  // Drone aliases
+  'mavic 4': 'mavic 4',
+  'mavic4': 'mavic 4',
 };
 
 export function normalizeItemName(input: string): string {
@@ -71,14 +95,19 @@ function getTokenVariants(token: string): string[] {
 
 // Words too generic to match alone — must pair with a product-specific token
 const GENERIC_TOKENS = new Set([
-  'wireless', 'audio', 'mic', 'mics', 'video', 'pro', 'set', 'kit', 'light',
-  'camera', 'lens', 'battery', 'card', 'filter', 'mount', 'plate',
-  'adapter', 'cable', 'case', 'bag', 'charger', 'holder', 'stand',
-  'arm', 'support', 'panel', 'tube', 'speaker', 'controller', 'dj',
+  'wireless', 'audio', 'mic', 'mics', 'video', 'pro', 'set', 'kit', 'light', 'lights',
+  'camera', 'cameras', 'lens', 'lenses', 'battery', 'batteries', 'card', 'cards',
+  'filter', 'filters', 'mount', 'plate', 'plates',
+  'adapter', 'adapters', 'cable', 'cables', 'case', 'bag', 'charger', 'chargers',
+  'holder', 'stand', 'stands', 'dome', 'softbox',
+  'arm', 'arms', 'support', 'panel', 'panels', 'tube', 'tubes',
+  'speaker', 'speakers', 'controller', 'dj',
   'dji', 'jbl', 'nanlite', 'hollyland', 'tilta',
   // NOTE: sony, canon, rode deliberately NOT generic — brand mismatch must block cross-brand matching
   'to', 'for', 'with', 'and', 'the', 'in', 'on', 'of', 'pl',
   'microphone', 'microphones', 'vmount',
+  // Quantity markers — too generic to differentiate products
+  '1x', '2x', '3x', '4x', '5x', '6x',
   // Noise words common in Hygglo listing titles (NOT model identifiers like gm, iii, ii)
   'zoom', 'tele', 'telephoto', 'wide', 'angle', 'prime', 'ff',
   '4k', 'full', 'frame', 'cinema', 'photo', 'photography', 'filming',
@@ -144,7 +173,8 @@ export function findBestMatch(input: string, inventory: string[]): string | null
   let bestItem: string | null = null;
 
   // Brand detection for cross-brand blocking
-  const BRANDS = ['sony', 'canon', 'blackmagic', 'bmpcc', 'fujifilm', 'panasonic', 'nikon', 'red'];
+  const BRANDS = ['sony', 'canon', 'blackmagic', 'bmpcc', 'fujifilm', 'panasonic', 'nikon', 'red',
+    'aputure', 'nanlite', 'rode', 'dji', 'sennheiser', 'pioneer', 'viewsonic', 'anker', 'arri', 'dzo', 'sigma', '7artisans'];
   const inputBrands = BRANDS.filter(b => normalized.includes(b));
 
   for (const item of inventory) {
@@ -187,6 +217,17 @@ export function findBestMatch(input: string, inventory: string[]): string | null
     // Require at least 2 matching tokens total
     if (score < 2) continue;
 
+    // Focal length conflict check: if both input and candidate have mm-tokens
+    // (e.g., "24mm", "90mm", "200mm") and NONE overlap, these are different lenses.
+    // Prevents "Sony 12-24mm f2.8 GM" from matching "Sony GM 90mm f2.8".
+    const mmPattern = /^\d+mm$/;
+    const inputMmTokens = inputTokens.filter(t => mmPattern.test(t));
+    const itemMmTokens = itemTokens.filter(t => mmPattern.test(t));
+    if (inputMmTokens.length > 0 && itemMmTokens.length > 0) {
+      const hasFocalOverlap = inputMmTokens.some(imt => itemMmTokens.includes(imt));
+      if (!hasFocalOverlap) continue; // Different focal lengths = different product
+    }
+
     // Use coverage of the INVENTORY item (shorter side) as primary metric.
     // This handles long Hygglo titles matching short inventory names.
     // Secondary: require at least 30% of the longer string to prevent pure noise matches.
@@ -201,79 +242,119 @@ export function findBestMatch(input: string, inventory: string[]): string | null
   return bestItem;
 }
 
-/** Master inventory list with max quantities */
+/**
+ * Items that are accessories — bundled with cameras but should never create standalone bookings.
+ * Revenue should be attributed to the main equipment item, not split with accessories.
+ */
+export const ACCESSORY_ITEMS = new Set([
+  'PL to Sony E mount',
+  'PL to EF mount',
+  'PL to RF mount',
+  'PL to L mount',
+  'CF Express Type A card',
+  'ND filter',
+  '256GB card',
+  'DJI gimbal battery',
+  'Sony NPF 970 batteries 2x sets',
+  'V-mount 95mAh',
+  'V-mount 150mAh',
+]);
+
+export function isAccessoryItem(name: string): boolean {
+  return ACCESSORY_ITEMS.has(name);
+}
+
+/**
+ * DEFINITIVE MASTER INVENTORY — Daniel's authoritative list (Feb 9 2026).
+ * DO NOT EDIT without Daniel's explicit written permission.
+ * Everything not on this list is marketing-only (externally: "currently out of stock").
+ */
 export const MASTER_INVENTORY: Record<string, number> = {
+  // Anamorphic lenses
   'Anamorphic Blazar Remus 33mm': 1,
   'Anamorphic Blazar Remus 45mm': 1,
   'Anamorphic Blazar Remus 65mm': 1,
   'Anamorphic Blazar Remus 100mm': 1,
-  'Anamorphic Great Joy 35mm': 1,
-  'Anamorphic Great Joy 50mm': 1,
-  'Anamorphic Great Joy 85mm': 1,
+  'Anamorphic Great Joy lens 35mm': 1,
+  'Anamorphic Great Joy lens 50mm': 1,
+  'Anamorphic Great Joy lens 85mm': 1,
+  // Sony lenses
   'Sony GM 24-70mm f2.8': 4,
   'Sony GM 16-35mm f2.8': 1,
   'Sony GM 70-200mm f2.8': 2,
   'Sony GM 90mm f2.8': 1,
   'Sony 28-70mm': 2,
+  'Sony 11mm f2.8 fisheye': 1,
+  // Canon lenses
   'Canon EF 24-105mm f4': 1,
   'Canon EF 16-35mm f2.8': 1,
-  'Sony 11mm f2.8 fisheye': 1,
+  // Camera bodies
   'Sony FX3': 3,
   'Sony A7 III': 1,
   'Sony A7 II': 1,
   'Fujifilm X100 VI': 1,
   'BMPCC 6K Pro': 1,
   'BMPCC 6K Full Frame': 1,
+  // Lights & modifiers
   'Softbox 85cm': 2,
+  'LED light panels RGB': 3,
+  'Nanlite Forza 300': 1,
+  'Nanlite Pavotube 30x II': 4,
+  'Nanlite 500B': 1,
+  'Ambitful RGB light tubes 2x set': 2,
+  '5-in-1 reflector panel': 1,
+  'Camera flash': 1,
+  // Power
   'V-mount 95mAh': 2,
   'V-mount 150mAh': 4,
-  'C-stand': 1,
-  'DJI Osmo Action Pro 5': 3,
-  'DJI Mavic 3 Pro': 1,
-  'LED light panels RGB': 3,
+  'Sony NPF 970 batteries 2x sets': 4,
   'DJI gimbal battery': 3,
-  'Hollyland Mars 4K transmitter': 1,
-  'GoPro 12 Hero': 3,
-  'Suction cups': 6,
-  'Nanlite Forza 300': 1,
-  'Rode Video Mic Go': 1,
-  'Camera flash': 1,
-  'Rode Wireless Mic Pro set': 2,
-  'Audio boom mic Sennheiser': 1,
-  'DJI Wireless Mics': 1,
-  'Smoke machine fogger': 1,
-  'Motorized slider': 1,
-  'ND filter': 3,
-  '256GB card': 3,
-  'Atomos Ninja V': 1,
-  'DJI Mini 4 Pro': 1,
-  'Cinebloom filter mist': 1,
-  'Rode Video Mic Pro Plus': 1,
-  'Nanlite Pavotube 30x II': 4,
-  'Small rig tripod': 3,
-  'Nanlite 500B': 1,
-  'JBL wireless microphones': 1,
-  'Smoke Ninja Pro hazer': 1,
-  'DJ RX3 Pioneer controller': 1,
-  'PL to Sony E mount': 2,
   'Anker Power Station F2000': 1,
+  // Support & gimbals
+  'C-stand': 1,
+  'Small rig tripod': 3,
+  'Sirui tripod': 1,
+  'DJI RS3 Pro gimbal': 2,
+  'Motorized slider': 1,
+  'Tilta Nucleus Nano 2 follow focus': 1,
+  'Tilta shoulder rig': 1,
+  'Monopod arm support': 1,
+  // Monitors & transmitters
+  'Atomos Ninja V': 1,
+  'Hollyland Mars 4K transmitter': 1,
   'Hollyland Pyro S transmitter': 1,
   'Hollyland 7-inch monitor': 1,
+  // Audio
+  'Rode Video Mic Go': 1,
+  'Rode Wireless Mic Pro set': 2,
+  'Rode Video Mic Pro Plus': 1,
+  'Audio boom mic Sennheiser': 1,
+  'DJI Wireless Mics': 1,
+  'DJI Mic 2 wireless': 1,
+  'JBL wireless microphones': 1,
+  // Drones & action cams
+  'DJI Mavic 3 Pro': 1,
+  'DJI Mini 4 Pro': 1,
+  'DJI Osmo Action Pro 5': 3,
+  'GoPro 12 Hero': 3,
+  'Suction cups': 6,
+  // DJ & speakers
+  'DJ RX3 Pioneer controller': 1,
+  'JBL Club 120 speaker': 2,
+  // Smoke & effects
+  'Smoke machine fogger': 1,
+  'Smoke Ninja Pro hazer': 1,
+  'Smoke Ninja': 1,
+  // Filters & cards
+  'ND filter': 3,
+  'Cinebloom filter mist': 1,
+  '256GB card': 3,
+  'CF Express Type A card': 1,
+  // Mount adapters
+  'PL to Sony E mount': 2,
   'PL to EF mount': 1,
   'PL to RF mount': 1,
   'PL to L mount': 1,
-  'DJI Mic 2 wireless': 1,
-  'Sirui tripod': 1,
-  'CF Express Type A card': 1,
-  'JBL Club 120 speaker': 2,
-  'Ambitful RGB light tubes 2x set': 2,
-  'Smoke Ninja': 1,
-  'Tilta Nucleus Nano 2 follow focus': 1,
-  'Sony NPF 970 batteries 2x sets': 4,
-  'Monopod arm support': 1,
-  '5-in-1 reflector panel': 1,
-  'Tilta shoulder rig': 1,
-  'DJI RS3 Pro gimbal': 2,
 };
 
 export function getInventoryItemNames(): string[] {

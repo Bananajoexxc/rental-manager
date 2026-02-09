@@ -27,8 +27,6 @@
     "@nestjs/schedule": "^6.1.0",
     "@nestjs/swagger": "^11.2.3",
     "@prisma/client": "6.7.0",
-    "@sentry/nestjs": "^10.38.0",
-    "@sentry/profiling-node": "^10.38.0",
     "axios": "^1.13.4",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
