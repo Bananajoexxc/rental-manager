@@ -1,13 +1,6 @@
 <claude-mem-context>
 # Recent Activity
 
-### Feb 6, 2026
-
-| ID | Time | T | Title | Read |
-|----|------|---|-------|------|
-| #334 | 7:18 PM | 🔵 | Conversation History Retrieval Limits Vary by Service | ~354 |
-| #313 | 7:12 PM | 🔵 | DJI Mavic 3 Pro Inventory and Pricing Configuration | ~441 |
-
 ### Feb 7, 2026
 
 | ID | Time | T | Title | Read |

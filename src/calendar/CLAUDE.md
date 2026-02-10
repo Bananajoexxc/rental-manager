@@ -12,19 +12,11 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #347 | 7:26 PM | 🔵 | Calendar Service Booking Time Management | ~380 |
-| #326 | 7:16 PM | 🔵 | Complete Context Pipeline Analysis Confirms No Temporal Grounding | ~639 |
-| #325 | 7:15 PM | 🔵 | Calendar Service Provides Formatted Context Without Current Date Reference | ~465 |
 
 ### Feb 7, 2026
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
-| #773 | 10:55 PM | 🔴 | Removed Fourth Parameter from checkAvailability Call | ~288 |
-| #766 | 10:54 PM | 🟣 | Added Cascade Logic for Rental Status Changes | ~335 |
-| #765 | " | 🔴 | Implemented Rental Status Validation in Booking Creation | ~302 |
-| #764 | 10:53 PM | ✅ | Added Status Field to Rental Type Definition | ~205 |
-| #754 | 10:52 PM | 🔵 | Booking Status Set Without Rental Status Check | ~303 |
-| #746 | 10:50 PM | 🔵 | Booking Creation Sets Status Based on Availability | ~346 |
 | #718 | 5:30 PM | ⚖️ | Comprehensive Lost Revenue Feature Design Completed | ~596 |
 | #711 | 5:28 PM | 🔵 | Time-Based Conflict Detection with 1-Hour Buffer Enforcement | ~432 |
 | #709 | 5:27 PM | 🔵 | Calendar Service Availability Checking and Overbooking Detection | ~452 |
