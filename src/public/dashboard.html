@@ -215,6 +215,11 @@
     .panel-wrapper.panel-hidden > :not(.panel-edit-bar) { display:none !important; }
     body:not(.edit-mode) .panel-wrapper.panel-hidden { display:none; }
 
+    #panel-system-map.active {
+      display: flex;
+      flex-direction: column;
+    }
+
     /* Stat card expandable hover */
     .stat-card { position:relative; transition: opacity 0.15s; cursor:pointer; }
     .stat-expand {
