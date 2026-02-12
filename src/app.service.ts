@@ -590,8 +590,9 @@ export class AppService {
       status: 'active',
       rental: {
         OR: [
-          { status: { in: ['pending', 'upcoming', 'ongoing'] } }, // Active conversations
-          { end_date: { gte: twoWeeksAgo } }, // Recently ended (for completed/dead tracking)
+          { status: 'pending', start_date: { gte: todayStart } }, // Pending with future start date only
+          { status: { in: ['upcoming', 'ongoing'] } },            // Accepted/active rentals
+          { end_date: { gte: twoWeeksAgo }, status: { in: ['completed', 'ongoing'] } }, // Recently finished
         ],
         ...(account ? { account } : {}),
       },

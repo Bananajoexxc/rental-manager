@@ -787,7 +787,8 @@ Don't reference the silence or sound disappointed.`,
 
   /**
    * Cron: Every 5 minutes, reconcile conversation stages with rental status.
-   * Catches rentals whose Hygglo status changed (accepted/cancelled) without a new message.
+   * 1. Sync with Hygglo status changes (accepted/cancelled) without a new message.
+   * 2. Mark conversations DEAD when renter engaged then ghosted (>48h silence after bot replied).
    */
   @Cron('*/5 * * * *')
   async reconcileStages(): Promise<void> {
@@ -798,7 +799,12 @@ Don't reference the silence or sound disappointed.`,
           status: 'active',
           conversation_stage: { not: 'completed' },
         },
-        select: { rental_id: true, conversation_stage: true },
+        select: {
+          rental_id: true,
+          conversation_stage: true,
+          last_renter_message_at: true,
+          last_bot_message_at: true,
+        },
       });
 
       if (states.length === 0) return;
@@ -807,10 +813,11 @@ Don't reference the silence or sound disappointed.`,
       const rentalIds = states.map(s => s.rental_id);
       const rentals = await this.prisma.rental.findMany({
         where: { id: { in: rentalIds } },
-        select: { id: true, status: true, end_date: true },
+        select: { id: true, status: true, start_date: true, end_date: true },
       });
       const rentalMap = new Map(rentals.map(r => [r.id, r]));
 
+      const now = new Date();
       let fixed = 0;
       for (const state of states) {
         const rental = rentalMap.get(state.rental_id);
@@ -820,7 +827,7 @@ Don't reference the silence or sound disappointed.`,
         let newStage: ConversationStage | null = null;
 
         // Completed: end_date passed + accepted status
-        if (rental.end_date && new Date(rental.end_date) < new Date() &&
+        if (rental.end_date && new Date(rental.end_date) < now &&
             ['completed', 'ongoing'].includes(rental.status) &&
             currentStage !== ConversationStage.COMPLETED) {
           newStage = ConversationStage.COMPLETED;
@@ -833,6 +840,19 @@ Don't reference the silence or sound disappointed.`,
         // Dead: rental cancelled/obsolete
         else if (['cancelled', 'obsolete'].includes(rental.status) &&
                  currentStage !== ConversationStage.DEAD) {
+          newStage = ConversationStage.DEAD;
+        }
+        // Dead: renter engaged then ghosted — bot replied but renter never came back (>48h)
+        else if (
+          currentStage !== ConversationStage.DEAD &&
+          rental.status === 'pending' &&
+          state.last_renter_message_at &&
+          state.last_bot_message_at &&
+          state.last_bot_message_at > state.last_renter_message_at &&
+          (now.getTime() - state.last_renter_message_at.getTime()) > 48 * 60 * 60 * 1000 &&
+          // Only if start date is still in the future (expired ones are just excluded from funnel)
+          rental.start_date && new Date(rental.start_date) >= now
+        ) {
           newStage = ConversationStage.DEAD;
         }
         // Fix NULL stages
