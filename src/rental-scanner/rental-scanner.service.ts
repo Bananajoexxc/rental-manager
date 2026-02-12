@@ -250,6 +250,46 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // Auto-detect rentals completed on Hygglo (returned by owner outside our app)
+      // If a rental is 'ongoing' in our DB but missing from the Hygglo active scan AND overdue,
+      // it was returned on Hygglo directly. Mark as completed so it drops from the return hub.
+      try {
+        const scannedListingIds = new Set(allRentals.map(r => r.listingId));
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const missingOngoing = await this.prisma.rental.findMany({
+          where: {
+            status: 'ongoing',
+            end_date: { lt: todayStart }, // overdue — end date has passed
+          },
+          select: { id: true, listing_id: true, title: true, renter_info: true, account: true },
+        });
+
+        // Only complete those missing from the Hygglo scan results
+        const toComplete = missingOngoing.filter(r => !scannedListingIds.has(r.listing_id));
+
+        for (const rental of toComplete) {
+          this.logger.log(`✅ Auto-completing rental (returned on Hygglo): ${rental.title} [${rental.listing_id}]`);
+          await this.prisma.rental.update({
+            where: { id: rental.id },
+            data: { status: 'completed' },
+          });
+          // Cascade to bookings
+          try {
+            await this.calendarService.cascadeRentalStatusToBookings(rental.id, 'completed', 'ongoing');
+          } catch (err) {
+            this.logger.warn(`Cascade failed for auto-completed rental ${rental.id}: ${err.message}`);
+          }
+        }
+
+        if (toComplete.length > 0) {
+          this.logger.log(`✅ Auto-completed ${toComplete.length} rental(s) returned on Hygglo`);
+        }
+      } catch (err) {
+        this.logger.warn(`Auto-complete check failed: ${err.message}`);
+      }
+
       const scanDuration = Date.now() - scanStartTime;
       this.scanCount++;
       this.logger.log(`Scan #${this.scanCount} completed in ${scanDuration}ms`);
@@ -555,6 +595,30 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         if (createdBookings.length > 0) {
           const overbookedItems = createdBookings.filter(b => b.wasOverbooked && b.maxQuantity > 0);
           this.logger.log(`📅 Auto-created ${createdBookings.length} booking(s) for rental ${savedRental.title}`);
+
+          // Persist matched inventory items back to parsed_items (detail.items are transient)
+          // This ensures reconciliation/backfill can see all items, not just title-parsed ones
+          try {
+            const currentParsed: Array<{ item: string; qty: number }> = Array.isArray(parsedItems) ? parsedItems : [];
+            const existingItems = new Set(currentParsed.map(p => p.item));
+            let updated = false;
+            for (const booking of createdBookings) {
+              if (booking.item_name && !existingItems.has(booking.item_name)) {
+                currentParsed.push({ item: booking.item_name, qty: booking.quantity || 1 });
+                existingItems.add(booking.item_name);
+                updated = true;
+              }
+            }
+            if (updated) {
+              await this.prisma.rental.update({
+                where: { id: savedRental.id },
+                data: { parsed_items: currentParsed as any },
+              });
+              this.logger.log(`📝 Updated parsed_items with ${createdBookings.length} matched inventory item(s) from detail.items`);
+            }
+          } catch (err) {
+            this.logger.warn(`Failed to persist detail.items to parsed_items: ${err.message}`);
+          }
 
           // Send booking summary to Telegram
           if (this.telegramService) {

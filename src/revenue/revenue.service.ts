@@ -21,6 +21,44 @@ interface RentalRevenueRow {
 
 type BookingLifecycle = 'completed' | 'ongoing' | 'upcoming';
 
+/**
+ * Per-day revenue attribution helpers.
+ * Revenue is spread evenly across the rental period (start_date to end_date inclusive)
+ * instead of being concentrated on start_date. This makes "Today's Profit" show
+ * earnings from all gear currently out, not just rentals starting today.
+ */
+
+/** Get the inclusive rental duration in days and daily rate */
+function getRentalDailyRate(rental: { start_date: Date | null; end_date?: Date | null; rental_price?: number | null }): {
+  startDay: Date; endDay: Date; totalDays: number; dailyRate: number;
+} {
+  const startDay = new Date(rental.start_date || new Date());
+  startDay.setHours(0, 0, 0, 0);
+  const endDay = new Date(rental.end_date || rental.start_date || new Date());
+  endDay.setHours(0, 0, 0, 0);
+
+  // Inclusive days (Hygglo convention: start=8, end=14 = 7 days)
+  const totalDays = Math.max(1, Math.round((endDay.getTime() - startDay.getTime()) / 86400000) + 1);
+  const dailyRate = (rental.rental_price || 0) / totalDays;
+
+  return { startDay, endDay, totalDays, dailyRate };
+}
+
+/** Count days of overlap between a rental period and a query period (both inclusive) */
+function getOverlapDays(rentalStart: Date, rentalEnd: Date, periodStart: Date, periodEnd: Date): number {
+  const overlapStart = Math.max(rentalStart.getTime(), periodStart.getTime());
+  const overlapEnd = Math.min(rentalEnd.getTime(), periodEnd.getTime());
+  if (overlapStart > overlapEnd) return 0;
+  return Math.round((overlapEnd - overlapStart) / 86400000) + 1;
+}
+
+/** Calculate proportional revenue for a rental within a specific date range */
+function getProportionalRevenue(rental: { start_date: Date | null; end_date?: Date | null; rental_price?: number | null }, periodStart: Date, periodEnd: Date): number {
+  const info = getRentalDailyRate(rental);
+  const overlap = getOverlapDays(info.startDay, info.endDay, periodStart, periodEnd);
+  return info.dailyRate * overlap;
+}
+
 @Injectable()
 export class RevenueService {
   private readonly logger = new Logger(RevenueService.name);
