@@ -180,6 +180,8 @@ export class AppService {
     );
 
     // Earnings from RENTAL TABLE (captures all Hygglo revenue including unmatched items)
+    // Per-day attribution: revenue spread across rental period instead of concentrated on start_date.
+    // "Today's Profit" = daily rate for all gear currently out, not just rentals starting today.
     const rentalWhere: any = {
       status: { in: ['completed', 'ongoing', 'upcoming'] },
       rental_price: { not: null, gt: 0 },
@@ -189,7 +191,7 @@ export class AppService {
 
     const allRentalsForEarnings = await this.prisma.rental.findMany({
       where: rentalWhere,
-      select: { start_date: true, rental_price: true, renter_info: true, listing_id: true },
+      select: { start_date: true, end_date: true, rental_price: true, renter_info: true, listing_id: true },
     });
 
     // Deduplicate by listing_id + renter_info + start_date (keep highest revenue)
@@ -204,15 +206,44 @@ export class AppService {
     }
     const dedupedRentals = Array.from(deduped.values());
 
-    const todayRentalEarnings = dedupedRentals
-      .filter(r => r.start_date! >= todayStart && r.start_date! <= todayEnd)
-      .reduce((sum, r) => sum + (r.rental_price || 0), 0);
-    const todayRentalCount = dedupedRentals
-      .filter(r => r.start_date! >= todayStart && r.start_date! <= todayEnd).length;
+    // Per-day revenue helpers
+    const getDailyRate = (r: { start_date: Date | null; end_date?: Date | null; rental_price: number | null }) => {
+      const s = new Date(r.start_date || new Date()); s.setHours(0, 0, 0, 0);
+      const e = new Date(r.end_date || r.start_date || new Date()); e.setHours(0, 0, 0, 0);
+      const totalDays = Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1);
+      return (r.rental_price || 0) / totalDays;
+    };
+    const getOverlap = (rStart: Date, rEnd: Date, pStart: Date, pEnd: Date): number => {
+      const os = Math.max(rStart.getTime(), pStart.getTime());
+      const oe = Math.min(rEnd.getTime(), pEnd.getTime());
+      if (os > oe) return 0;
+      return Math.round((oe - os) / 86400000) + 1;
+    };
 
-    const weekRentalEarnings = dedupedRentals
-      .filter(r => r.start_date! >= weekStart && r.start_date! <= todayEnd)
-      .reduce((sum, r) => sum + (r.rental_price || 0), 0);
+    // Today's earnings: daily rate × 1 for all rentals active today
+    let todayRentalEarnings = 0;
+    let todayRentalCount = 0;
+    const todayActiveRentals: typeof dedupedRentals = [];
+    for (const r of dedupedRentals) {
+      const s = new Date(r.start_date!); s.setHours(0, 0, 0, 0);
+      const e = new Date(r.end_date || r.start_date!); e.setHours(0, 0, 0, 0);
+      if (s <= todayEnd && e >= todayStart) {
+        todayRentalEarnings += getDailyRate(r);
+        todayRentalCount++;
+        todayActiveRentals.push(r);
+      }
+    }
+
+    // Week earnings: daily rate × overlap days for rentals overlapping with last 7 days
+    let weekRentalEarnings = 0;
+    for (const r of dedupedRentals) {
+      const s = new Date(r.start_date!); s.setHours(0, 0, 0, 0);
+      const e = new Date(r.end_date || r.start_date!); e.setHours(0, 0, 0, 0);
+      const overlap = getOverlap(s, e, weekStart, todayEnd);
+      if (overlap > 0) {
+        weekRentalEarnings += getDailyRate(r) * overlap;
+      }
+    }
 
     // Total items out (for sub-text detail) — from booking table (has clean item names)
     // Include overdue items (Hygglo still says 'ongoing' even if end date passed)
@@ -257,10 +288,6 @@ export class AppService {
       };
     };
 
-    // Today's rental breakdown
-    const todayRentals = dedupedRentals
-      .filter(r => r.start_date! >= todayStart && r.start_date! <= todayEnd);
-
     return {
       // Rental-level counts (what Daniel cares about) — from booking table (reconciled)
       ongoingRentals: ongoingRentals.length,
@@ -269,16 +296,16 @@ export class AppService {
       // Item-level detail (for sub-text)
       ongoingItems,
       upcomingItems,
-      // Earnings from rental table
+      // Earnings from rental table (per-day attribution)
       todayEarnings: Math.round(todayRentalEarnings * 100) / 100,
       todayRentalCount,
       weekEarnings: Math.round(weekRentalEarnings * 100) / 100,
       // Rental details for expandable tiles
       ongoingDetails: ongoingRentals.map(mapRentalDetail),
       upcomingDetails: upcomingRentals.slice(0, 8).map(mapRentalDetail),
-      todayDetails: todayRentals.map(r => ({
+      todayDetails: todayActiveRentals.map(r => ({
         renter: r.renter_info || 'Unknown',
-        earnings: Math.round((r.rental_price || 0) * 100) / 100,
+        earnings: Math.round(getDailyRate(r) * 100) / 100,
       })),
     };
   }

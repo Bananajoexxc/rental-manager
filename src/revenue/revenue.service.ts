@@ -206,26 +206,45 @@ export class RevenueService {
 
   /**
    * Revenue for a period — from RENTAL table (captures ALL Hygglo revenue).
+   * Per-day attribution: revenue spread across rental days, not concentrated on start_date.
    * 'month' = current calendar month, 'week' = last 7 days, 'all' = all time.
    */
   async getRevenueForPeriod(period: 'week' | 'month' | 'all', account?: string) {
     const rentals = await this.getRentalsWithRevenue(account);
     const { start, end } = this.getFlexiblePeriodRange(period);
 
-    const filtered = rentals.filter(r => {
-      if (start && r.start_date! < start) return false;
-      if (end && r.start_date! >= end) return false;
-      return true;
-    });
+    // For 'all', use full rental amounts (no need for per-day splitting)
+    if (period === 'all' || (!start && !end)) {
+      const totalEarnings = rentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
+      const visitKeys = new Set<string>();
+      for (const r of rentals) {
+        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+      }
+      return {
+        bookings: visitKeys.size,
+        totalEarnings: Math.round(totalEarnings * 100) / 100,
+        totalRevenue: Math.round(totalEarnings * 100) / 100,
+        totalProfit: Math.round(totalEarnings * 100) / 100,
+        totalFees: 0,
+        totalDelivery: 0,
+      };
+    }
 
-    // rental_price = Daniel's earnings (ownerEarnings from Hygglo, post-platform-fee)
-    const totalEarnings = filtered.reduce((sum, r) => sum + (r.rental_price || 0), 0);
+    // Per-day attribution for bounded periods
+    const periodStart = start || new Date(0);
+    const periodEnd = end || new Date();
+    periodEnd.setHours(23, 59, 59, 999);
 
-    // Count unique rental visits, not raw item rows
+    let totalEarnings = 0;
     const visitKeys = new Set<string>();
-    for (const r of filtered) {
-      const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+    for (const r of rentals) {
+      const rev = getProportionalRevenue(r, periodStart, periodEnd);
+      if (rev > 0) {
+        totalEarnings += rev;
+        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+      }
     }
 
     return {
@@ -239,7 +258,8 @@ export class RevenueService {
   }
 
   /**
-   * Weekly revenue totals — from RENTAL table. Revenue attributed to the week the rental started.
+   * Weekly revenue totals — from RENTAL table.
+   * Revenue spread across rental days (per-day attribution) instead of concentrating on start_date.
    */
   async getWeeklyTotals(weeks = 8, account?: string) {
     const rentals = await this.getRentalsWithRevenue(account);
@@ -254,17 +274,18 @@ export class RevenueService {
       weekStart.setDate(weekStart.getDate() - 6);
       weekStart.setHours(0, 0, 0, 0);
 
-      const weekRentals = rentals.filter(r =>
-        r.start_date! >= weekStart && r.start_date! <= weekEnd
-      );
-
-      const earnings = weekRentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
-      // Count unique rental visits, not raw item rows
+      // Per-day attribution: spread each rental's revenue across its period, count overlap with this week
+      let earnings = 0;
       const visitKeys = new Set<string>();
-      for (const r of weekRentals) {
-        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
-        visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+      for (const r of rentals) {
+        const rev = getProportionalRevenue(r, weekStart, weekEnd);
+        if (rev > 0) {
+          earnings += rev;
+          const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+          visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+        }
       }
+
       results.push({
         week: weekStart.toISOString().split('T')[0],
         earnings: Math.round(earnings * 100) / 100,
@@ -278,7 +299,8 @@ export class RevenueService {
   }
 
   /**
-   * Monthly revenue totals — from RENTAL table. Counts all rentals starting in each month.
+   * Monthly revenue totals — from RENTAL table.
+   * Revenue spread across rental days (per-day attribution) instead of concentrating on start_date.
    * Current month includes completed + ongoing + upcoming.
    */
   async getMonthlyTotals(months = 6, account?: string) {
@@ -288,28 +310,29 @@ export class RevenueService {
 
     for (let i = 0; i < months; i++) {
       const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0); // last day of month
+      monthEnd.setHours(23, 59, 59, 999);
 
-      const monthRentals = rentals.filter(r =>
-        r.start_date! >= monthStart && r.start_date! < monthEnd
-      );
-
-      const earnings = monthRentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
-
-      // Count unique rental visits (renter+date), not raw item rows
+      // Per-day attribution: spread each rental's revenue across its period, count overlap with this month
+      let earnings = 0;
       const visitKeys = new Set<string>();
-      for (const r of monthRentals) {
-        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
-        visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+      const monthRentalsForBreakdown: RentalRevenueRow[] = [];
+      for (const r of rentals) {
+        const rev = getProportionalRevenue(r, monthStart, monthEnd);
+        if (rev > 0) {
+          earnings += rev;
+          const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+          visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+          monthRentalsForBreakdown.push(r);
+        }
       }
 
       // For current month, include lifecycle breakdown (by visit)
       const isCurrentMonth = i === 0;
       let breakdown: { completed: number; ongoing: number; upcoming: number } | undefined;
       if (isCurrentMonth) {
-        // Group into visits for lifecycle breakdown
         const visitMap = new Map<string, { startDate: Date; endDate: Date }>();
-        for (const r of monthRentals) {
+        for (const r of monthRentalsForBreakdown) {
           const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
           const key = `${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`;
           const existing = visitMap.get(key);
@@ -376,22 +399,23 @@ export class RevenueService {
     const cursor = new Date(startMonth);
     while (cursor < endMonth) {
       const monthStart = new Date(cursor);
-      const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      const mEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0); // last day of month
+      mEnd.setHours(23, 59, 59, 999);
 
-      const monthRentals = rentals.filter(r =>
-        r.start_date! >= monthStart && r.start_date! < monthEnd
-      );
+      // Per-day attribution: spread revenue across rental period
+      let revenue = 0;
+      const visitKeys = new Set<string>();
+      for (const r of rentals) {
+        const rev = getProportionalRevenue(r, monthStart, mEnd);
+        if (rev > 0) {
+          revenue += rev;
+          const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+          visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+        }
+      }
 
-      const revenue = monthRentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
       const rounded = Math.round(revenue * 100) / 100;
       cumulative += rounded;
-
-      // Count unique rental visits
-      const visitKeys = new Set<string>();
-      for (const r of monthRentals) {
-        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
-        visitKeys.add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
-      }
 
       // AI attribution: only for months >= 2026-02 (when AI went live)
       const monthKey = monthStart.toISOString().split('T')[0].substring(0, 7);
@@ -469,26 +493,33 @@ export class RevenueService {
     const daysElapsed = now.getDate();
     const daysRemaining = daysInMonth - daysElapsed;
 
-    // Current month rentals
-    const currentMonth = allRentals.filter(r =>
-      r.start_date! >= currentMonthStart && r.start_date! < nextMonthStart
-    );
+    // Current month earnings: per-day attribution (spread across rental period)
+    const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0); // last day of month
+    currentMonthEnd.setHours(23, 59, 59, 999);
 
-    const currentEarnings = currentMonth.reduce((sum, r) => sum + (r.rental_price || 0), 0);
+    let currentEarnings = 0;
+    const currentMonthRentals: RentalRevenueRow[] = [];
+    for (const r of allRentals) {
+      const rev = getProportionalRevenue(r, currentMonthStart, currentMonthEnd);
+      if (rev > 0) {
+        currentEarnings += rev;
+        currentMonthRentals.push(r);
+      }
+    }
 
     // Group into rental visits (renter+date = one visit) for breakdown counts
     const rentalGroups = new Map<string, { earnings: number; startDate: Date; endDate: Date }>();
-    for (const r of currentMonth) {
+    for (const r of currentMonthRentals) {
       const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
       const key = `${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`;
       const existing = rentalGroups.get(key);
       if (existing) {
-        existing.earnings += r.rental_price || 0;
+        existing.earnings += getProportionalRevenue(r, currentMonthStart, currentMonthEnd);
         if (r.start_date! < existing.startDate) existing.startDate = r.start_date!;
         if (r.end_date && r.end_date > existing.endDate) existing.endDate = r.end_date;
       } else {
         rentalGroups.set(key, {
-          earnings: r.rental_price || 0,
+          earnings: getProportionalRevenue(r, currentMonthStart, currentMonthEnd),
           startDate: r.start_date!,
           endDate: r.end_date || r.start_date!,
         });
@@ -500,24 +531,26 @@ export class RevenueService {
     const ongoing = visits.filter(v => this.getLifecycle({ startDate: v.startDate, endDate: v.endDate }) === 'ongoing').length;
     const upcoming = visits.filter(v => this.getLifecycle({ startDate: v.startDate, endDate: v.endDate }) === 'upcoming').length;
 
-    // Upcoming earnings to avoid double-counting in projection
+    // Upcoming earnings portion in this month (per-day) to avoid double-counting in projection
     const upcomingEarnings = visits
       .filter(v => this.getLifecycle({ startDate: v.startDate, endDate: v.endDate }) === 'upcoming')
       .reduce((sum, v) => sum + v.earnings, 0);
 
-    // Historical data: previous 2 months (from rental table)
+    // Historical data: previous 2 months (per-day attribution)
     const prev1Start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prev1End = new Date(now.getFullYear(), now.getMonth(), 0); // last day of prev month
+    prev1End.setHours(23, 59, 59, 999);
     const prev2Start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
-    const prev1End = currentMonthStart;
-    const prev2End = prev1Start;
+    const prev2End = new Date(now.getFullYear(), now.getMonth() - 1, 0);
+    prev2End.setHours(23, 59, 59, 999);
 
-    const prev1Earnings = allRentals.filter(r => r.start_date! >= prev1Start && r.start_date! < prev1End)
-      .reduce((sum, r) => sum + (r.rental_price || 0), 0);
-    const prev2Earnings = allRentals.filter(r => r.start_date! >= prev2Start && r.start_date! < prev2End)
-      .reduce((sum, r) => sum + (r.rental_price || 0), 0);
+    let prev1Earnings = 0;
+    for (const r of allRentals) { prev1Earnings += getProportionalRevenue(r, prev1Start, prev1End); }
+    let prev2Earnings = 0;
+    for (const r of allRentals) { prev2Earnings += getProportionalRevenue(r, prev2Start, prev2End); }
 
-    const prev1Days = Math.round((prev1End.getTime() - prev1Start.getTime()) / 86400000);
-    const prev2Days = Math.round((prev2End.getTime() - prev2Start.getTime()) / 86400000);
+    const prev1Days = Math.round((new Date(now.getFullYear(), now.getMonth(), 1).getTime() - prev1Start.getTime()) / 86400000);
+    const prev2Days = Math.round((prev1Start.getTime() - prev2Start.getTime()) / 86400000);
 
     // Current month daily run rate
     const currentDailyRate = daysElapsed > 0 ? currentEarnings / daysElapsed : 0;
@@ -558,30 +591,46 @@ export class RevenueService {
   }
 
   /**
-   * Account breakdown — from RENTAL table.
+   * Account breakdown — from RENTAL table. Per-day revenue attribution.
    */
   async getAccountBreakdown(period: 'week' | 'month' | 'all', account?: string) {
     const rentals = await this.getRentalsWithRevenue(account);
     const { start, end } = this.getFlexiblePeriodRange(period);
-    const filtered = rentals.filter(r => {
-      if (start && r.start_date! < start) return false;
-      if (end && r.start_date! >= end) return false;
-      return true;
-    });
 
     const byAccount: Record<string, { revenue: number; profit: number; count: number }> = {};
     const visitKeysByAccount: Record<string, Set<string>> = {};
-    for (const r of filtered) {
-      const acc = r.account || 'unknown';
-      if (!byAccount[acc]) { byAccount[acc] = { revenue: 0, profit: 0, count: 0 }; visitKeysByAccount[acc] = new Set(); }
-      byAccount[acc].revenue += r.rental_price || 0;
-      byAccount[acc].profit += r.rental_price || 0;
-      const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      visitKeysByAccount[acc].add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+
+    if (period === 'all' || (!start && !end)) {
+      // All time: full revenue amounts
+      for (const r of rentals) {
+        const acc = r.account || 'unknown';
+        if (!byAccount[acc]) { byAccount[acc] = { revenue: 0, profit: 0, count: 0 }; visitKeysByAccount[acc] = new Set(); }
+        byAccount[acc].revenue += r.rental_price || 0;
+        byAccount[acc].profit += r.rental_price || 0;
+        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        visitKeysByAccount[acc].add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+      }
+    } else {
+      const periodStart = start || new Date(0);
+      const periodEnd = end || new Date();
+      periodEnd.setHours(23, 59, 59, 999);
+      for (const r of rentals) {
+        const rev = getProportionalRevenue(r, periodStart, periodEnd);
+        if (rev > 0) {
+          const acc = r.account || 'unknown';
+          if (!byAccount[acc]) { byAccount[acc] = { revenue: 0, profit: 0, count: 0 }; visitKeysByAccount[acc] = new Set(); }
+          byAccount[acc].revenue += rev;
+          byAccount[acc].profit += rev;
+          const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+          visitKeysByAccount[acc].add(`${renterNorm}|${r.start_date!.toISOString().split('T')[0]}`);
+        }
+      }
     }
-    // Use visit-deduped counts
+
     for (const acc of Object.keys(byAccount)) {
-      byAccount[acc].count = visitKeysByAccount[acc].size;
+      byAccount[acc].revenue = Math.round(byAccount[acc].revenue * 100) / 100;
+      byAccount[acc].profit = Math.round(byAccount[acc].profit * 100) / 100;
+      byAccount[acc].count = (visitKeysByAccount[acc] || new Set()).size;
     }
 
     return byAccount;
