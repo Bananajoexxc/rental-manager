@@ -166,7 +166,32 @@ export function findBestMatch(input: string, inventory: string[]): string | null
       if (candidates.length === 1) {
         return candidates[0]; // unambiguous category match
       }
-      // Multiple candidates — fall through to token scoring for disambiguation
+      if (candidates.length >= 2) {
+        // Multiple category candidates — score them against input to pick the best.
+        // Without this, long Hygglo titles like "Manfrotto 190X Tripod + Fluid Video Head"
+        // fail generic token scoring (1/18 coverage) even though category is clearly "tripod".
+        let bestCatScore = 0;
+        let bestCatItem: string | null = null;
+        for (const cand of candidates) {
+          const normCand = normalizeItemName(cand);
+          const candTokens = normCand.split(' ');
+          let score = 0;
+          for (const ct of candTokens) {
+            if (ct.length < 2) continue;
+            if (normalized.includes(ct)) score++;
+          }
+          // Coverage of the candidate's tokens in the input
+          const coverage = candTokens.length > 0 ? score / candTokens.length : 0;
+          if (coverage > bestCatScore) {
+            bestCatScore = coverage;
+            bestCatItem = cand;
+          }
+        }
+        // Return best category candidate if at least the category keyword matched
+        if (bestCatItem && bestCatScore > 0) {
+          return bestCatItem;
+        }
+      }
     }
   }
 

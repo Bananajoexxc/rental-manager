@@ -286,40 +286,56 @@ export class AppService {
   /**
    * Calendar data: bookings grouped by date for the calendar view.
    */
+  /**
+   * CALENDAR BOOKING RULES (authoritative — do not weaken):
+   *
+   * WHAT APPEARS IN THE CALENDAR:
+   *   A rental appears ONLY if it has at least one booking with status = 'confirmed'.
+   *   'confirmed' means: Hygglo rental accepted (upcoming/ongoing/completed) AND inventory available.
+   *
+   * WHAT NEVER APPEARS:
+   *   - Unaccepted Hygglo requests (rental status = 'pending')
+   *   - Bookings with status = 'pending_review' as standalone entries
+   *   - Cancelled or obsolete rentals
+   *   - Items not in MASTER_INVENTORY
+   *
+   * SUPPLEMENTARY ITEMS:
+   *   When a renter has BOTH confirmed AND pending_review bookings for the same account+date,
+   *   the pending items appear as annotations on the confirmed entry (labeled "pending").
+   *   They NEVER create their own calendar entry.
+   *
+   * PHOTOS:
+   *   Photos come ONLY from confirmed bookings' linked rentals.
+   *   Pending bookings' photos are excluded to prevent cross-listing image contamination.
+   *
+   * GROUPING:
+   *   Entries group by renter_name + account + start_date.
+   *   Account is part of the key to prevent cross-account merging (Leo ≠ DB Cinema).
+   *
+   * EARNINGS:
+   *   Only confirmed booking revenue counts. Pending revenue is excluded.
+   */
   async getCalendarBookings(startDate: string, endDate: string, account?: string) {
     const start = new Date(startDate);
     start.setHours(0, 0, 0, 0);
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
 
-    const where: any = {
-      status: 'confirmed',
-      // Booking overlaps with requested range — use actual pickup/return dates when available
-      // A rental is visible if its effective range [pickup_date..return_date] overlaps [start..end]
-      // Effective start = min(pickup_date, start_date), Effective end = max(return_date, end_date)
-      OR: [
-        // Case 1: Contract dates overlap the range (original logic)
-        {
-          start_date: { lte: end },
-          OR: [
-            { return_date: { gte: start } },
-            { return_date: null, end_date: { gte: start } },
-          ],
-        },
-        // Case 2: Pickup date is within range (pickup before contract start, e.g., evening before)
-        {
-          pickup_date: { gte: start, lte: end },
-        },
-        // Case 3: Return date is within range (return after contract end)
-        {
-          return_date: { gte: start, lte: end },
-        },
-      ],
-    };
-    if (account) where.account = account;
+    const dateOverlap = [
+      { start_date: { lte: end }, OR: [
+        { return_date: { gte: start } },
+        { return_date: null, end_date: { gte: start } },
+      ]},
+      { pickup_date: { gte: start, lte: end } },
+      { return_date: { gte: start, lte: end } },
+    ];
 
-    const bookings = await this.prisma.booking.findMany({
-      where,
+    // === PRIMARY: confirmed bookings only — these define what appears in the calendar ===
+    const confirmedWhere: any = { status: 'confirmed', OR: dateOverlap };
+    if (account) confirmedWhere.account = account;
+
+    const confirmedBookings = await this.prisma.booking.findMany({
+      where: confirmedWhere,
       select: {
         id: true, item_name: true, renter_name: true,
         start_date: true, end_date: true,
@@ -333,14 +349,14 @@ export class AppService {
       orderBy: { start_date: 'asc' },
     });
 
-    // Deduplicate
-    const deduped = this.deduplicateBookings(bookings as unknown as BookingRow[]);
+    const deduped = this.deduplicateBookings(confirmedBookings as unknown as BookingRow[]);
 
-    // Group by rental for calendar display
+    // Group confirmed bookings by renter+account+date (account in key prevents cross-account merging)
     const rentalMap = new Map<string, {
       renter: string;
       account: string;
       items: string[];
+      pendingItems: string[];
       startDate: string;
       endDate: string;
       earnings: number;
@@ -354,17 +370,15 @@ export class AppService {
 
     for (const b of deduped) {
       const renterNorm = b.renter_name.trim().toLowerCase().replace(/\s+/g, ' ');
-      const key = `${renterNorm}|${b.start_date.toISOString().split('T')[0]}`;
+      const key = `${renterNorm}|${b.account}|${b.start_date.toISOString().split('T')[0]}`;
 
-      // Parse notes JSON
       let notesObj: any = null;
       try { notesObj = (b as any).notes ? JSON.parse((b as any).notes) : null; } catch { /* ignore */ }
 
-      // Get photos from linked rental
+      // Photos from confirmed bookings' rentals only
       const rental = (b as any).rental;
       const photos: string[] = rental?.photos_urls || [];
 
-      // Get all bundle items from parsed_items (richer than booking-level items)
       const parsedItems: string[] = rental?.parsed_items
         ? (rental.parsed_items as any[]).map((pi: any) => pi.item || pi.name).filter(Boolean)
         : [];
@@ -375,14 +389,11 @@ export class AppService {
         existing.earnings += b.revenue || 0;
         if (b.start_date.toISOString() < existing.startDate) existing.startDate = b.start_date.toISOString();
         if (b.end_date.toISOString() > existing.endDate) existing.endDate = b.end_date.toISOString();
-        // Capture times from any booking in the rental group
         if (!existing.pickupTime && (b as any).pickup_time) existing.pickupTime = (b as any).pickup_time;
         if (!existing.returnTime && (b as any).return_time) existing.returnTime = (b as any).return_time;
         if (!existing.pickupDate && (b as any).pickup_date) existing.pickupDate = (b as any).pickup_date.toISOString();
         if (!existing.returnDate && (b as any).return_date) existing.returnDate = (b as any).return_date.toISOString();
-        // Merge photos (dedup)
         for (const p of photos) { if (!existing.photos.includes(p)) existing.photos.push(p); }
-        // Merge notes
         if (notesObj) {
           if (!existing.notes) existing.notes = notesObj;
           else if (notesObj.ownerNotes) {
@@ -390,7 +401,6 @@ export class AppService {
             existing.notes.ownerNotes.push(...notesObj.ownerNotes);
           }
         }
-        // Merge parsed items from all listings in this rental group
         if (parsedItems.length > 0) {
           if (!existing.notes) existing.notes = {};
           if (!existing.notes.allItems) existing.notes.allItems = [];
@@ -399,7 +409,6 @@ export class AppService {
           }
         }
       } else {
-        // Populate allItems from parsed_items if notes don't have them
         if (parsedItems.length > 0 && notesObj && !notesObj.allItems?.length) {
           notesObj.allItems = parsedItems;
         } else if (parsedItems.length > 0 && !notesObj) {
@@ -410,6 +419,7 @@ export class AppService {
           renter: b.renter_name,
           account: b.account,
           items: isAccessoryItem(b.item_name) ? [] : [b.item_name],
+          pendingItems: [],
           startDate: b.start_date.toISOString(),
           endDate: b.end_date.toISOString(),
           earnings: b.revenue || 0,
@@ -423,9 +433,45 @@ export class AppService {
       }
     }
 
+    // === SECONDARY: pending_review bookings — supplement items on existing confirmed entries only ===
+    // These NEVER create standalone calendar entries. They only annotate confirmed entries.
+    // Matches by renter+date ACROSS accounts (same renter may have listings on both Leo & DB Cinema).
+    // Photos are NOT included from pending bookings — only items are supplemented.
+    if (rentalMap.size > 0) {
+      // Build a renter+date → entry lookup (without account) for cross-account matching
+      const renterDateIndex = new Map<string, typeof rentalMap extends Map<string, infer V> ? V : never>();
+      for (const [, entry] of rentalMap) {
+        const renterNorm = entry.renter.trim().toLowerCase().replace(/\s+/g, ' ');
+        const dateKey = `${renterNorm}|${entry.startDate.split('T')[0]}`;
+        // If multiple confirmed entries for same renter+date on different accounts, pick the first
+        if (!renterDateIndex.has(dateKey)) {
+          renterDateIndex.set(dateKey, entry);
+        }
+      }
+
+      const pendingWhere: any = { status: 'pending_review', OR: dateOverlap };
+      if (account) pendingWhere.account = account;
+
+      const pendingBookings = await this.prisma.booking.findMany({
+        where: pendingWhere,
+        select: { item_name: true, renter_name: true, start_date: true, account: true },
+      });
+
+      for (const pb of pendingBookings) {
+        const renterNorm = pb.renter_name.trim().toLowerCase().replace(/\s+/g, ' ');
+        const dateKey = `${renterNorm}|${pb.start_date.toISOString().split('T')[0]}`;
+        const entry = renterDateIndex.get(dateKey);
+        // Only supplement if a confirmed entry exists for this renter+date (any account)
+        if (entry && !isAccessoryItem(pb.item_name)) {
+          if (!entry.items.includes(pb.item_name) && !entry.pendingItems.includes(pb.item_name)) {
+            entry.pendingItems.push(pb.item_name);
+          }
+        }
+        // If no confirmed entry exists → pending booking is silently ignored (by design)
+      }
+    }
+
     return Array.from(rentalMap.values()).map(r => {
-      // Ensure allItems is the union of notes.allItems + r.items (booking-level)
-      // so no items are lost even if parsed_items is incomplete for some listings
       if (!r.notes) r.notes = {};
       const mergedItems: string[] = [...(r.notes.allItems || [])];
       for (const item of r.items) {
@@ -433,7 +479,6 @@ export class AppService {
       }
       r.notes.allItems = mergedItems;
 
-      // Classify accessories so frontend can render them differently
       const mainItems: string[] = [];
       const accessories: string[] = [];
       for (const item of r.notes.allItems) {
@@ -442,7 +487,12 @@ export class AppService {
       }
       r.notes.allItems = mainItems;
       r.notes.accessories = accessories;
-      return { ...r, earnings: Math.round(r.earnings * 100) / 100 };
+      r.notes.pendingItems = r.pendingItems.filter(pi => !mainItems.includes(pi) && !accessories.includes(pi));
+      return {
+        ...r,
+        pendingItems: r.pendingItems,
+        earnings: Math.round(r.earnings * 100) / 100,
+      };
     });
   }
 

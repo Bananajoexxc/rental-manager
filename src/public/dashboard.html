@@ -2333,7 +2333,8 @@
         var notes = r.notes || {};
         var allItems = notes.allItems || r.items || [];
         var accessories = notes.accessories || [];
-        if (allItems.length > 0) {
+        var pendingItems = r.pendingItems || notes.pendingItems || [];
+        if (allItems.length > 0 || pendingItems.length > 0) {
           var mainItems = [], accItems = [];
           for (var j = 0; j < allItems.length; j++) {
             if (accessories.indexOf(allItems[j]) >= 0) accItems.push(allItems[j]);
@@ -2345,6 +2346,9 @@
           }
           for (var j = 0; j < accItems.length; j++) {
             html += '<span class="cal-item-chip accessory">' + escapeHtml(accItems[j]) + '</span>';
+          }
+          for (var j = 0; j < pendingItems.length; j++) {
+            html += '<span class="cal-item-chip" style="border-color:#f59e0b;color:#f59e0b;opacity:0.7;" title="Pending approval">' + escapeHtml(pendingItems[j]) + ' (pending)</span>';
           }
           html += '</div>';
         }
