@@ -180,8 +180,8 @@ export class AppService {
     );
 
     // Earnings from RENTAL TABLE (captures all Hygglo revenue including unmatched items)
-    // Per-day attribution: revenue spread across rental period instead of concentrated on start_date.
-    // "Today's Profit" = daily rate for all gear currently out, not just rentals starting today.
+    // Pickup-date attribution: 100% of revenue attributed to the actual pickup date
+    // (when gear physically goes out), NOT spread across rental days.
     const rentalWhere: any = {
       status: { in: ['completed', 'ongoing', 'upcoming'] },
       rental_price: { not: null, gt: 0 },
@@ -191,57 +191,48 @@ export class AppService {
 
     const allRentalsForEarnings = await this.prisma.rental.findMany({
       where: rentalWhere,
-      select: { start_date: true, end_date: true, rental_price: true, renter_info: true, listing_id: true },
+      select: {
+        start_date: true, end_date: true, rental_price: true, renter_info: true, listing_id: true,
+        bookings: {
+          where: { status: { in: ['confirmed', 'pending_review'] } },
+          select: { pickup_date: true },
+          take: 1,
+        },
+      },
     });
 
     // Deduplicate by listing_id + renter_info + start_date (keep highest revenue)
-    const deduped = new Map<string, typeof allRentalsForEarnings[0]>();
+    const deduped = new Map<string, typeof allRentalsForEarnings[0] & { _effectiveDate: Date }>();
     for (const r of allRentalsForEarnings) {
       if (!r.start_date) continue;
       const key = `${(r as any).listing_id}|${r.renter_info}|${r.start_date.toISOString().split('T')[0]}`;
       const existing = deduped.get(key);
       if (!existing || (r.rental_price || 0) > (existing.rental_price || 0)) {
-        deduped.set(key, r);
+        const pickupDate = r.bookings?.[0]?.pickup_date;
+        deduped.set(key, { ...r, _effectiveDate: pickupDate || r.start_date });
       }
     }
     const dedupedRentals = Array.from(deduped.values());
 
-    // Per-day revenue helpers
-    const getDailyRate = (r: { start_date: Date | null; end_date?: Date | null; rental_price: number | null }) => {
-      const s = new Date(r.start_date || new Date()); s.setHours(0, 0, 0, 0);
-      const e = new Date(r.end_date || r.start_date || new Date()); e.setHours(0, 0, 0, 0);
-      const totalDays = Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1);
-      return (r.rental_price || 0) / totalDays;
-    };
-    const getOverlap = (rStart: Date, rEnd: Date, pStart: Date, pEnd: Date): number => {
-      const os = Math.max(rStart.getTime(), pStart.getTime());
-      const oe = Math.min(rEnd.getTime(), pEnd.getTime());
-      if (os > oe) return 0;
-      return Math.round((oe - os) / 86400000) + 1;
-    };
-
-    // Today's earnings: daily rate × 1 for all rentals active today
+    // Today's earnings: rentals where pickup date == today (100% revenue on pickup day)
     let todayRentalEarnings = 0;
     let todayRentalCount = 0;
-    const todayActiveRentals: typeof dedupedRentals = [];
+    const todayPickupRentals: typeof dedupedRentals = [];
     for (const r of dedupedRentals) {
-      const s = new Date(r.start_date!); s.setHours(0, 0, 0, 0);
-      const e = new Date(r.end_date || r.start_date!); e.setHours(0, 0, 0, 0);
-      if (s <= todayEnd && e >= todayStart) {
-        todayRentalEarnings += getDailyRate(r);
+      const ed = new Date(r._effectiveDate); ed.setHours(0, 0, 0, 0);
+      if (ed >= todayStart && ed <= todayEnd) {
+        todayRentalEarnings += r.rental_price || 0;
         todayRentalCount++;
-        todayActiveRentals.push(r);
+        todayPickupRentals.push(r);
       }
     }
 
-    // Week earnings: daily rate × overlap days for rentals overlapping with last 7 days
+    // Week earnings: rentals where pickup date is within last 7 days
     let weekRentalEarnings = 0;
     for (const r of dedupedRentals) {
-      const s = new Date(r.start_date!); s.setHours(0, 0, 0, 0);
-      const e = new Date(r.end_date || r.start_date!); e.setHours(0, 0, 0, 0);
-      const overlap = getOverlap(s, e, weekStart, todayEnd);
-      if (overlap > 0) {
-        weekRentalEarnings += getDailyRate(r) * overlap;
+      const ed = new Date(r._effectiveDate); ed.setHours(0, 0, 0, 0);
+      if (ed >= weekStart && ed <= todayEnd) {
+        weekRentalEarnings += r.rental_price || 0;
       }
     }
 
@@ -296,16 +287,16 @@ export class AppService {
       // Item-level detail (for sub-text)
       ongoingItems,
       upcomingItems,
-      // Earnings from rental table (per-day attribution)
+      // Earnings from rental table (pickup-date attribution)
       todayEarnings: Math.round(todayRentalEarnings * 100) / 100,
       todayRentalCount,
       weekEarnings: Math.round(weekRentalEarnings * 100) / 100,
       // Rental details for expandable tiles
       ongoingDetails: ongoingRentals.map(mapRentalDetail),
       upcomingDetails: upcomingRentals.slice(0, 8).map(mapRentalDetail),
-      todayDetails: todayActiveRentals.map(r => ({
+      todayDetails: todayPickupRentals.map(r => ({
         renter: r.renter_info || 'Unknown',
-        earnings: Math.round(getDailyRate(r) * 100) / 100,
+        earnings: Math.round((r.rental_price || 0) * 100) / 100,
       })),
     };
   }

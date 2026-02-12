@@ -628,8 +628,8 @@ export class RevenueService {
     const { start, end } = this.getFlexiblePeriodRange(period);
 
     const periodFiltered = rentals.filter(r => {
-      if (start && r.start_date! < start) return false;
-      if (end && r.start_date! >= end) return false;
+      if (start && r._effectiveDate < start) return false;
+      if (end && r._effectiveDate >= end) return false;
       return true;
     });
 
@@ -703,8 +703,8 @@ export class RevenueService {
     const { start, end } = this.getFlexiblePeriodRange(period);
 
     const periodFiltered = rentals.filter(r => {
-      if (start && r.start_date! < start) return false;
-      if (end && r.start_date! >= end) return false;
+      if (start && r._effectiveDate < start) return false;
+      if (end && r._effectiveDate >= end) return false;
       return true;
     });
 
@@ -722,7 +722,7 @@ export class RevenueService {
     let otherRevenue = noParsedItems.reduce((sum, r) => sum + (r.rental_price || 0), 0);
 
     for (const r of filtered) {
-      const month = r.start_date!.toISOString().substring(0, 7);
+      const month = r._effectiveDate.toISOString().substring(0, 7);
       const items = (r.parsed_items as { item: string; qty: number }[])
         .map(p => ({ item_name: this.normalizeItemName(p.item) || p.item, originalName: p.item, qty: p.qty || 1 }));
       // Build name→originalName lookup (distributeRevenueProportionally filters accessories,
@@ -1320,7 +1320,7 @@ export class RevenueService {
     }
 
     const filtered = allRentals.filter(r =>
-      r.start_date! >= start && r.start_date! < end,
+      r._effectiveDate >= start && r._effectiveDate < end,
     );
 
     const actualRevenue = filtered.reduce((sum, r) => sum + (r.rental_price || 0), 0);
