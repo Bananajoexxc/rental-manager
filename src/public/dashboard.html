@@ -1992,40 +1992,116 @@
     }
 
     // ---- Funnel ----
-    var stageOrder = ['inquiry', 'interested', 'ready_to_book', 'booked', 'pending', 'confirmed', 'completed', 'dead'];
-    var stageColors = {
-      inquiry: '#6ea8fe', interested: '#818cf8', ready_to_book: '#a78bfa',
-      booked: '#c084fc', pending: '#f472b6', confirmed: '#22c55e', completed: '#10b981', dead: '#6b7280'
-    };
-    var stageLabels = {
-      ready_to_book: 'ready to book',
-      pending: 'pending verification'
-    };
+    // Simplified display rows: group booked+pending into "in booking pipeline"
+    var funnelRows = [
+      { key: 'inquiry',    label: 'inquiry',     color: '#6ea8fe', stages: ['inquiry'] },
+      { key: 'interested', label: 'interested',  color: '#818cf8', stages: ['interested'] },
+      { key: 'ready',      label: 'ready to book', color: '#a78bfa', stages: ['ready_to_book'] },
+      { key: 'booking',    label: 'in booking',  color: '#c084fc', stages: ['booked', 'pending'],
+        sub: [{ key: 'booked', label: 'booked', color: '#c084fc' }, { key: 'pending', label: 'verifying', color: '#f472b6' }] },
+      { key: 'confirmed',  label: 'confirmed',   color: '#22c55e', stages: ['confirmed'] },
+      { key: 'completed',  label: 'completed',   color: '#10b981', stages: ['completed'] },
+      { key: 'dead',       label: 'dead',         color: '#6b7280', stages: ['dead'] },
+    ];
 
     function renderFunnel(data) {
       var el = document.getElementById('funnelBody');
       if (!data || Object.keys(data).length === 0) { renderEmpty(el, 'No funnel data'); return; }
 
-      var maxCount = 0;
-      for (var s = 0; s < stageOrder.length; s++) {
-        var c = data[stageOrder[s]] || 0;
-        if (c > maxCount) maxCount = c;
-      }
-      if (maxCount === 0) maxCount = 1;
+      // Calculate counts per row
+      var rows = funnelRows.map(function(row) {
+        var count = 0;
+        for (var i = 0; i < row.stages.length; i++) count += data[row.stages[i]] || 0;
+        return { def: row, count: count };
+      });
+
+      var maxCount = 1;
+      for (var i = 0; i < rows.length; i++) { if (rows[i].count > maxCount) maxCount = rows[i].count; }
 
       var html = '';
-      for (var s = 0; s < stageOrder.length; s++) {
-        var stage = stageOrder[s];
-        var count = data[stage] || 0;
-        var pct = (count / maxCount) * 100;
-        var color = stageColors[stage] || '#6b7280';
-        var label = stageLabels[stage] || stage.replace(/_/g, ' ');
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i], pct = (r.count / maxCount) * 100;
         html += '<div class="funnel-bar">';
-        html += '<div class="funnel-label">' + escapeHtml(label) + '</div>';
-        html += '<div class="funnel-track"><div class="funnel-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>';
-        html += '<div class="funnel-count">' + count + '</div>';
+        html += '<div class="funnel-label">' + escapeHtml(r.def.label) + '</div>';
+        // Multi-segment bar for grouped rows — segments flush, no gaps
+        if (r.def.sub && r.def.sub.length > 1 && r.count > 0) {
+          html += '<div class="funnel-track"><div style="display:flex;height:100%;width:' + pct + '%;border-radius:4px;overflow:hidden;">';
+          for (var j = 0; j < r.def.sub.length; j++) {
+            var sc = data[r.def.sub[j].key] || 0;
+            if (sc > 0) html += '<div style="flex:' + sc + ';background:' + r.def.sub[j].color + ';" title="' + sc + ' ' + r.def.sub[j].label + '"></div>';
+          }
+          html += '</div></div>';
+        } else {
+          html += '<div class="funnel-track"><div class="funnel-fill" style="width:' + pct + '%;background:' + r.def.color + ';"></div></div>';
+        }
+        // Count + sub-legend for grouped rows
+        if (r.def.sub && r.count > 0) {
+          var parts = [];
+          for (var j = 0; j < r.def.sub.length; j++) {
+            var sc = data[r.def.sub[j].key] || 0;
+            if (sc > 0) parts.push('<span style="color:' + r.def.sub[j].color + ';">' + sc + '</span> ' + r.def.sub[j].label);
+          }
+          html += '<div style="flex-shrink:0;text-align:right;min-width:42px;"><span class="funnel-count" style="width:auto;">' + r.count + '</span>';
+          if (parts.length > 1) html += '<div style="font-size:9px;color:#6b6f82;white-space:nowrap;">' + parts.join(' · ') + '</div>';
+          html += '</div>';
+        } else {
+          html += '<div class="funnel-count">' + r.count + '</div>';
+        }
         html += '</div>';
       }
+
+      // --- Metrics ---
+      var total = 0;
+      for (var k in data) total += data[k] || 0;
+      var inq = data.inquiry || 0;
+      var interested = data.interested || 0;
+      var readyToBook = data.ready_to_book || 0;
+      var booked = data.booked || 0;
+      var pending = data.pending || 0;
+      var confirmed = data.confirmed || 0;
+      var completed = data.completed || 0;
+      var dead = data.dead || 0;
+
+      var converted = confirmed + completed;
+      var pipeline = booked + pending + confirmed + completed; // everyone who reached booking+
+      var engaged = interested + readyToBook + pipeline + dead; // everyone past inquiry
+      var convRate = total > 0 ? ((converted / total) * 100).toFixed(1) : '0.0';
+      var engageRate = inq > 0 ? ((engaged / inq) * 100).toFixed(0) : '0';
+      var bookRate = engaged > 0 ? ((pipeline / engaged) * 100).toFixed(0) : '0';
+      var dropOff = total > 0 ? ((dead / total) * 100).toFixed(0) : '0';
+      var activePipeline = booked + pending;
+
+      html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #2a2d3a;">';
+      // Row 1: Conversion rate (hero metric)
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">';
+      html += '<span style="color:#b0b3c0;font-size:12px;font-weight:600;">Conversion rate</span>';
+      html += '<span style="color:#22c55e;font-weight:700;font-size:18px;">' + convRate + '%</span>';
+      html += '</div>';
+      // Row 2: Metric grid
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">';
+      // Engagement rate
+      html += '<div style="background:#151820;border-radius:6px;padding:6px 8px;text-align:center;">';
+      html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">' + engageRate + '%</div>';
+      html += '<div style="font-size:9px;color:#6b6f82;">engage rate</div>';
+      html += '</div>';
+      // Booking rate
+      html += '<div style="background:#151820;border-radius:6px;padding:6px 8px;text-align:center;">';
+      html += '<div style="font-size:14px;font-weight:700;color:#c084fc;">' + bookRate + '%</div>';
+      html += '<div style="font-size:9px;color:#6b6f82;">book rate</div>';
+      html += '</div>';
+      // Drop-off
+      html += '<div style="background:#151820;border-radius:6px;padding:6px 8px;text-align:center;">';
+      html += '<div style="font-size:14px;font-weight:700;color:#6b7280;">' + dropOff + '%</div>';
+      html += '<div style="font-size:9px;color:#6b6f82;">drop-off</div>';
+      html += '</div>';
+      html += '</div>';
+      // Row 3: Pipeline summary
+      html += '<div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:#6b6f82;">';
+      html += '<span>' + converted + ' converted · ' + activePipeline + ' in pipeline · ' + dead + ' lost</span>';
+      html += '<span style="color:#4a4d5a;">' + total + ' total</span>';
+      html += '</div>';
+      html += '</div>';
+
       el.innerHTML = html;
     }
 
