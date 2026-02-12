@@ -232,6 +232,9 @@
     .stat-expand-inner {
       border-top: 1px solid #2a2d3a; padding-top: 8px; font-size: 12px; color: #b0b3c0;
     }
+    #expandActive, #expandOngoing, #expandUpcoming {
+      margin-left: -6px; margin-right: -6px; padding-left: 6px; padding-right: 6px;
+    }
     .stat-rental-row {
       display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1e2128;
     }
@@ -1992,13 +1995,11 @@
     }
 
     // ---- Funnel ----
-    // Simplified display rows: group booked+pending into "in booking pipeline"
     var funnelRows = [
       { key: 'inquiry',    label: 'inquiry',     color: '#6ea8fe', stages: ['inquiry'] },
       { key: 'interested', label: 'interested',  color: '#818cf8', stages: ['interested'] },
       { key: 'ready',      label: 'ready to book', color: '#a78bfa', stages: ['ready_to_book'] },
-      { key: 'booking',    label: 'in booking',  color: '#c084fc', stages: ['booked', 'pending'],
-        sub: [{ key: 'booked', label: 'booked', color: '#c084fc' }, { key: 'pending', label: 'verifying', color: '#f472b6' }] },
+      { key: 'verifying',  label: 'verifying',   color: '#f472b6', stages: ['booked', 'pending'] },
       { key: 'confirmed',  label: 'confirmed',   color: '#22c55e', stages: ['confirmed'] },
       { key: 'completed',  label: 'completed',   color: '#10b981', stages: ['completed'] },
       { key: 'dead',       label: 'dead',         color: '#6b7280', stages: ['dead'] },
@@ -2023,30 +2024,8 @@
         var r = rows[i], pct = (r.count / maxCount) * 100;
         html += '<div class="funnel-bar">';
         html += '<div class="funnel-label">' + escapeHtml(r.def.label) + '</div>';
-        // Multi-segment bar for grouped rows — segments flush, no gaps
-        if (r.def.sub && r.def.sub.length > 1 && r.count > 0) {
-          html += '<div class="funnel-track"><div style="display:flex;height:100%;width:' + pct + '%;border-radius:4px;overflow:hidden;">';
-          for (var j = 0; j < r.def.sub.length; j++) {
-            var sc = data[r.def.sub[j].key] || 0;
-            if (sc > 0) html += '<div style="flex:' + sc + ';background:' + r.def.sub[j].color + ';" title="' + sc + ' ' + r.def.sub[j].label + '"></div>';
-          }
-          html += '</div></div>';
-        } else {
-          html += '<div class="funnel-track"><div class="funnel-fill" style="width:' + pct + '%;background:' + r.def.color + ';"></div></div>';
-        }
-        // Count + sub-legend for grouped rows
-        if (r.def.sub && r.count > 0) {
-          var parts = [];
-          for (var j = 0; j < r.def.sub.length; j++) {
-            var sc = data[r.def.sub[j].key] || 0;
-            if (sc > 0) parts.push('<span style="color:' + r.def.sub[j].color + ';">' + sc + '</span> ' + r.def.sub[j].label);
-          }
-          html += '<div style="flex-shrink:0;text-align:right;min-width:42px;"><span class="funnel-count" style="width:auto;">' + r.count + '</span>';
-          if (parts.length > 1) html += '<div style="font-size:9px;color:#6b6f82;white-space:nowrap;">' + parts.join(' · ') + '</div>';
-          html += '</div>';
-        } else {
-          html += '<div class="funnel-count">' + r.count + '</div>';
-        }
+        html += '<div class="funnel-track"><div class="funnel-fill" style="width:' + pct + '%;background:' + r.def.color + ';"></div></div>';
+        html += '<div class="funnel-count">' + r.count + '</div>';
         html += '</div>';
       }
 

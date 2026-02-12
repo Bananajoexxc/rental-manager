@@ -169,12 +169,10 @@ export class AppService {
     }
 
     // Lifecycle at RENTAL level (not item level) — from booking table (reconciled with Hygglo)
-    // Include overdue rentals: end date passed but Hygglo still says 'ongoing' (gear not returned)
-    const ongoingRentals = rentals.filter(r => {
-      const dateOngoing = r.startDate <= todayEnd && r.endDate >= todayStart;
-      const hyggloOngoing = r.rentalId ? rentalStatusMap.get(r.rentalId) === 'ongoing' : false;
-      return dateOngoing || hyggloOngoing;
-    });
+    // Only show rentals whose end_date hasn't passed yet (overdue ones stay in return hub only)
+    const ongoingRentals = rentals.filter(r =>
+      r.startDate <= todayEnd && r.endDate >= todayStart
+    );
     const upcomingRentals = rentals.filter(r =>
       r.startDate > todayEnd
     );
@@ -586,13 +584,15 @@ export class AppService {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
+    const twoDaysAgo = new Date();
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
     const where: any = {
       status: 'active',
       rental: {
         OR: [
           { status: 'pending', start_date: { gte: todayStart } }, // Pending with future start date only
           { status: { in: ['upcoming', 'ongoing'] } },            // Accepted/active rentals
-          { end_date: { gte: twoWeeksAgo }, status: { in: ['completed', 'ongoing'] } }, // Recently finished
+          { end_date: { gte: twoDaysAgo }, status: { in: ['completed', 'ongoing'] } }, // Drop 48h after end
         ],
         ...(account ? { account } : {}),
       },
