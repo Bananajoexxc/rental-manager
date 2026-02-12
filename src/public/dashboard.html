@@ -227,7 +227,7 @@
       opacity: 0; margin-top: 0;
     }
     .stat-card:hover .stat-expand, .stat-card.expanded .stat-expand {
-      max-height: 320px; opacity: 1; margin-top: 10px;
+      max-height: 320px; opacity: 1; margin-top: 10px; overflow-y: auto;
     }
     .stat-expand-inner {
       border-top: 1px solid #2a2d3a; padding-top: 8px; font-size: 12px; color: #b0b3c0;
@@ -1790,13 +1790,17 @@
         var d = new Date(r.startDate);
         dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
       }
+      var earningsHtml = r.earnings ? '<div style="font-size:9px;color:#6b6f82;text-align:right;">\u00A3' + r.earnings + '</div>' : '';
       return '<div class="stat-rental-row" style="border-left:3px solid #f472b6;padding-left:6px;">' +
         photoHtml +
         '<div class="stat-rental-info">' +
           '<div class="stat-rental-name">' + escapeHtml(r.renter) + (dateStr ? ' · ' + dateStr : '') + '</div>' +
           (itemsText ? '<div class="stat-rental-items">' + escapeHtml(itemsText) + '</div>' : '') +
         '</div>' +
-        '<div class="stat-rental-amount" style="color:#f472b6;font-size:10px;">Pending</div>' +
+        '<div style="flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;">' +
+          '<div style="color:#f472b6;font-size:10px;">Pending</div>' +
+          earningsHtml +
+        '</div>' +
       '</div>';
     }
 
@@ -1988,13 +1992,14 @@
     }
 
     // ---- Funnel ----
-    var stageOrder = ['inquiry', 'interested', 'ready_to_book', 'pending', 'confirmed', 'completed', 'dead'];
+    var stageOrder = ['inquiry', 'interested', 'ready_to_book', 'booked', 'pending', 'confirmed', 'completed', 'dead'];
     var stageColors = {
       inquiry: '#6ea8fe', interested: '#818cf8', ready_to_book: '#a78bfa',
-      pending: '#f472b6', confirmed: '#22c55e', completed: '#10b981', dead: '#6b7280'
+      booked: '#c084fc', pending: '#f472b6', confirmed: '#22c55e', completed: '#10b981', dead: '#6b7280'
     };
     var stageLabels = {
-      ready_to_book: 'ready to book'
+      ready_to_book: 'ready to book',
+      pending: 'pending verification'
     };
 
     function renderFunnel(data) {

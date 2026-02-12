@@ -289,7 +289,7 @@ export class AppService {
       },
       select: {
         id: true, title: true, renter_info: true, account: true,
-        start_date: true, end_date: true, photos_urls: true,
+        start_date: true, end_date: true, photos_urls: true, rental_price: true,
       },
       orderBy: { start_date: 'asc' },
     });
@@ -297,7 +297,7 @@ export class AppService {
     // Group by renter+date (one person on one date = one pending visit)
     const pendingVisitMap = new Map<string, {
       renter: string; items: string[]; startDate: Date; endDate: Date;
-      account: string; photo: string | null;
+      account: string; photo: string | null; earnings: number;
     }>();
     for (const r of pendingVerificationRentals) {
       const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -306,6 +306,7 @@ export class AppService {
       const existing = pendingVisitMap.get(key);
       if (existing) {
         existing.items.push(r.title);
+        existing.earnings += r.rental_price || 0;
         if (r.end_date && (!existing.endDate || r.end_date > existing.endDate)) {
           existing.endDate = r.end_date;
         }
@@ -318,10 +319,14 @@ export class AppService {
           endDate: r.end_date!,
           account: r.account || 'dbcinema',
           photo: r.photos_urls?.[0] || null,
+          earnings: r.rental_price || 0,
         });
       }
     }
-    const pendingDetails = Array.from(pendingVisitMap.values());
+    const pendingDetails = Array.from(pendingVisitMap.values()).map(d => ({
+      ...d,
+      earnings: Math.round(d.earnings * 100) / 100,
+    }));
 
     return {
       // Rental-level counts (what Daniel cares about) — from booking table (reconciled)
