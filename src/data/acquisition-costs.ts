@@ -188,6 +188,103 @@ export function findAcquisitionMatch(query: string): AcquisitionEntry | null {
   return bestMatch;
 }
 
+// ════════════════════════════════════════════════════════════
+// OWNED ITEM COSTS — Purchase prices for Daniel's ACTUAL inventory
+// Used by sell recommender to calculate purchase cost ROI.
+// ════════════════════════════════════════════════════════════
+
+export const OWNED_ITEM_COSTS: Record<string, number> = {
+  // Anamorphic lenses
+  'Anamorphic Blazar Remus 33mm': 650,
+  'Anamorphic Blazar Remus 45mm': 650,
+  'Anamorphic Blazar Remus 65mm': 650,
+  'Anamorphic Blazar Remus 100mm': 650,
+  'Anamorphic Great Joy lens 35mm': 350,
+  'Anamorphic Great Joy lens 50mm': 350,
+  'Anamorphic Great Joy lens 85mm': 350,
+  // Sony lenses
+  'Sony GM 24-70mm f2.8': 1800,
+  'Sony GM 16-35mm f2.8': 1600,
+  'Sony GM 70-200mm f2.8': 1800,
+  'Sony GM 90mm f2.8': 600,
+  'Sony 28-70mm': 200,
+  'Sony 11mm f2.8 fisheye': 280,
+  // Canon lenses
+  'Canon EF 24-105mm f4': 400,
+  'Canon EF 16-35mm f2.8': 600,
+  // Camera bodies
+  'Sony FX3': 3300,
+  'Sony A7 III': 1200,
+  'Sony A7 II': 600,
+  'Fujifilm X100 VI': 1400,
+  'BMPCC 6K Pro': 1800,
+  'BMPCC 6K Full Frame': 2000,
+  // Lights & modifiers
+  'Softbox 85cm': 30,
+  'LED light panels RGB': 80,
+  'Nanlite Forza 300': 500,
+  'Nanlite Pavotube 30x II': 350,
+  'Nanlite 500B': 650,
+  'Ambitful RGB light tubes 2x set': 180,
+  '5-in-1 reflector panel': 25,
+  'Camera flash': 60,
+  // Power
+  'Anker Power Station F2000': 1200,
+  // Support & gimbals
+  'C-stand': 80,
+  'Small rig tripod': 60,
+  'Sirui tripod': 250,
+  'DJI RS3 Pro gimbal': 700,
+  'Motorized slider': 350,
+  'Tilta Nucleus Nano 2 follow focus': 250,
+  'Tilta shoulder rig': 150,
+  'Monopod arm support': 40,
+  // Monitors & transmitters
+  'Atomos Ninja V': 500,
+  'Hollyland Mars 4K transmitter': 350,
+  'Hollyland Pyro S transmitter': 250,
+  'Hollyland 7-inch monitor': 400,
+  // Audio
+  'Rode Video Mic Go': 50,
+  'Rode Wireless Mic Pro set': 250,
+  'Rode Video Mic Pro Plus': 200,
+  'Audio boom mic Sennheiser': 300,
+  'DJI Wireless Mics': 250,
+  'DJI Mic 2 wireless': 280,
+  'JBL wireless microphones': 100,
+  // Drones & action cams
+  'DJI Mavic 3 Pro': 1800,
+  'DJI Mini 4 Pro': 700,
+  'DJI Osmo Action Pro 5': 350,
+  'GoPro 12 Hero': 350,
+  // DJ & speakers
+  'DJ RX3 Pioneer controller': 900,
+  'JBL Club 120 speaker': 250,
+  // Smoke & effects
+  'Smoke machine fogger': 50,
+  'Smoke Ninja Pro hazer': 180,
+  'Smoke Ninja': 130,
+};
+
+/**
+ * Get the purchase cost for an owned inventory item.
+ * Direct lookup first, then fuzzy fallback via findAcquisitionMatch().
+ */
+export function getOwnedItemCost(itemName: string): number | null {
+  // Direct lookup
+  if (OWNED_ITEM_COSTS[itemName] !== undefined) {
+    return OWNED_ITEM_COSTS[itemName];
+  }
+
+  // Fuzzy fallback: try acquisition costs table
+  const match = findAcquisitionMatch(itemName);
+  if (match) {
+    return match.cost_gbp;
+  }
+
+  return null;
+}
+
 /**
  * Check if a rental request for a non-inventory item is a potential acquisition opportunity.
  * Returns the opportunity details if rental value >= 30% of acquisition cost, null otherwise.

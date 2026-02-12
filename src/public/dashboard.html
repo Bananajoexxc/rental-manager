@@ -896,6 +896,13 @@
         <div class="sub" id="statVacationSub"></div>
         <div class="stat-expand" id="expandVacation"></div>
       </div>
+      <div class="stat-card" data-stat="sell-reco" data-stat-label="Sell Recommender" draggable="false" style="border-left:3px solid #f59e0b;">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
+        <div class="label">Sell Recommender</div>
+        <div class="value amber" id="statSellReco">--</div>
+        <div class="sub" id="statSellRecoSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandSellReco"></div></div>
+      </div>
       <!-- Best & Worst Month stats moved to Lifetime Revenue chart header -->
     </div>
     </div>
@@ -1154,6 +1161,46 @@
       </div>
       <div class="section-body padded" id="roiBody">
         <div style="color:#8b8fa3;font-size:12px;">Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Sell Recommender -->
+    <div class="panel-wrapper" data-panel="sell-reco" data-panel-label="Sell Recommender">
+    <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Sell Recommender</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Sell Recommender</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <select id="sellRecoFilter" onchange="filterSellReco()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">
+            <option value="all">All</option>
+            <option value="sell">Sell</option>
+            <option value="consider">Consider</option>
+            <option value="keep">Keep</option>
+          </select>
+          <button onclick="triggerEbayScrape()" id="ebayScrapeBtn" style="background:#f59e0b;border:none;color:#000;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">Refresh eBay</button>
+          <button onclick="openPriceImport()" style="background:#3b82f6;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">Import Prices</button>
+        </div>
+      </div>
+      <div class="section-body padded" id="sellRecoBody">
+        <div style="color:#8b8fa3;font-size:12px;">Loading...</div>
+      </div>
+      <div id="sellRecoFooter" style="padding:4px 12px 8px;font-size:10px;color:#6b6f82;"></div>
+    </div>
+    <!-- Price Import Modal -->
+    <div id="priceImportModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:#1a1d2e;border-radius:12px;padding:20px;max-width:600px;width:90%;max-height:80vh;overflow:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 style="color:#e4e6eb;margin:0;font-size:14px;">Import eBay Resale Prices</h3>
+          <button onclick="closePriceImport()" style="background:none;border:none;color:#8b8fa3;cursor:pointer;font-size:18px;">&times;</button>
+        </div>
+        <p style="color:#8b8fa3;font-size:11px;margin:0 0 8px;">Paste JSON: <code>{"Item Name": price, ...}</code>. Use <a href="/recommender/ebay-template" target="_blank" style="color:#3b82f6;">template</a> for item names.</p>
+        <textarea id="priceImportInput" style="width:100%;height:200px;background:#0d1117;color:#e4e6eb;border:1px solid #2a2d3a;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{"Sony FX3": 2900, "Sony A7 III": 760, ...}'></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+          <button onclick="loadPriceTemplate()" style="background:#2a2d3a;border:none;color:#8b8fa3;padding:6px 14px;border-radius:4px;font-size:11px;cursor:pointer;">Load Template</button>
+          <button onclick="submitPriceImport()" id="priceImportBtn" style="background:#22c55e;border:none;color:#000;padding:6px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">Import</button>
+        </div>
+        <div id="priceImportResult" style="margin-top:8px;font-size:11px;color:#8b8fa3;"></div>
       </div>
     </div>
     </div>
@@ -2115,9 +2162,9 @@
     }
 
     function getDayType(rental, dateStr) {
-      // Hygglo dates are inclusive — both start and end are rental days
-      var startStr = rental.startDate.split('T')[0];
-      var endStr = rental.endDate.split('T')[0];
+      // Use actual pickup/return dates if available, fall back to Hygglo contract dates
+      var startStr = ((rental.pickupDate || rental.startDate) + '').split('T')[0];
+      var endStr = ((rental.returnDate || rental.endDate) + '').split('T')[0];
       if (startStr === endStr) {
         // Same-day rental: only show pickup badge
         if (dateStr === startStr) return 'pickup';
@@ -2132,10 +2179,16 @@
       var events = [];
       for (var i = 0; i < calendarRentals.length; i++) {
         var r = calendarRentals[i];
-        var rs = r.startDate.split('T')[0];
-        var re = r.endDate.split('T')[0];
-        // Inclusive: rental shows on all days from start to end (both inclusive)
-        if (dateStr >= rs && dateStr <= re) {
+        // Use actual pickup/return dates if available, fall back to Hygglo contract dates
+        var rs = ((r.pickupDate || r.startDate) + '').split('T')[0];
+        var re = ((r.returnDate || r.endDate) + '').split('T')[0];
+        // Also include Hygglo contract date range (rental is "away" on all contract days)
+        var contractStart = r.startDate.split('T')[0];
+        var contractEnd = r.endDate.split('T')[0];
+        // Show rental on pickup date through return date, and all contract days between
+        var effectiveStart = rs < contractStart ? rs : contractStart;
+        var effectiveEnd = re > contractEnd ? re : contractEnd;
+        if (dateStr >= effectiveStart && dateStr <= effectiveEnd) {
           events.push({ rental: r, dayType: getDayType(r, dateStr) });
         }
       }
@@ -2797,8 +2850,9 @@
         return;
       }
       var html = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
-      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;"><th style="text-align:left;padding:3px 6px;">Item</th><th style="text-align:center;padding:3px 4px;">Confidence</th><th style="text-align:right;padding:3px 4px;">Revenue</th><th style="text-align:right;padding:3px 4px;">Denied</th><th style="text-align:right;padding:3px 4px;">Rentals/Mo</th><th style="text-align:right;padding:3px 4px;">Util%</th></tr>';
-      data.slice(0, 20).forEach(function(item) {
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;"><th style="text-align:left;padding:3px 6px;">Item</th><th style="text-align:center;padding:3px 4px;">Confidence</th><th style="text-align:right;padding:3px 4px;">Revenue</th><th style="text-align:right;padding:3px 4px;">Denied</th><th style="text-align:right;padding:3px 4px;">Rentals/Mo</th><th style="text-align:right;padding:3px 4px;">Days/Mo</th></tr>';
+      var ACCESSORY_SET = {'PL to Sony E mount':1,'PL to EF mount':1,'PL to RF mount':1,'PL to L mount':1,'CF Express Type A card':1,'ND filter':1,'Cinebloom filter mist':1,'256GB card':1,'DJI gimbal battery':1,'Sony NPF 970 batteries 2x sets':1,'V-mount 95mAh':1,'V-mount 150mAh':1,'Suction cups':1};
+      data.filter(function(item) { return !ACCESSORY_SET[item.item]; }).slice(0, 20).forEach(function(item) {
         var confColor = item.confidence === 'high' ? '#22c55e' : item.confidence === 'medium' ? '#f59e0b' : '#ef4444';
         var confBg = item.confidence === 'high' ? 'rgba(34,197,94,0.15)' : item.confidence === 'medium' ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)';
         html += '<tr style="border-bottom:1px solid #1e2130;">';
@@ -2807,7 +2861,8 @@
         html += '<td style="padding:4px 4px;text-align:right;color:#22c55e;font-weight:600;">£' + item.actualRevenue.toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}) + '</td>';
         html += '<td style="padding:4px 4px;text-align:right;color:' + (item.deniedRequests > 0 ? '#ef4444' : '#8b8fa3') + ';">' + item.deniedRequests + '</td>';
         html += '<td style="padding:4px 4px;text-align:right;color:#a78bfa;">' + item.rentalsPerMonth + '</td>';
-        html += '<td style="padding:4px 4px;text-align:right;color:#8b8fa3;">' + item.utilization + '%</td>';
+        var dpm = item.rentedDaysPerMonth != null ? item.rentedDaysPerMonth : Math.round(item.utilization * 30 / 100 * 10) / 10;
+        html += '<td style="padding:4px 4px;text-align:right;color:#8b8fa3;">' + dpm + 'd</td>';
         html += '</tr>';
       });
       html += '</table>';
@@ -3558,6 +3613,182 @@
       }
     });
 
+    // ---- Sell Recommender ----
+    var sellRecoData = null;
+
+    function loadSellReco() {
+      var acctAmp = getAccountParam();
+      fetchJSON('/recommender/sell-items' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(function(data) {
+        sellRecoData = data;
+        renderSellRecoStat(data);
+        renderSellReco(data);
+      }).catch(function() {});
+    }
+
+    function renderSellRecoStat(data) {
+      var el = document.getElementById('statSellReco');
+      var sub = document.getElementById('statSellRecoSub');
+      var exp = document.getElementById('expandSellReco');
+      if (!data || !data.summary) {
+        el.textContent = '--';
+        sub.textContent = 'No data';
+        return;
+      }
+      var s = data.summary;
+      el.textContent = s.sellCount > 0 ? s.sellCount : '0';
+      var subParts = [];
+      if (s.considerCount > 0) subParts.push(s.considerCount + ' to consider');
+      if (s.bundleProtectedCount > 0) subParts.push(s.bundleProtectedCount + ' bundle-protected');
+      if (s.totalPotentialResaleValue > 0) subParts.push('£' + s.totalPotentialResaleValue.toLocaleString('en-GB', {minimumFractionDigits:0,maximumFractionDigits:0}) + ' resale');
+      sub.textContent = subParts.join(' · ') || s.keepCount + ' items — all good';
+
+      // Expand: top 3 sell items
+      if (exp && data.recommendations) {
+        var sellItems = data.recommendations.filter(function(r) { return r.sellVerdict === 'sell'; }).slice(0, 3);
+        if (sellItems.length > 0) {
+          exp.innerHTML = sellItems.map(function(r) {
+            return '<div style="font-size:11px;color:#8b8fa3;padding:2px 0;">' +
+              '<span style="color:#ef4444;">' + escapeHtml(r.item) + '</span>' +
+              (r.daysSinceLastRental !== null ? ' · idle ' + r.daysSinceLastRental + 'd' : '') +
+              (r.ebayResalePrice ? ' · eBay £' + Math.round(r.ebayResalePrice) : '') +
+              '</div>';
+          }).join('');
+        } else {
+          exp.innerHTML = '';
+        }
+      }
+    }
+
+    function renderSellReco(data) {
+      var body = document.getElementById('sellRecoBody');
+      var footer = document.getElementById('sellRecoFooter');
+      if (!data || !data.recommendations || data.recommendations.length === 0) {
+        body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No data. Run eBay scrape first.</div>';
+        return;
+      }
+
+      var filter = document.getElementById('sellRecoFilter').value;
+      var items = data.recommendations;
+      if (filter !== 'all') {
+        items = items.filter(function(r) { return r.sellVerdict === filter; });
+      }
+
+      var html = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;">';
+      html += '<th style="text-align:left;padding:3px 6px;">Item</th>';
+      html += '<th style="text-align:center;padding:3px 4px;">Verdict</th>';
+      html += '<th style="text-align:right;padding:3px 4px;">Score</th>';
+      html += '<th style="text-align:center;padding:3px 4px;">Bundle</th>';
+      html += '<th style="text-align:right;padding:3px 4px;">Cost</th>';
+      html += '<th style="text-align:right;padding:3px 4px;">eBay</th>';
+      html += '<th style="text-align:right;padding:3px 4px;">Earned</th>';
+      html += '<th style="text-align:right;padding:3px 4px;">Idle</th>';
+      html += '<th style="text-align:right;padding:3px 4px;">Rent/Mo</th>';
+      html += '</tr>';
+
+      items.forEach(function(r) {
+        var vc, vbg;
+        if (r.sellVerdict === 'sell') { vc = '#ef4444'; vbg = 'rgba(239,68,68,0.15)'; }
+        else if (r.sellVerdict === 'consider') { vc = '#f59e0b'; vbg = 'rgba(245,158,11,0.15)'; }
+        else { vc = '#22c55e'; vbg = 'rgba(34,197,94,0.15)'; }
+
+        var idleColor = r.daysSinceLastRental !== null && r.daysSinceLastRental > 60 ? '#ef4444' : '#8b8fa3';
+        var qtyBadge = r.qtyOwned > 1 ? ' <span style="background:#2a2d3a;padding:0 4px;border-radius:3px;font-size:9px;color:#8b8fa3;">×' + r.qtyOwned + '</span>' : '';
+
+        // Bundle column: color-coded bundleRate%
+        var bundleColor = r.bundleRate >= 70 ? '#22c55e' : r.bundleRate >= 30 ? '#f59e0b' : '#555';
+        var bundleTooltip = '';
+        if (r.bundleRate > 0) {
+          var parts = [r.bundleRate + '% bundled'];
+          if (r.topPartners && r.topPartners.length > 0) {
+            parts.push('Top: ' + r.topPartners.map(function(p) { return p.item + ' (' + p.count + 'x)'; }).join(', '));
+          }
+          parts.push('Dependency: ' + r.bundleDependencyScore + '%');
+          if (r.bundlePenalty > 0) parts.push('Penalty: -' + r.bundlePenalty + 'pts');
+          bundleTooltip = parts.join(' | ');
+        }
+        var bundleHtml = r.bundleRate > 0
+          ? '<span style="color:' + bundleColor + ';cursor:help;" title="' + escapeHtml(bundleTooltip) + '">' + r.bundleRate + '%' + (r.bundlePenalty > 0 ? ' <span style="font-size:9px;color:#6ea8fe;">-' + r.bundlePenalty + '</span>' : '') + '</span>'
+          : '<span style="color:#555;">—</span>';
+
+        // Cost column: purchase cost with recovery %
+        var costHtml = '—';
+        if (r.purchaseCost !== null && r.purchaseCost > 0) {
+          var recoveryPct = r.purchaseCostROI !== null ? Math.round(r.purchaseCostROI * 100) : 0;
+          var costColor = recoveryPct >= 100 ? '#22c55e' : recoveryPct >= 50 ? '#f59e0b' : '#ef4444';
+          costHtml = '£' + r.purchaseCost + ' <span style="font-size:9px;color:' + costColor + ';">' + recoveryPct + '%</span>';
+        }
+
+        html += '<tr style="border-bottom:1px solid #1e2130;" title="' + escapeHtml(r.sellReason) + '">';
+        html += '<td style="padding:4px 6px;color:#e4e6eb;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(r.item) + qtyBadge + '</td>';
+        html += '<td style="padding:4px 4px;text-align:center;"><span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;background:' + vbg + ';color:' + vc + ';">' + r.sellVerdict + '</span></td>';
+        html += '<td style="padding:4px 4px;text-align:right;color:#e4e6eb;">' + r.sellScore + '</td>';
+        html += '<td style="padding:4px 4px;text-align:center;">' + bundleHtml + '</td>';
+        html += '<td style="padding:4px 4px;text-align:right;">' + costHtml + '</td>';
+        html += '<td style="padding:4px 4px;text-align:right;color:' + (r.ebayResalePrice ? '#f59e0b' : '#555') + ';">' + (r.ebayResalePrice ? '£' + Math.round(r.ebayResalePrice) : '—') + '</td>';
+        html += '<td style="padding:4px 4px;text-align:right;color:#22c55e;font-weight:600;">£' + r.lifetimeRevenue.toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}) + '</td>';
+        html += '<td style="padding:4px 4px;text-align:right;color:' + idleColor + ';">' + (r.daysSinceLastRental !== null ? r.daysSinceLastRental + 'd' : '—') + '</td>';
+        html += '<td style="padding:4px 4px;text-align:right;color:#a78bfa;">' + r.rentalsPerMonth + '</td>';
+        html += '</tr>';
+      });
+      html += '</table>';
+      body.innerHTML = html;
+
+      // Footer
+      if (footer) {
+        footer.textContent = data.ebayDataAge ? 'eBay prices: ' + data.ebayDataAge + ' · Hover rows for sell reasoning' : 'No eBay data — click "Refresh eBay" to scrape';
+      }
+    }
+
+    function filterSellReco() {
+      if (sellRecoData) renderSellReco(sellRecoData);
+    }
+
+    function openPriceImport() {
+      document.getElementById('priceImportModal').style.display = 'flex';
+    }
+    function closePriceImport() {
+      document.getElementById('priceImportModal').style.display = 'none';
+    }
+    function loadPriceTemplate() {
+      fetchJSON('/recommender/ebay-template').then(function(data) {
+        document.getElementById('priceImportInput').value = JSON.stringify(data, null, 2);
+      });
+    }
+    function submitPriceImport() {
+      var btn = document.getElementById('priceImportBtn');
+      var result = document.getElementById('priceImportResult');
+      var input = document.getElementById('priceImportInput').value;
+      try { var parsed = JSON.parse(input); } catch(e) { result.innerHTML = '<span style="color:#ef4444;">Invalid JSON</span>'; return; }
+      btn.textContent = 'Importing...';
+      btn.disabled = true;
+      fetch('/recommender/ebay-prices', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(parsed) })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          btn.textContent = 'Import';
+          btn.disabled = false;
+          result.innerHTML = '<span style="color:#22c55e;">' + data.imported + ' imported</span>' + (data.skipped.length > 0 ? ' · <span style="color:#f59e0b;">' + data.skipped.length + ' skipped</span>' : '');
+          loadSellReco();
+        })
+        .catch(function() { btn.textContent = 'Import'; btn.disabled = false; result.innerHTML = '<span style="color:#ef4444;">Failed</span>'; });
+    }
+
+    function triggerEbayScrape() {
+      var btn = document.getElementById('ebayScrapeBtn');
+      btn.textContent = 'Scraping...';
+      btn.disabled = true;
+      fetchJSON('/recommender/ebay-scrape').then(function(data) {
+        btn.textContent = 'Done ✓';
+        setTimeout(function() { btn.textContent = 'Refresh eBay'; btn.disabled = false; }, 2000);
+        // Reload sell reco data with fresh eBay prices
+        loadSellReco();
+      }).catch(function() {
+        btn.textContent = 'Failed';
+        btn.disabled = false;
+        setTimeout(function() { btn.textContent = 'Refresh eBay'; }, 2000);
+      });
+    }
+
     // ---- Main refresh ----
     function refreshAll() {
       var btn = document.getElementById('refreshBtn');
@@ -3586,6 +3817,7 @@
         fetchJSON('/revenue/ai-boost?period=' + (document.getElementById('aiBoostPeriod').value || 'month') + acctAmp).then(renderAiBoost).catch(function() {}),
         fetchJSON('/revenue/monthly?months=12' + acctAmp).then(renderBestWorst).catch(function() {}),
         loadReturnHub(),
+        loadSellReco(),
       ]).then(function(results) {
         if (results[0].status === 'rejected') {
           document.getElementById('statusDot').className = 'status-dot unhealthy';

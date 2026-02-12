@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames, isAccessoryItem } from '../utils/item-matcher';
-import { PRICING_CATALOG } from '../data/pricing-catalog';
+import { PRICING_CATALOG, getOneDayPrice } from '../data/pricing-catalog';
 import { DELIVERY_SPECS } from '../data/delivery-specs';
 
 @Injectable()
@@ -543,13 +543,13 @@ export class CalendarService implements OnModuleInit {
     pickupDate?: string,
     returnDate?: string,
   ): Promise<any> {
-    // Find bookings linked to this rental
+    // Find bookings linked to this rental (include pending_review so times aren't lost before promotion)
     const bookings = await this.prisma.booking.findMany({
-      where: { rental_id: rentalId, status: 'confirmed' },
+      where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
     });
 
     if (bookings.length === 0) {
-      this.logger.warn(`updateBookingTimes: no confirmed bookings found for rental ${rentalId}`);
+      this.logger.warn(`updateBookingTimes: no confirmed/pending_review bookings found for rental ${rentalId}`);
       return null;
     }
 
@@ -562,7 +562,7 @@ export class CalendarService implements OnModuleInit {
     if (Object.keys(updateData).length === 0) return null;
 
     const updated = await this.prisma.booking.updateMany({
-      where: { rental_id: rentalId, status: 'confirmed' },
+      where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
       data: updateData,
     });
 
@@ -625,7 +625,28 @@ export class CalendarService implements OnModuleInit {
     // All revenue goes to main items only (accessories are bundled, not separate revenue items)
     // rental_price is set to ownerEarnings by the scanner — platform fees already deducted by Hygglo
     const totalRevenue = rental.rental_price || 0;
-    const perItemRevenue = mainItems.length > 0 ? totalRevenue / mainItems.length : 0;
+
+    // Proportional revenue split using catalog daily prices as weights
+    // Items without catalog prices get a default weight of 15 (median daily price)
+    const DEFAULT_DAILY_PRICE = 15;
+    const itemWeights = mainItems.map(item => ({
+      name: item.name,
+      quantity: item.quantity,
+      weight: getOneDayPrice(item.name) || DEFAULT_DAILY_PRICE,
+    }));
+    const totalWeight = itemWeights.reduce((sum, iw) => sum + iw.weight * iw.quantity, 0);
+    const revenueByItem = new Map<string, number>();
+    if (totalWeight > 0) {
+      for (const iw of itemWeights) {
+        revenueByItem.set(iw.name, Math.round((iw.weight / totalWeight) * totalRevenue * 100) / 100);
+      }
+    } else {
+      // Fallback to equal split if no catalog prices at all
+      const perItem = mainItems.length > 0 ? totalRevenue / mainItems.length : 0;
+      for (const item of mainItems) {
+        revenueByItem.set(item.name, Math.round(perItem * 100) / 100);
+      }
+    }
 
     const createdBookings: any[] = [];
     const renterName = rental.renter_info || 'Unknown';
@@ -649,7 +670,7 @@ export class CalendarService implements OnModuleInit {
       // Check availability before booking
       const availability = await this.checkAvailability(item.name, rental.start_date, rental.end_date);
 
-      const itemRevenue = Math.round(perItemRevenue * 100) / 100;
+      const itemRevenue = revenueByItem.get(item.name) || 0;
       // Platform fee is 0: rental_price is already ownerEarnings (Hygglo fees pre-deducted)
       const itemFee = 0;
 
@@ -792,6 +813,191 @@ export class CalendarService implements OnModuleInit {
     }
 
     return updated;
+  }
+
+  /**
+   * Reconcile bookings for recent rentals using parsed_items.
+   * For each rental in the last N days, checks parsed_items against existing bookings.
+   * Creates missing bookings for non-accessory items that match MASTER_INVENTORY.
+   * Returns a detailed report of what was found and created.
+   */
+  async reconcileRecentBookings(days = 14): Promise<{
+    rentalsScanned: number;
+    bookingsCreated: number;
+    itemsSkipped: { item: string; reason: string }[];
+    details: { rentalId: string; title: string; item: string; action: string }[];
+  }> {
+    const cutoff = new Date(Date.now() - days * 86400000);
+    const inventoryNames = getInventoryItemNames();
+
+    // Load all rentals with parsed_items in the window
+    const rentals = await this.prisma.rental.findMany({
+      where: {
+        created_at: { gte: cutoff },
+        start_date: { not: undefined },
+        end_date: { not: undefined },
+      },
+    });
+
+    let bookingsCreated = 0;
+    const itemsSkipped: { item: string; reason: string }[] = [];
+    const details: { rentalId: string; title: string; item: string; action: string }[] = [];
+    const skipReasons = new Map<string, string>();
+
+    for (const rental of rentals) {
+      if (!rental.start_date || !rental.end_date || !rental.parsed_items) continue;
+
+      // Parse items from the JSON field
+      let parsedItems: { item: string; qty: number }[];
+      try {
+        const raw = typeof rental.parsed_items === 'string'
+          ? JSON.parse(rental.parsed_items as string)
+          : rental.parsed_items;
+        if (!Array.isArray(raw)) continue;
+        parsedItems = raw.map((e: any) => ({
+          item: e.item || '',
+          qty: e.qty || 1,
+        }));
+      } catch {
+        continue;
+      }
+
+      // Existing booking item names for this rental
+      const existingBookings = await this.prisma.booking.findMany({
+        where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
+        select: { item_name: true },
+      });
+      const existingItems = new Set(existingBookings.map(b => b.item_name));
+
+      for (const parsed of parsedItems) {
+        if (!parsed.item) continue;
+
+        // Run through findBestMatch to resolve to MASTER_INVENTORY name
+        const matched = findBestMatch(parsed.item, inventoryNames);
+
+        // High-confidence gate: for reconciliation, require parsed item name to be
+        // very close to the matched inventory name.
+        // Two checks: (1) bidirectional token overlap ≥60%, (2) no version/model number conflicts
+        if (matched && matched.toLowerCase() !== parsed.item.toLowerCase()) {
+          const pTokens = parsed.item.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(t => t.length >= 1);
+          const mTokens = matched.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(t => t.length >= 1);
+
+          // Version/model conflict: if both have tokens that are pure numbers or roman numerals
+          // and they DON'T match, it's a different model (A7 V ≠ A7 III, Mavic 4 ≠ Mavic 3)
+          const isVersionToken = (t: string) => /^(i{1,3}|iv|v|vi{0,3}|[0-9]+)$/.test(t);
+          const pVersions = pTokens.filter(isVersionToken);
+          const mVersions = mTokens.filter(isVersionToken);
+          if (pVersions.length > 0 && mVersions.length > 0) {
+            const pSet = new Set(pVersions);
+            const mSet = new Set(mVersions);
+            // Check if there's a version in parsed that ISN'T in matched (and vice versa)
+            const pOnly = pVersions.filter(v => !mSet.has(v));
+            const mOnly = mVersions.filter(v => !pSet.has(v));
+            if (pOnly.length > 0 && mOnly.length > 0) {
+              // Different version numbers → different product
+              if (!skipReasons.has(parsed.item)) {
+                skipReasons.set(parsed.item, `version mismatch: ${parsed.item} [${pOnly.join(',')}] ≠ ${matched} [${mOnly.join(',')}]`);
+                itemsSkipped.push({ item: parsed.item, reason: `version mismatch → ${matched}` });
+              }
+              details.push({ rentalId: rental.id, title: rental.title.substring(0, 50), item: `${parsed.item} ✗ ${matched}`, action: 'skipped_version_mismatch' });
+              continue;
+            }
+          }
+
+          // Bidirectional token overlap check (only for tokens ≥2 chars for fuzzy matching)
+          const pLong = pTokens.filter(t => t.length >= 2);
+          const mLong = mTokens.filter(t => t.length >= 2);
+          const pInM = pLong.filter(t => mLong.some(m => m === t || (t.length >= 4 && m.includes(t)) || (m.length >= 4 && t.includes(m)))).length;
+          const mInP = mLong.filter(t => pLong.some(p => p === t || (t.length >= 4 && p.includes(t)) || (p.length >= 4 && t.includes(p)))).length;
+          const pRatio = pLong.length > 0 ? pInM / pLong.length : 0;
+          const mRatio = mLong.length > 0 ? mInP / mLong.length : 0;
+          // If one direction is very high (≥0.9), the shorter name is a subset — accept at lower threshold
+          const bidirectional = (pRatio >= 0.9 || mRatio >= 0.9)
+            ? Math.max(pRatio, mRatio) * 0.75  // weight toward the high direction
+            : Math.min(pRatio, mRatio);
+          if (bidirectional < 0.65) {
+            if (!skipReasons.has(parsed.item)) {
+              skipReasons.set(parsed.item, `low confidence match → ${matched} (${Math.round(bidirectional * 100)}%)`);
+              itemsSkipped.push({ item: parsed.item, reason: `low confidence → ${matched} (${Math.round(bidirectional * 100)}%)` });
+            }
+            details.push({ rentalId: rental.id, title: rental.title.substring(0, 50), item: `${parsed.item} ✗ ${matched}`, action: 'skipped_low_confidence' });
+            continue;
+          }
+        }
+
+        if (!matched) {
+          if (!skipReasons.has(parsed.item)) {
+            skipReasons.set(parsed.item, 'not in MASTER_INVENTORY');
+            itemsSkipped.push({ item: parsed.item, reason: 'not in MASTER_INVENTORY' });
+          }
+          details.push({ rentalId: rental.id, title: rental.title.substring(0, 50), item: parsed.item, action: 'skipped_no_match' });
+          continue;
+        }
+
+        // Skip accessories
+        if (isAccessoryItem(matched)) {
+          details.push({ rentalId: rental.id, title: rental.title.substring(0, 50), item: `${parsed.item} → ${matched}`, action: 'skipped_accessory' });
+          continue;
+        }
+
+        // Already has a booking for this item
+        if (existingItems.has(matched)) {
+          continue; // no action needed
+        }
+
+        // Create missing booking
+        const availability = await this.checkAvailability(matched, rental.start_date, rental.end_date);
+        const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+        const bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
+
+        // Revenue: split total across all non-accessory parsed items
+        const mainParsedItems = parsedItems.filter(p => {
+          const m = findBestMatch(p.item, inventoryNames);
+          return m && !isAccessoryItem(m);
+        });
+        const totalRevenue = rental.rental_price || 0;
+        const perItemRevenue = mainParsedItems.length > 0
+          ? Math.round((totalRevenue / mainParsedItems.length) * 100) / 100
+          : 0;
+
+        await this.prisma.booking.create({
+          data: {
+            item_name: matched,
+            quantity: 1,
+            start_date: rental.start_date,
+            end_date: rental.end_date,
+            renter_name: rental.renter_info || 'Unknown',
+            account: rental.account || 'dbcinema',
+            rental_id: rental.id,
+            revenue: perItemRevenue > 0 ? perItemRevenue : null,
+            platform_fee: 0,
+            net_profit: perItemRevenue > 0 ? perItemRevenue : null,
+            status: bookingStatus,
+            notes: JSON.stringify({ reconciled: true, parsedAs: parsed.item, matchedTo: matched }),
+          },
+        });
+
+        existingItems.add(matched); // prevent duplicates within same rental
+        bookingsCreated++;
+        details.push({
+          rentalId: rental.id,
+          title: rental.title.substring(0, 50),
+          item: `${parsed.item} → ${matched}`,
+          action: `created_${bookingStatus}`,
+        });
+
+        this.logger.log(`Reconciled: ${matched} for rental "${rental.title.substring(0, 40)}" [${bookingStatus}]`);
+      }
+    }
+
+    this.logger.log(`Booking reconciliation: scanned ${rentals.length} rentals, created ${bookingsCreated} bookings, skipped ${itemsSkipped.length} unmatched item types`);
+
+    return {
+      rentalsScanned: rentals.length,
+      bookingsCreated,
+      itemsSkipped,
+      details,
+    };
   }
 
   async getFullInventoryStatus(daysAhead = 7): Promise<string> {
@@ -1081,5 +1287,90 @@ export class CalendarService implements OnModuleInit {
     this.compactInventoryCache = result;
     this.compactInventoryCacheTime = now;
     return result;
+  }
+
+  /**
+   * Recompute revenue for all multi-item bookings using proportional split by catalog daily price.
+   * Fixes historical equal-split allocations where cheap items (tripod £8/day) got same revenue as expensive items (FX3 £40/day).
+   */
+  async recomputeBookingRevenue(): Promise<{ updated: number; skipped: number; examples: any[] }> {
+    const DEFAULT_DAILY_PRICE = 15;
+
+    // Get all rentals that have multiple active bookings
+    const rentals = await this.prisma.rental.findMany({
+      where: {
+        rental_price: { gt: 0 },
+      },
+      select: {
+        id: true,
+        rental_price: true,
+        bookings: {
+          where: { status: { in: ['confirmed', 'pending_review'] } },
+          select: { id: true, item_name: true, revenue: true, quantity: true },
+        },
+      },
+    });
+
+    let updated = 0;
+    let skipped = 0;
+    const examples: any[] = [];
+
+    for (const rental of rentals) {
+      const mainBookings = rental.bookings.filter(b => !isAccessoryItem(b.item_name));
+      if (mainBookings.length < 2) {
+        // Single-item rentals: just ensure revenue = rental_price
+        if (mainBookings.length === 1 && mainBookings[0].revenue !== rental.rental_price) {
+          await this.prisma.booking.update({
+            where: { id: mainBookings[0].id },
+            data: {
+              revenue: rental.rental_price,
+              net_profit: rental.rental_price,
+            },
+          });
+          updated++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+
+      // Multi-item: proportional split by catalog daily price
+      const itemWeights = mainBookings.map(b => ({
+        id: b.id,
+        item: b.item_name,
+        oldRevenue: b.revenue,
+        weight: getOneDayPrice(b.item_name) || DEFAULT_DAILY_PRICE,
+        quantity: b.quantity || 1,
+      }));
+      const totalWeight = itemWeights.reduce((sum, iw) => sum + iw.weight * iw.quantity, 0);
+
+      if (totalWeight <= 0) { skipped++; continue; }
+
+      let anyChanged = false;
+      for (const iw of itemWeights) {
+        const newRevenue = Math.round((iw.weight * iw.quantity / totalWeight) * (rental.rental_price ?? 0) * 100) / 100;
+        if (iw.oldRevenue !== newRevenue) {
+          await this.prisma.booking.update({
+            where: { id: iw.id },
+            data: { revenue: newRevenue, net_profit: newRevenue },
+          });
+          anyChanged = true;
+          if (examples.length < 10 && Math.abs((iw.oldRevenue || 0) - newRevenue) > 1) {
+            examples.push({
+              item: iw.item,
+              oldRevenue: iw.oldRevenue,
+              newRevenue,
+              catalogDaily: iw.weight,
+              rentalTotal: rental.rental_price,
+              itemCount: mainBookings.length,
+            });
+          }
+        }
+      }
+      if (anyChanged) updated++; else skipped++;
+    }
+
+    this.logger.log(`Revenue recompute: ${updated} rentals updated, ${skipped} skipped`);
+    return { updated, skipped, examples };
   }
 }

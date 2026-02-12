@@ -22,6 +22,7 @@ import { CompetitorIntelService } from './competitor-intel/competitor-intel.serv
 import { MarketReleasesService } from './market/market-releases.service';
 import { ConversationStageService } from './conversation-tree/conversation-stage.service';
 import { ItemMatcherAiService } from './item-matcher-ai/item-matcher-ai.service';
+import { SellRecommenderService } from './sell-recommender/sell-recommender.service';
 
 @ApiTags('Health')
 @Controller()
@@ -46,6 +47,7 @@ export class AppController {
     private readonly autonomousService: AutonomousService,
     private readonly conversationStageService: ConversationStageService,
     private readonly itemMatcherAi: ItemMatcherAiService,
+    private readonly sellRecommenderService: SellRecommenderService,
   ) {}
 
   // In-memory session store for renter chat testing
@@ -756,6 +758,23 @@ export class AppController {
     return this.syncFull();
   }
 
+  @Get('calendar/reconcile')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Reconcile bookings for recent rentals — creates missing bookings from parsed_items' })
+  @ApiQuery({ name: 'days', required: false, type: Number, description: 'Number of days to look back (default 14)' })
+  @ApiResponse({ status: 200, description: 'Reconciliation results' })
+  async reconcileBookings(@Query('days') days?: string) {
+    const lookback = days ? parseInt(days, 10) || 14 : 14;
+    return this.calendarService.reconcileRecentBookings(lookback);
+  }
+
+  @Get('calendar/recompute-revenue')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Recompute booking revenue using proportional split by catalog daily price' })
+  async recomputeRevenue() {
+    return this.calendarService.recomputeBookingRevenue();
+  }
+
   @Get('cleanup/accessories')
   @ApiTags('Maintenance')
   @ApiOperation({ summary: 'Remove accessory bookings and fix platform fees on existing bookings' })
@@ -980,7 +999,7 @@ export class AppController {
 
     const bookings = await this.prisma.booking.findMany({
       where: {
-        status: 'confirmed',
+        status: { in: ['confirmed', 'pending_review'] },
         end_date: { gte: oneWeekAgo }, // Only ongoing or upcoming (ended within last week or future)
         OR: [{ pickup_time: null }, { return_time: null }, { pickup_date: null }, { return_date: null }],
       },
@@ -1036,8 +1055,39 @@ export class AppController {
       }
     }
 
-    this.logger.log(`Times backfill: ${results.extracted} extracted, ${results.noTimes} no times, ${results.failed} failed from ${results.total} rentals`);
-    return results;
+    // Fix 5: times_status integrity — 'confirmed' with null times → downgrade
+    let integrityFixed = 0;
+    try {
+      const brokenStates = await this.prisma.follow_up_state.findMany({
+        where: { times_status: 'confirmed' },
+        select: { id: true, rental_id: true },
+      });
+      for (const state of brokenStates) {
+        if (!state.rental_id) continue;
+        const booking = await this.prisma.booking.findFirst({
+          where: { rental_id: state.rental_id, status: { in: ['confirmed', 'pending_review'] } },
+          select: { pickup_time: true, return_time: true },
+        });
+        if (!booking || (!booking.pickup_time && !booking.return_time)) {
+          await this.prisma.follow_up_state.update({
+            where: { id: state.id },
+            data: { times_status: 'none' },
+          });
+          integrityFixed++;
+        } else if (!booking.pickup_time || !booking.return_time) {
+          await this.prisma.follow_up_state.update({
+            where: { id: state.id },
+            data: { times_status: 'tentative' },
+          });
+          integrityFixed++;
+        }
+      }
+    } catch (intErr) {
+      this.logger.warn(`times_status integrity check error: ${(intErr as any).message}`);
+    }
+
+    this.logger.log(`Times backfill: ${results.extracted} extracted, ${results.noTimes} no times, ${results.failed} failed from ${results.total} rentals, ${integrityFixed} integrity fixes`);
+    return { ...results, integrityFixed };
   }
 
   @Get('reconcile/stages')
@@ -1319,6 +1369,39 @@ export class AppController {
   @ApiResponse({ status: 200, description: 'Thank you sent' })
   async sendThankYou(@Param('id') id: string) {
     return await this.appService.sendThankYou(id);
+  }
+
+  // --- Sell Recommender ---
+
+  @Get('recommender/sell-items')
+  @ApiTags('Sell Recommender')
+  @ApiOperation({ summary: 'Item sell recommendations based on rental performance + eBay resale prices' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Sell recommendations with scores and verdicts' })
+  async getSellRecommendations(@Query('account') account?: string) {
+    return await this.sellRecommenderService.getSellRecommendations(account || undefined);
+  }
+
+  @Get('recommender/ebay-scrape')
+  @ApiTags('Sell Recommender')
+  @ApiOperation({ summary: 'Manually trigger eBay sold price scrape for all inventory items' })
+  @ApiResponse({ status: 200, description: 'eBay scrape results' })
+  async triggerEbayScrape() {
+    return await this.sellRecommenderService.scrapeAllEbayPrices();
+  }
+
+  @Post('recommender/ebay-prices')
+  @ApiTags('Sell Recommender')
+  @ApiOperation({ summary: 'Import eBay resale prices manually (JSON: { "Item Name": price })' })
+  async importEbayPrices(@Body() prices: Record<string, number>) {
+    return await this.sellRecommenderService.importEbayPrices(prices);
+  }
+
+  @Get('recommender/ebay-template')
+  @ApiTags('Sell Recommender')
+  @ApiOperation({ summary: 'Get price template (all items with current cached prices)' })
+  async getEbayTemplate() {
+    return await this.sellRecommenderService.getEbayPriceTemplate();
   }
 
   @Get('dashboard')

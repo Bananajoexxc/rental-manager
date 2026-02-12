@@ -143,7 +143,8 @@ export function findBestMatch(input: string, inventory: string[]): string | null
   }
   if (bestContains) return bestContains;
 
-  // Category keyword matching — prioritise distinctive product-type words
+  // Category keyword matching — only shortcut when exactly ONE inventory item matches
+  // (prevents "anamorphic" from returning first of 7 anamorphic lenses)
   const categoryKeywords: Record<string, string[]> = {
     fisheye: ['fisheye', 'fish eye'],
     anamorphic: ['anamorphic', 'blazar', 'great joy', 'remus'],
@@ -158,12 +159,14 @@ export function findBestMatch(input: string, inventory: string[]): string | null
   for (const [, keywords] of Object.entries(categoryKeywords)) {
     const matchesInput = keywords.some(kw => normalized.includes(kw));
     if (matchesInput) {
-      for (const item of inventory) {
+      const candidates = inventory.filter(item => {
         const normItem = normalizeItemName(item);
-        if (keywords.some(kw => normItem.includes(kw))) {
-          return item;
-        }
+        return keywords.some(kw => normItem.includes(kw));
+      });
+      if (candidates.length === 1) {
+        return candidates[0]; // unambiguous category match
       }
+      // Multiple candidates — fall through to token scoring for disambiguation
     }
   }
 
@@ -253,11 +256,13 @@ export const ACCESSORY_ITEMS = new Set([
   'PL to L mount',
   'CF Express Type A card',
   'ND filter',
+  'Cinebloom filter mist',
   '256GB card',
   'DJI gimbal battery',
   'Sony NPF 970 batteries 2x sets',
   'V-mount 95mAh',
   'V-mount 150mAh',
+  'Suction cups',
 ]);
 
 export function isAccessoryItem(name: string): boolean {

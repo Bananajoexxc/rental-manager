@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyggloService, HyggloAccount } from '../hygglo/hygglo.service';
-import { isAccessoryItem, MASTER_INVENTORY } from '../utils/item-matcher';
+import { isAccessoryItem, MASTER_INVENTORY, findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
 import { getOneDayPrice } from '../data/pricing-catalog';
 
 /** Rental table row used for revenue calculations (captures ALL Hygglo revenue, not just matched items) */
@@ -36,10 +36,72 @@ export class RevenueService {
 
   private static readonly AI_DEPLOY_DATE = new Date('2026-01-29');
 
+  /**
+   * Cache for parsed_item name → MASTER_INVENTORY name resolution.
+   * Many parsed_items have slight name differences (e.g. "Anamorphic Great Joy 50mm"
+   * vs MASTER_INVENTORY's "Anamorphic Great Joy lens 50mm"). Without normalization,
+   * revenue for those items goes to the "otherRevenue" bucket and becomes invisible.
+   */
+  private itemNameCache = new Map<string, string | null>();
+
   constructor(
     private prisma: PrismaService,
     private hyggloService: HyggloService,
   ) {}
+
+  /**
+   * Normalize a parsed_item name to its MASTER_INVENTORY key.
+   * Parsed items come from AI extraction and are CLOSE to inventory names
+   * but may have small differences (e.g. missing "lens" word).
+   * Uses token-overlap scoring with ALL specific tokens required to match.
+   * Caches results for performance.
+   */
+  private normalizeItemName(parsedName: string): string | null {
+    if (MASTER_INVENTORY[parsedName] !== undefined) return parsedName;
+    if (this.itemNameCache.has(parsedName)) return this.itemNameCache.get(parsedName)!;
+
+    const inputLower = parsedName.toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const inputTokens = inputLower.split(' ');
+    const inventoryNames = getInventoryItemNames();
+
+    let bestMatch: string | null = null;
+    let bestScore = 0;
+
+    // f-stop pattern for conflict detection (f2.8 vs f4 = different lens)
+    const fStopPattern = /^f\d/;
+    const inputFStops = inputTokens.filter(t => fStopPattern.test(t));
+
+    for (const invName of inventoryNames) {
+      const invLower = invName.toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+      const invTokens = invLower.split(' ');
+
+      // f-stop conflict: if both have f-numbers and they differ, skip (different lens)
+      if (inputFStops.length > 0) {
+        const invFStops = invTokens.filter(t => fStopPattern.test(t));
+        if (invFStops.length > 0 && !inputFStops.some(f => invFStops.includes(f))) continue;
+      }
+
+      // Count how many input tokens appear in inventory name
+      let matched = 0;
+      for (const t of inputTokens) {
+        if (t.length < 2) continue;
+        if (invTokens.some(it => it === t || (t.length >= 4 && it.includes(t)) || (it.length >= 4 && t.includes(it)))) {
+          matched++;
+        }
+      }
+
+      // Require at least 80% of input tokens to match (high precision for revenue)
+      const significantTokens = inputTokens.filter(t => t.length >= 2).length;
+      const coverage = significantTokens > 0 ? matched / significantTokens : 0;
+      if (coverage >= 0.8 && matched > bestScore) {
+        bestScore = matched;
+        bestMatch = invName;
+      }
+    }
+
+    this.itemNameCache.set(parsedName, bestMatch);
+    return bestMatch;
+  }
 
   /**
    * Derive lifecycle from dates.
@@ -312,17 +374,23 @@ export class RevenueService {
 
     // Compute stats: avg monthly, strongest month, weakest month
     // Exclude current month from "worst" — it's always incomplete and would always win
+    // Exclude first 12 months — early revenue is not representative of mature performance
     const currentMonth = now.toISOString().split('T')[0].substring(0, 7);
+    const oneYearAfterStart = new Date(startMonth);
+    oneYearAfterStart.setMonth(oneYearAfterStart.getMonth() + 12);
+    const matureCutoff = oneYearAfterStart.toISOString().split('T')[0].substring(0, 7);
+
     const nonZeroMonths = results.filter(m => m.revenue > 0);
-    const completedNonZero = nonZeroMonths.filter(m => m.month !== currentMonth);
-    const avgMonthly = nonZeroMonths.length > 0
-      ? Math.round(nonZeroMonths.reduce((s, m) => s + m.revenue, 0) / nonZeroMonths.length)
+    const matureMonths = nonZeroMonths.filter(m => m.month >= matureCutoff);
+    const completedMature = matureMonths.filter(m => m.month !== currentMonth);
+    const avgMonthly = matureMonths.length > 0
+      ? Math.round(matureMonths.reduce((s, m) => s + m.revenue, 0) / matureMonths.length)
       : 0;
-    const strongest = nonZeroMonths.length > 0
-      ? nonZeroMonths.reduce((best, m) => m.revenue > best.revenue ? m : best)
+    const strongest = matureMonths.length > 0
+      ? matureMonths.reduce((best, m) => m.revenue > best.revenue ? m : best)
       : null;
-    const weakest = completedNonZero.length > 0
-      ? completedNonZero.reduce((worst, m) => m.revenue < worst.revenue ? m : worst)
+    const weakest = completedMature.length > 0
+      ? completedMature.reduce((worst, m) => m.revenue < worst.revenue ? m : worst)
       : null;
 
     return {
@@ -547,7 +615,7 @@ export class RevenueService {
     let otherRevenue = noParsedItems.reduce((sum, r) => sum + (r.rental_price || 0), 0);
     for (const r of filtered) {
       const items = (r.parsed_items as { item: string; qty: number }[])
-        .map(p => ({ item_name: p.item, qty: p.qty || 1 }));
+        .map(p => ({ item_name: this.normalizeItemName(p.item) || p.item, qty: p.qty || 1 }));
       const attributed = this.distributeRevenueProportionally(items, r.rental_price || 0);
       for (const a of attributed) {
         // Only include items that exist in MASTER_INVENTORY
@@ -585,6 +653,7 @@ export class RevenueService {
    * All items revenue breakdown — full list, not just top 10.
    * Uses parsed_items from rental table (AI-parsed, covers 100% of revenue).
    * Includes monthly breakdown for each item.
+   * Also tracks unmatched items (not in MASTER_INVENTORY) with their revenue.
    */
   async getItemRevenueBreakdown(
     period: string = '6m',
@@ -597,6 +666,7 @@ export class RevenueService {
       avgPerRental: number;
       monthlyBreakdown: { month: string; revenue: number; count: number }[];
     }[];
+    unmatchedItems: { item: string; totalRevenue: number; totalCount: number }[];
     period: string;
     totalRevenue: number;
     otherRevenue: number;
@@ -619,17 +689,29 @@ export class RevenueService {
       totalCount: number;
       months: Record<string, { revenue: number; count: number }>;
     }> = {};
+    // Track items not in MASTER_INVENTORY separately (sold/removed/untracked equipment)
+    const byUnmatched: Record<string, { totalRevenue: number; totalCount: number }> = {};
     let otherRevenue = noParsedItems.reduce((sum, r) => sum + (r.rental_price || 0), 0);
 
     for (const r of filtered) {
       const month = r.start_date!.toISOString().substring(0, 7);
       const items = (r.parsed_items as { item: string; qty: number }[])
-        .map(p => ({ item_name: p.item, qty: p.qty || 1 }));
-      const attributed = this.distributeRevenueProportionally(items, r.rental_price || 0);
+        .map(p => ({ item_name: this.normalizeItemName(p.item) || p.item, originalName: p.item, qty: p.qty || 1 }));
+      // Build name→originalName lookup (distributeRevenueProportionally filters accessories,
+      // so attributed array indices DON'T align with items array indices)
+      const nameToOriginal = new Map(items.map(i => [i.item_name, i.originalName]));
+      const attributed = this.distributeRevenueProportionally(
+        items.map(i => ({ item_name: i.item_name, qty: i.qty })),
+        r.rental_price || 0,
+      );
       for (const a of attributed) {
         // Only include items that exist in MASTER_INVENTORY
         if (!MASTER_INVENTORY[a.item_name]) {
-          otherRevenue += a.attributedRevenue;
+          // Track unmatched item by its original parsed name
+          const origName = nameToOriginal.get(a.item_name) || a.item_name;
+          if (!byUnmatched[origName]) byUnmatched[origName] = { totalRevenue: 0, totalCount: 0 };
+          byUnmatched[origName].totalRevenue += a.attributedRevenue;
+          byUnmatched[origName].totalCount += a.qty;
           continue;
         }
         if (!byItem[a.item_name]) byItem[a.item_name] = { totalRevenue: 0, totalCount: 0, months: {} };
@@ -641,10 +723,11 @@ export class RevenueService {
       }
     }
 
-    // Ensure items + otherRevenue = total period revenue (no revenue lost)
+    // Ensure items + unmatched + otherRevenue = total period revenue (no revenue lost)
     const totalPeriodRevenue = periodFiltered.reduce((sum, r) => sum + (r.rental_price || 0), 0);
     const attributedTotal = Object.values(byItem).reduce((sum, i) => sum + i.totalRevenue, 0);
-    otherRevenue = totalPeriodRevenue - attributedTotal;
+    const unmatchedTotal = Object.values(byUnmatched).reduce((sum, i) => sum + i.totalRevenue, 0);
+    otherRevenue = totalPeriodRevenue - attributedTotal - unmatchedTotal;
 
     const items = Object.entries(byItem)
       .map(([item, data]) => ({
@@ -662,11 +745,21 @@ export class RevenueService {
       }))
       .sort((a, b) => b.totalRevenue - a.totalRevenue);
 
+    const unmatchedItems = Object.entries(byUnmatched)
+      .map(([item, data]) => ({
+        item,
+        totalRevenue: Math.round(data.totalRevenue * 100) / 100,
+        totalCount: data.totalCount,
+      }))
+      .filter(i => i.totalRevenue >= 10) // only show items worth £10+
+      .sort((a, b) => b.totalRevenue - a.totalRevenue);
+
     return {
       items,
+      unmatchedItems,
       period,
       totalRevenue: Math.round(totalPeriodRevenue * 100) / 100,
-      otherRevenue: Math.round(otherRevenue * 100) / 100,
+      otherRevenue: Math.round(Math.max(otherRevenue, 0) * 100) / 100,
     };
   }
 

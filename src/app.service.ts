@@ -294,11 +294,26 @@ export class AppService {
 
     const where: any = {
       status: 'confirmed',
-      // Booking overlaps with the requested range (use return_date when available)
-      start_date: { lte: end },
+      // Booking overlaps with requested range — use actual pickup/return dates when available
+      // A rental is visible if its effective range [pickup_date..return_date] overlaps [start..end]
+      // Effective start = min(pickup_date, start_date), Effective end = max(return_date, end_date)
       OR: [
-        { return_date: { gte: start } },
-        { return_date: null, end_date: { gte: start } },
+        // Case 1: Contract dates overlap the range (original logic)
+        {
+          start_date: { lte: end },
+          OR: [
+            { return_date: { gte: start } },
+            { return_date: null, end_date: { gte: start } },
+          ],
+        },
+        // Case 2: Pickup date is within range (pickup before contract start, e.g., evening before)
+        {
+          pickup_date: { gte: start, lte: end },
+        },
+        // Case 3: Return date is within range (return after contract end)
+        {
+          return_date: { gte: start, lte: end },
+        },
       ],
     };
     if (account) where.account = account;
@@ -375,10 +390,13 @@ export class AppService {
             existing.notes.ownerNotes.push(...notesObj.ownerNotes);
           }
         }
-        // Merge parsed items
-        if (parsedItems.length > 0 && (!existing.notes || !existing.notes.allItems?.length)) {
+        // Merge parsed items from all listings in this rental group
+        if (parsedItems.length > 0) {
           if (!existing.notes) existing.notes = {};
-          existing.notes.allItems = parsedItems;
+          if (!existing.notes.allItems) existing.notes.allItems = [];
+          for (const pi of parsedItems) {
+            if (!existing.notes.allItems.includes(pi)) existing.notes.allItems.push(pi);
+          }
         }
       } else {
         // Populate allItems from parsed_items if notes don't have them
@@ -406,17 +424,24 @@ export class AppService {
     }
 
     return Array.from(rentalMap.values()).map(r => {
-      // Classify accessories from allItems so frontend can render them differently
-      if (r.notes?.allItems?.length) {
-        const mainItems: string[] = [];
-        const accessories: string[] = [];
-        for (const item of r.notes.allItems) {
-          if (isAccessoryItem(item)) accessories.push(item);
-          else mainItems.push(item);
-        }
-        r.notes.allItems = mainItems;
-        r.notes.accessories = accessories;
+      // Ensure allItems is the union of notes.allItems + r.items (booking-level)
+      // so no items are lost even if parsed_items is incomplete for some listings
+      if (!r.notes) r.notes = {};
+      const mergedItems: string[] = [...(r.notes.allItems || [])];
+      for (const item of r.items) {
+        if (!mergedItems.includes(item)) mergedItems.push(item);
       }
+      r.notes.allItems = mergedItems;
+
+      // Classify accessories so frontend can render them differently
+      const mainItems: string[] = [];
+      const accessories: string[] = [];
+      for (const item of r.notes.allItems) {
+        if (isAccessoryItem(item)) accessories.push(item);
+        else mainItems.push(item);
+      }
+      r.notes.allItems = mainItems;
+      r.notes.accessories = accessories;
       return { ...r, earnings: Math.round(r.earnings * 100) / 100 };
     });
   }

@@ -221,14 +221,23 @@ export class RemindersService {
       const tomorrowEnd = new Date(tomorrow);
       tomorrowEnd.setHours(23, 59, 59, 999);
 
-      // Find confirmed bookings starting tomorrow with missing times
+      // Find confirmed bookings starting tomorrow OR currently ongoing with missing times
       const bookingsNoTimes = await this.prisma.booking.findMany({
         where: {
           status: 'confirmed',
-          start_date: { gte: tomorrow, lte: tomorrowEnd },
           OR: [
-            { pickup_time: null },
-            { return_time: null },
+            // Starting tomorrow (original scope)
+            { start_date: { gte: tomorrow, lte: tomorrowEnd } },
+            // Currently ongoing (expanded: start <= now AND end >= now)
+            { start_date: { lte: now }, end_date: { gte: now } },
+          ],
+          AND: [
+            {
+              OR: [
+                { pickup_time: null },
+                { return_time: null },
+              ],
+            },
           ],
         },
         include: { rental: true },
@@ -247,11 +256,14 @@ export class RemindersService {
       });
       const eligibleRentalIds = new Set(followUpStates.map(s => s.rental_id));
 
-      // Get ALL bookings for tomorrow (with times) for trip optimization
+      // Get ALL bookings for tomorrow + ongoing (with times) for trip optimization
       const allTomorrowBookings = await this.prisma.booking.findMany({
         where: {
           status: 'confirmed',
-          start_date: { gte: tomorrow, lte: tomorrowEnd },
+          OR: [
+            { start_date: { gte: tomorrow, lte: tomorrowEnd } },
+            { start_date: { lte: now }, end_date: { gte: now } },
+          ],
         },
       });
 

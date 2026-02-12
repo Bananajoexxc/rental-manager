@@ -597,6 +597,18 @@ export class AutonomousService {
     const returnMatch = content.match(returnPattern);
     if (returnMatch) result.returnTime = parseTime(returnMatch) || undefined;
 
+    // Reverse patterns: time-first, e.g. "11am pickup", "7pm return", "10:30am collection"
+    if (!result.pickupTime) {
+      const pickupReversePattern = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:pickup|pick\s*up|collect|collection)/i;
+      const pickupRevMatch = content.match(pickupReversePattern);
+      if (pickupRevMatch) result.pickupTime = parseTime(pickupRevMatch) || undefined;
+    }
+    if (!result.returnTime) {
+      const returnReversePattern = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:return|drop\s*off|dropoff|bring\s*back)/i;
+      const returnRevMatch = content.match(returnReversePattern);
+      if (returnRevMatch) result.returnTime = parseTime(returnRevMatch) || undefined;
+    }
+
     // Fallback: "I'll be there at 10am" / "see you at 7pm" — treat as pickup if no pickup yet
     if (!result.pickupTime && !result.returnTime) {
       const genericTimePattern = /(?:i'?ll\s*(?:be\s*)?(?:there|over|around)|see\s*you|coming|arrive|come\s*(?:over|by|around)?)\s*(?:at\s*|by\s*|around\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
@@ -3327,7 +3339,7 @@ export class AutonomousService {
 
     // 4. Update follow_up_state
     const currentBooking = await this.prisma.booking.findFirst({
-      where: { rental_id: rental.id, status: 'confirmed' },
+      where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
       select: { pickup_time: true, return_time: true },
     });
     const hasBothTimes = !!(currentBooking?.pickup_time && currentBooking?.return_time);

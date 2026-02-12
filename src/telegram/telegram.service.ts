@@ -25,6 +25,7 @@ import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
 import { AutolearnService } from '../autolearn/autolearn.service';
 import { CorrectionDetectorService } from '../autolearn/correction-detector.service';
 import { HyggloAccount } from '../hygglo/hygglo.service';
+import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
 
 // --- Consolidated rental notification types ---
 export type RentalSectionType =
@@ -170,6 +171,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private recommendationService: RecommendationService,
     @Inject(forwardRef(() => AutolearnService)) private autolearnService: AutolearnService,
     @Inject(forwardRef(() => CorrectionDetectorService)) private correctionDetector: CorrectionDetectorService,
+    private lostRevenueService: LostRevenueService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -1297,6 +1299,139 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * Detect business/strategy intent — when Daniel asks about revenue, marketing, buying, demand, etc.
+   * Returns true if the message warrants injecting comprehensive business intelligence data.
+   */
+  private hasBusinessIntent(text: string): boolean {
+    const businessPatterns = [
+      // Buying/acquisition strategy
+      /\b(buy|purchase|acquire|invest|add to inventory|new gear|new equipment|should i get|worth buying|worth getting)\b/i,
+      // Selling/dropping items
+      /\b(sell|drop|get rid of|remove from inventory|not worth keeping|underperforming)\b/i,
+      // Revenue/profit analysis
+      /\b(revenue|profit|earnings|income|how much .*(made|earned|brought in)|top earner|best seller|worst performer)\b/i,
+      // Demand/market signals
+      /\b(demand|trending|popular|what.*people.*want|what.*renters.*ask|most requested|unmatched|gap in)\b/i,
+      // Marketing strategy
+      /\b(marketing|advertis|promot|listing strategy|SEO|visibility|attract more|grow|expansion)\b/i,
+      // ROI and utilization
+      /\b(ROI|return on investment|utilization|utilisation|idle|sitting unused|not renting|underused)\b/i,
+      // Strategy/optimization
+      /\b(strategy|optimiz|optimis|maximize|maximise|improve revenue|boost|grow the business)\b/i,
+      // Competition and market position
+      /\b(competitor|competition|market position|pricing strategy|undercut|cheaper than)\b/i,
+      // Item-level performance queries
+      /\b(how.*doing|performing|performance of|stats for|numbers on|data on|breakdown)\b/i,
+      // Lost revenue / missed opportunities
+      /\b(lost revenue|missed.*booking|turned away|couldn't fulfill|stock.*out|overbooked|denied)\b/i,
+      // Bundle/pricing optimization
+      /\b(bundle|package|pricing|reprice|price change|adjust price|too cheap|too expensive)\b/i,
+    ];
+    return businessPatterns.some(p => p.test(text));
+  }
+
+  /**
+   * Build comprehensive business intelligence context for owner strategy conversations.
+   * Pulls per-item revenue with monthly breakdowns, lost revenue, unmatched demand,
+   * investment scorecard, and monthly trends.
+   */
+  private async buildBusinessIntelligenceContext(): Promise<string> {
+    const parts: string[] = [];
+
+    try {
+      // Parallel fetch of all business data
+      const [
+        itemBreakdown,
+        monthlyTotals,
+        weekRevenue,
+        monthRevenue,
+        lostRevenue,
+        unmatchedDemand,
+        investmentScorecard,
+      ] = await Promise.all([
+        this.revenueService.getItemRevenueBreakdown('all').catch(() => null),
+        this.revenueService.getMonthlyTotals(12).catch(() => null),
+        this.revenueService.getRevenueForPeriod('week').catch(() => null),
+        this.revenueService.getRevenueForPeriod('month').catch(() => null),
+        this.lostRevenueService.getLostRevenueSummary('6m').catch(() => null),
+        this.lostRevenueService.getUnmatchedDemand('6m').catch(() => null),
+        this.lostRevenueService.getRevenuePotential('6m').catch(() => null),
+      ]);
+
+      // === REVENUE OVERVIEW ===
+      if (weekRevenue || monthRevenue) {
+        parts.push('=== REVENUE OVERVIEW ===');
+        if (weekRevenue) parts.push(`This week: £${weekRevenue.totalRevenue} from ${weekRevenue.bookings} bookings`);
+        if (monthRevenue) parts.push(`This month: £${monthRevenue.totalRevenue} from ${monthRevenue.bookings} bookings`);
+      }
+
+      // === MONTHLY REVENUE TREND (12 months) ===
+      if (monthlyTotals && monthlyTotals.length > 0) {
+        parts.push('\n=== MONTHLY REVENUE TREND ===');
+        for (const m of monthlyTotals) {
+          parts.push(`${m.month}: £${m.revenue} (${m.count} bookings)`);
+        }
+      }
+
+      // === PER-ITEM REVENUE WITH MONTHLY BREAKDOWN ===
+      if (itemBreakdown && itemBreakdown.items.length > 0) {
+        parts.push(`\n=== ITEM REVENUE (ALL TIME, total £${itemBreakdown.totalRevenue}) ===`);
+        for (const item of itemBreakdown.items) {
+          const monthlyStr = item.monthlyBreakdown
+            .map(mb => `${mb.month}:£${mb.revenue}`)
+            .join(', ');
+          parts.push(`${item.item}: £${item.totalRevenue} total, ${item.totalCount} rentals, £${item.avgPerRental}/rental avg [${monthlyStr}]`);
+        }
+        if (itemBreakdown.otherRevenue > 0) {
+          parts.push(`Unattributed/bundle-overflow: £${itemBreakdown.otherRevenue}`);
+        }
+        // Items earning revenue but not in current MASTER_INVENTORY (sold/removed/untracked)
+        if (itemBreakdown.unmatchedItems && itemBreakdown.unmatchedItems.length > 0) {
+          parts.push(`\n=== HISTORICAL ITEMS (no longer in inventory but earned revenue) ===`);
+          for (const ui of itemBreakdown.unmatchedItems) {
+            parts.push(`  ${ui.item}: £${ui.totalRevenue} total, ${ui.totalCount} rentals`);
+          }
+        }
+      }
+
+      // === LOST REVENUE (stock blocked) ===
+      if (lostRevenue && lostRevenue.deniedRequestCount > 0) {
+        parts.push(`\n=== LOST REVENUE (6mo, stock unavailable) === £${lostRevenue.totalLostRevenue} from ${lostRevenue.deniedRequestCount} denied requests`);
+        if (lostRevenue.topDeniedItems.length > 0) {
+          parts.push('Top blocked items:');
+          for (const item of lostRevenue.topDeniedItems) {
+            parts.push(`  ${item.item}: ${item.count} denials, £${item.revenue} lost`);
+          }
+        }
+      }
+
+      // === UNMATCHED DEMAND (items we don't stock) ===
+      if (unmatchedDemand && unmatchedDemand.length > 0) {
+        parts.push('\n=== UNMATCHED DEMAND (items not in inventory, requested 2+ times in 6mo) ===');
+        for (const item of unmatchedDemand) {
+          parts.push(`  "${item.item}": ${item.requestCount} requests, avg ${item.avgRentalDays} days/rental`);
+        }
+      }
+
+      // === INVESTMENT SCORECARD ===
+      if (investmentScorecard && investmentScorecard.length > 0) {
+        parts.push('\n=== INVESTMENT SCORECARD (6mo, sorted by confidence) ===');
+        parts.push('Format: item | stock | daily rate | earned | lost | util% | rentals/mo | confidence');
+        for (const item of investmentScorecard.slice(0, 25)) {
+          const lostStr = item.lostRevenue > 0 ? ` | £${item.lostRevenue} lost` : '';
+          parts.push(`  ${item.item} | ${item.currentStock}x | £${item.dailyPrice || '?'}/day | £${item.actualRevenue} earned${lostStr} | ${item.utilization}% util | ${item.rentalsPerMonth}/mo | ${item.confidence}`);
+        }
+      }
+
+    } catch (err) {
+      this.logger.warn(`Business intelligence context build failed: ${err.message}`);
+      parts.push('[Business data temporarily unavailable]');
+    }
+
+    return parts.join('\n');
+  }
+
   private async handleConversation(msg: any) {
     const chatId = String(msg.chat.id);
     const userText = msg.text;
@@ -1313,6 +1448,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Detect pricing intent for additional memory fetch
       const pricingTerms = /\b(price|pricing|cost|how much|rate|rates|quote|charge|fee|fees|per day|daily|weekly|budget|listing)\b/i;
       const hasPricingIntent = pricingTerms.test(userText);
+
+      // Detect business/strategy intent for comprehensive data injection
+      const isBusinessQuery = this.hasBusinessIntent(userText);
 
       const [rules, history, generalMemories, blacklist, schedule, revenueSummary] = await Promise.all([
         this.rulesService.getFormattedRules(),
@@ -1342,8 +1480,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         : 'No recent rentals.';
 
       const additionalParts: string[] = [
-        'You are chatting with Daniel, the owner of DB Cinema Rentals and Leo Adams rental accounts on Hygglo/Fat Llama. ',
-        'Help him manage the business, answer questions, and provide insights. ',
+        'IMPORTANT: You are chatting with DANIEL, THE OWNER — not a renter. ',
+        'Daniel owns DB Cinema Rentals and Leo Adams rental accounts on Hygglo/Fat Llama. ',
+        'You are his business assistant. You have FULL authority to discuss all business data openly with him — ',
+        'revenue numbers, profit margins, item performance, demand trends, competitor data, strategy, everything. ',
+        'Do NOT "escalate to Daniel" — you ARE talking to Daniel. Do NOT withhold any data. ',
+        'When he asks about revenue, items, demand, or strategy, give SPECIFIC numbers from the data provided to you. ',
+        'Help him manage the business, answer questions, and provide actionable insights backed by the data you have. ',
         'IMPORTANT: When Daniel tells you new information, rules, preferences, facts about items, renters, schedules, or anything worth remembering, ',
         'you MUST store it using <memory> tags. Examples: if he says an item is in repair, store it. If he tells you about a vacation day, store it. ',
         'If he gives you a new rule or corrects you, store the correction. If he mentions a renter preference or pattern, store it. ',
@@ -1370,13 +1513,32 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Availability check failed: ${availErr.message}`);
       }
 
-      const response = await this.aiService.processRoutine(userText, {
-        rules,
-        memories,
-        conversationHistory: history,
-        rentalContext,
-        additionalContext: additionalParts.join(''),
-      });
+      // Business intelligence: inject comprehensive revenue/demand/investment data for strategy conversations
+      if (isBusinessQuery) {
+        this.logger.log(`Business intent detected — loading comprehensive business intelligence context`);
+        const bizContext = await this.buildBusinessIntelligenceContext();
+        if (bizContext) {
+          additionalParts.push(`\n\n--- BUSINESS INTELLIGENCE DATA ---\nUse this data to give Daniel specific, data-backed answers about revenue, demand, investment, and strategy.\n${bizContext}`);
+        }
+      }
+
+      // Business strategy conversations use Sonnet with generous token budget
+      const response = isBusinessQuery
+        ? await this.aiService.processComplex(userText, {
+            rules,
+            memories,
+            conversationHistory: history,
+            rentalContext,
+            additionalContext: additionalParts.join(''),
+            maxTokens: 1500,
+          })
+        : await this.aiService.processRoutine(userText, {
+            rules,
+            memories,
+            conversationHistory: history,
+            rentalContext,
+            additionalContext: additionalParts.join(''),
+          });
 
       await this.memoryService.storeConversation(chatId, 'assistant', response.content);
 

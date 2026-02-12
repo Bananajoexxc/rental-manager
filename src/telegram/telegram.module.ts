@@ -18,6 +18,7 @@ import { QualityScorerModule } from '../evaluation/quality-scorer.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 import { RecommendationModule } from '../recommendations/recommendation.module';
 import { AutolearnModule } from '../autolearn/autolearn.module';
+import { LostRevenueModule } from '../lost-revenue/lost-revenue.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { AutolearnModule } from '../autolearn/autolearn.module';
     ConversationStageModule,
     RecommendationModule,
     forwardRef(() => AutolearnModule),
+    LostRevenueModule,
   ],
   providers: [TelegramService],
   exports: [TelegramService],

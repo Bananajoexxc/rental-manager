@@ -692,3 +692,20 @@ model item_match_cache {
 
   @@index([inventory_hash])
 }
+
+// === eBay Price Cache (Sell Recommender) ===
+
+model ebay_price_cache {
+  id            String   @id @default(uuid())
+  item_name     String   @unique
+  search_query  String
+  sold_prices   Json     // number[] of recent sold prices (GBP)
+  median_price  Float?
+  avg_price     Float?
+  min_price     Float?
+  max_price     Float?
+  sample_count  Int      @default(0)
+  scraped_at    DateTime @default(now())
+
+  @@index([scraped_at])
+}

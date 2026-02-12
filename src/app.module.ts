@@ -39,6 +39,7 @@ import { LostRevenueModule } from './lost-revenue/lost-revenue.module';
 import { CompetitorIntelModule } from './competitor-intel/competitor-intel.module';
 import { CouponModule } from './coupon/coupon.module';
 import { ItemMatcherAiModule } from './item-matcher-ai/item-matcher-ai.module';
+import { SellRecommenderModule } from './sell-recommender/sell-recommender.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { ItemMatcherAiModule } from './item-matcher-ai/item-matcher-ai.module';
     CompetitorIntelModule,
     CouponModule,
     ItemMatcherAiModule,
+    SellRecommenderModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -114,10 +114,55 @@ function normalizeItemTitle(raw: string): string {
 export class LostRevenueService {
   private readonly logger = new Logger(LostRevenueService.name);
 
+  private parsedItemCache = new Map<string, string | null>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly hyggloService: HyggloService,
   ) {}
+
+  /** Normalize a parsed_item name to its MASTER_INVENTORY key using token overlap. */
+  private normalizeParsedItemName(parsedName: string): string | null {
+    if (MASTER_INVENTORY[parsedName] !== undefined) return parsedName;
+    if (this.parsedItemCache.has(parsedName)) return this.parsedItemCache.get(parsedName)!;
+
+    const inputLower = parsedName.toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const inputTokens = inputLower.split(' ');
+    const inventoryNames = getInventoryItemNames();
+    const fStopPattern = /^f\d/;
+    const inputFStops = inputTokens.filter(t => fStopPattern.test(t));
+
+    let bestMatch: string | null = null;
+    let bestScore = 0;
+
+    for (const invName of inventoryNames) {
+      const invLower = invName.toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
+      const invTokens = invLower.split(' ');
+
+      if (inputFStops.length > 0) {
+        const invFStops = invTokens.filter(t => fStopPattern.test(t));
+        if (invFStops.length > 0 && !inputFStops.some(f => invFStops.includes(f))) continue;
+      }
+
+      let matched = 0;
+      for (const t of inputTokens) {
+        if (t.length < 2) continue;
+        if (invTokens.some(it => it === t || (t.length >= 4 && it.includes(t)) || (it.length >= 4 && t.includes(it)))) {
+          matched++;
+        }
+      }
+
+      const significantTokens = inputTokens.filter(t => t.length >= 2).length;
+      const coverage = significantTokens > 0 ? matched / significantTokens : 0;
+      if (coverage >= 0.8 && matched > bestScore) {
+        bestScore = matched;
+        bestMatch = invName;
+      }
+    }
+
+    this.parsedItemCache.set(parsedName, bestMatch);
+    return bestMatch;
+  }
 
   /**
    * Sync obsolete bookings from Hygglo and analyze for stock-blocked lost revenue.
@@ -434,9 +479,14 @@ export class LostRevenueService {
     const actualRevenue: Record<string, { revenue: number; rentalCount: number; totalDays: number }> = {};
     for (const r of dedupedRentals) {
       const parsedItems = (r.parsed_items as { item: string; qty: number }[] | null) || [];
+      // Normalize parsed_item names to MASTER_INVENTORY keys via fuzzy match
+      // (e.g. "Anamorphic Great Joy 50mm" → "Anamorphic Great Joy lens 50mm")
       const mainItems = parsedItems
-        .filter(p => MASTER_INVENTORY[p.item] && !isAccessoryItem(p.item))
-        .map(p => ({ item_name: p.item, qty: p.qty || 1 }));
+        .map(p => {
+          const resolved = this.normalizeParsedItemName(p.item);
+          return resolved ? { item_name: resolved, qty: p.qty || 1 } : null;
+        })
+        .filter((p): p is { item_name: string; qty: number } => p !== null && !isAccessoryItem(p.item_name));
 
       if (mainItems.length === 0) continue;
 
@@ -508,6 +558,7 @@ export class LostRevenueService {
       deniedRequests: number;
       rentalCount: number;
       utilization: number;
+      rentedDaysPerMonth: number;
       rentalsPerMonth: number;
       revenuePerUnit: number;
       confidence: 'high' | 'medium' | 'low';
@@ -524,6 +575,9 @@ export class LostRevenueService {
       // Utilization: booked days / available days in period (per-unit)
       const availableDays = periodMonths * 30 * Math.max(stock, 1);
       const utilization = availableDays > 0 ? Math.min(Math.round((actual.totalDays / availableDays) * 100), 100) : 0;
+
+      // Days rented per month (per unit)
+      const rentedDaysPerMonth = Math.round(actual.totalDays / Math.max(periodMonths, 1) / Math.max(stock, 1) * 10) / 10;
 
       // Per-month metrics
       const rentalsPerMonth = actual.rentalCount / Math.max(periodMonths, 1);
@@ -550,6 +604,7 @@ export class LostRevenueService {
         deniedRequests: lost.deniedCount,
         rentalCount: actual.rentalCount,
         utilization,
+        rentedDaysPerMonth,
         rentalsPerMonth: Math.round(rentalsPerMonth * 10) / 10,
         revenuePerUnit: Math.round(revenuePerUnit * 100) / 100,
         confidence,
