@@ -10,10 +10,13 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background: #0f1117;
+      background: #0a0c10;
       color: #e4e6eb;
       line-height: 1.5;
       min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(110,168,254,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(167,139,250,0.05) 0%, transparent 50%);
     }
 
     a { color: #6ea8fe; text-decoration: none; }
@@ -25,8 +28,10 @@
       align-items: center;
       justify-content: space-between;
       padding: 14px 24px;
-      background: #1a1d27;
-      border-bottom: 1px solid #2a2d3a;
+      background: rgba(18,21,30,0.7);
+      backdrop-filter: blur(20px) saturate(1.4);
+      -webkit-backdrop-filter: blur(20px) saturate(1.4);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
       flex-wrap: wrap;
       gap: 12px;
       position: sticky;
@@ -43,16 +48,18 @@
     .header-right { display: flex; align-items: center; gap: 12px; font-size: 13px; color: #8b8fa3; }
 
     .account-filter {
-      background: #2a2d3a; border: 1px solid #3a3d4a; color: #e4e6eb;
-      padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer;
+      background: rgba(30,33,46,0.6); border: 1px solid rgba(255,255,255,0.1); color: #e4e6eb;
+      padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     }
-    .account-filter:focus { border-color: #6ea8fe; outline: none; }
+    .account-filter:focus { border-color: rgba(110,168,254,0.5); outline: none; box-shadow: 0 0 8px rgba(110,168,254,0.15); }
 
     .refresh-btn {
-      background: #2a2d3a; border: 1px solid #3a3d4a; color: #e4e6eb;
-      padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: background 0.2s;
+      background: rgba(30,33,46,0.6); border: 1px solid rgba(255,255,255,0.1); color: #e4e6eb;
+      padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: all 0.2s;
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     }
-    .refresh-btn:hover { background: #3a3d4a; }
+    .refresh-btn:hover { background: rgba(45,48,62,0.7); border-color: rgba(255,255,255,0.15); }
 
     /* Main */
     .main { max-width: 1440px; margin: 0 auto; padding: 20px 24px; }
@@ -65,7 +72,10 @@
       margin-bottom: 20px;
     }
     .stat-card {
-      background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px; padding: 16px 18px;
+      background: rgba(18,21,30,0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 16px 18px;
+      backdrop-filter: blur(16px) saturate(1.3);
+      -webkit-backdrop-filter: blur(16px) saturate(1.3);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 4px 24px rgba(0,0,0,0.2);
     }
     .stat-card .label {
       font-size: 11px; color: #8b8fa3; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;
@@ -82,12 +92,12 @@
     /* Calendar - Carousel Style */
     .cal-carousel { display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:6px; padding:4px 2px 8px; scrollbar-width:none; }
     .cal-carousel::-webkit-scrollbar { display:none; }
-    .cal-day-card { scroll-snap-align:start; min-width:calc(14.28% - 6px); flex-shrink:0; background:#151820; border:1px solid #2a2d3a; border-radius:8px; padding:10px 6px; cursor:pointer; transition:all 0.2s; }
+    .cal-day-card { scroll-snap-align:start; min-width:calc(14.28% - 6px); flex-shrink:0; background:rgba(15,18,26,0.5); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:10px 6px; cursor:pointer; transition:all 0.2s; backdrop-filter:blur(12px) saturate(1.2); -webkit-backdrop-filter:blur(12px) saturate(1.2); box-shadow:inset 0 1px 0 rgba(255,255,255,0.03); }
     @media (max-width:600px) { .cal-day-card { min-width:calc(33.33% - 5.3px); } }
-    .cal-day-card:hover { border-color:#6ea8fe; }
-    .cal-day-card.today { border-color:#6ea8fe; background:#1e2a3a; }
-    .cal-day-card.selected { border-color:#6ea8fe; box-shadow:0 0 12px rgba(110,168,254,0.3); background:#1e2a3a; }
-    .cal-day-card.has-events { background:#1a2027; }
+    .cal-day-card:hover { border-color:rgba(110,168,254,0.4); box-shadow:inset 0 1px 0 rgba(255,255,255,0.05), 0 0 12px rgba(110,168,254,0.1); }
+    .cal-day-card.today { border-color:rgba(110,168,254,0.4); background:rgba(25,35,55,0.6); }
+    .cal-day-card.selected { border-color:rgba(110,168,254,0.5); box-shadow:0 0 16px rgba(110,168,254,0.25), inset 0 1px 0 rgba(255,255,255,0.06); background:rgba(25,35,55,0.6); }
+    .cal-day-card.has-events { background:rgba(20,26,35,0.55); }
     .cal-day-date { font-size:18px; font-weight:700; color:#8b8fa3; text-align:center; }
     .cal-day-card.today .cal-day-date { color:#6ea8fe; }
     .cal-day-card.selected .cal-day-date { color:#6ea8fe; }
@@ -100,15 +110,15 @@
     .cal-day-dots .dot-away { background:#ef4444; }
 
     /* Day detail - expanded view */
-    .cal-detail { margin-top:0; background:#1a1d28; border:1px solid #2a2d3a; border-radius:8px; padding:12px 16px; display:none; }
+    .cal-detail { margin-top:0; background:rgba(18,21,30,0.6); border:1px solid rgba(255,255,255,0.07); border-radius:10px; padding:12px 16px; display:none; backdrop-filter:blur(14px) saturate(1.2); -webkit-backdrop-filter:blur(14px) saturate(1.2); box-shadow:inset 0 1px 0 rgba(255,255,255,0.04), 0 4px 20px rgba(0,0,0,0.15); }
     .cal-detail.open { display:block; }
-    .cal-detail-header { font-size:15px; font-weight:600; color:#e4e6eb; margin-bottom:10px; border-bottom:1px solid #2a2d3a; padding-bottom:8px; }
+    .cal-detail-header { font-size:15px; font-weight:600; color:#e4e6eb; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:8px; }
 
-    .cal-rental-card { background:#151820; border:1px solid #2a2d3a; border-radius:8px; padding:10px 14px; margin-bottom:8px; display:flex; gap:12px; align-items:flex-start; }
+    .cal-rental-card { background:rgba(15,18,26,0.45); border:1px solid rgba(255,255,255,0.05); border-radius:10px; padding:10px 14px; margin-bottom:8px; display:flex; gap:12px; align-items:flex-start; box-shadow:inset 0 1px 0 rgba(255,255,255,0.03); }
     .cal-rental-card:last-child { margin-bottom:0; }
-    .cal-rental-thumb { flex-shrink:0; width:80px; height:80px; border-radius:6px; object-fit:cover; border:1px solid #2a2d3a; cursor:pointer; transition:transform 0.2s; margin-left:4px; }
+    .cal-rental-thumb { flex-shrink:0; width:80px; height:80px; border-radius:8px; object-fit:cover; border:1px solid rgba(255,255,255,0.06); cursor:pointer; transition:transform 0.2s; margin-left:4px; }
     .cal-rental-thumb:hover { transform:scale(3.5); z-index:100; position:relative; border-color:#6ea8fe; transform-origin:left center; }
-    .cal-rental-thumb-placeholder { flex-shrink:0; width:80px; height:80px; border-radius:6px; background:#1a1d28; border:1px solid #2a2d3a; display:flex; align-items:center; justify-content:center; font-size:22px; color:#3a3d4a; margin-left:4px; }
+    .cal-rental-thumb-placeholder { flex-shrink:0; width:80px; height:80px; border-radius:8px; background:rgba(18,21,30,0.4); border:1px solid rgba(255,255,255,0.06); display:flex; align-items:center; justify-content:center; font-size:22px; color:#3a3d4a; margin-left:4px; }
     .cal-rental-body { flex:1; min-width:0; }
     .cal-rental-top { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
     .cal-badge { font-size:9px; padding:2px 7px; border-radius:4px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; }
@@ -132,7 +142,7 @@
     .cal-item-chip.main { background:rgba(110,168,254,0.14); color:#e4e6eb; font-weight:500; }
     .cal-item-chip.accessory { background:rgba(139,143,163,0.08); color:#6b6f80; border-color:rgba(139,143,163,0.12); font-size:11px; }
     .cal-extra-photos { display:inline-flex; gap:4px; margin-left:4px; vertical-align:middle; }
-    .cal-extra-photos img { width:28px; height:28px; object-fit:cover; border-radius:4px; border:1px solid #2a2d3a; cursor:pointer; transition:transform 0.15s; }
+    .cal-extra-photos img { width:28px; height:28px; object-fit:cover; border-radius:4px; border:1px solid rgba(255,255,255,0.06); cursor:pointer; transition:transform 0.15s; }
     .cal-extra-photos img:hover { transform:scale(4); z-index:100; position:relative; border-color:#6ea8fe; }
     .cal-rental-times { display:inline-flex; gap:8px; font-size:10px; color:#8b8fa3; align-items:center; }
     .cal-rental-times .cal-time-label { color:#6b6f80; font-size:9px; text-transform:uppercase; letter-spacing:0.3px; }
@@ -152,7 +162,7 @@
     .cal-detail-notes .note-item { color:#c9cdd5; font-size:10.5px; padding:1px 0; }
     .cal-detail-notes .note-time { color:#8b8fa3; font-size:9px; margin-left:6px; }
 
-    .cal-day-summary { display:flex; gap:16px; padding:10px 0 4px; border-top:1px solid #2a2d3a; margin-top:8px; font-size:12px; color:#8b8fa3; flex-wrap:wrap; }
+    .cal-day-summary { display:flex; gap:16px; padding:10px 0 4px; border-top:1px solid rgba(255,255,255,0.06); margin-top:8px; font-size:12px; color:#8b8fa3; flex-wrap:wrap; }
     .cal-legend { display:flex; gap:12px; margin-top:6px; font-size:10px; color:#8b8fa3; flex-wrap:wrap; }
     .cal-legend span { display:flex; align-items:center; gap:4px; }
     .cal-legend .dot { width:8px; height:8px; border-radius:2px; display:inline-block; }
@@ -165,8 +175,11 @@
     .insights-tab:hover { color: #e4e6eb; }
     .insights-tab.active { color: #06b6d4; border-bottom-color: #06b6d4; font-weight: 600; }
     .insight-card {
-      border: 1px solid #2a2d3a; border-left: 3px solid #06b6d4;
-      border-radius: 8px; padding: 12px 16px; margin-bottom: 10px; background: #1e2130;
+      border: 1px solid rgba(255,255,255,0.07); border-left: 3px solid #06b6d4;
+      border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; background: rgba(22,25,38,0.55);
+      backdrop-filter: blur(12px) saturate(1.2);
+      -webkit-backdrop-filter: blur(12px) saturate(1.2);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
     }
     .insight-card[data-type="new_acquisition"] { border-left-color: #22c55e; }
     .insight-card[data-type="add_unit"] { border-left-color: #3b82f6; }
@@ -196,9 +209,10 @@
 
     .panel-edit-bar {
       display:none; align-items:center; justify-content:space-between;
-      padding:6px 12px; background:#2a2d3a; border-radius:8px 8px 0 0;
-      border:1px solid #3a3d4a; border-bottom:none; margin-bottom:-1px;
+      padding:6px 12px; background:rgba(30,33,46,0.6); border-radius:10px 10px 0 0;
+      border:1px solid rgba(255,255,255,0.08); border-bottom:none; margin-bottom:-1px;
       cursor:grab; user-select:none;
+      backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
     }
     body.edit-mode .panel-edit-bar { display:flex; }
     .panel-edit-bar:active { cursor:grabbing; }
@@ -221,7 +235,8 @@
     }
 
     /* Stat card expandable hover */
-    .stat-card { position:relative; transition: opacity 0.15s; cursor:pointer; }
+    .stat-card { position:relative; transition: opacity 0.15s, border-color 0.25s, box-shadow 0.25s; cursor:pointer; }
+    .stat-card:hover { border-color: rgba(255,255,255,0.12); box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.25), 0 0 0 1px rgba(110,168,254,0.05); }
     .stat-expand {
       max-height: 0; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease, margin-top 0.25s ease;
       opacity: 0; margin-top: 0;
@@ -230,7 +245,7 @@
       max-height: 320px; opacity: 1; margin-top: 10px; overflow-y: auto;
     }
     .stat-expand-inner {
-      border-top: 1px solid #2a2d3a; padding-top: 8px; font-size: 12px; color: #b0b3c0;
+      border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px; font-size: 12px; color: #b0b3c0;
     }
     #expandActive, #expandOngoing, #expandUpcoming {
       margin-left: -6px; margin-right: -6px; padding-left: 6px; padding-right: 6px;
@@ -240,13 +255,13 @@
     }
     .stat-rental-row:last-child { border-bottom: none; }
     .stat-rental-photo {
-      width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: #2a2d3a;
+      width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: rgba(30,33,46,0.5);
     }
     .stat-rental-info { flex: 1; min-width: 0; }
     .stat-rental-name { font-size: 11px; color: #e4e6eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .stat-rental-items { font-size: 10px; color: #6b6f82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .stat-rental-amount { font-size: 12px; font-weight: 600; color: #22c55e; flex-shrink: 0; }
-    .stat-mini-bar { height: 4px; border-radius: 2px; background: #2a2d3a; margin-top: 6px; overflow: hidden; }
+    .stat-mini-bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.06); margin-top: 6px; overflow: hidden; }
     .stat-mini-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
     .stat-sparkline { display: flex; align-items: flex-end; gap: 2px; height: 32px; margin-top: 6px; }
     .stat-sparkline-bar { flex: 1; background: #22c55e; border-radius: 2px 2px 0 0; min-width: 4px; transition: height 0.3s ease; opacity: 0.7; }
@@ -279,16 +294,17 @@
     /* Add-back drawer */
     .add-drawer {
       display:none; position:fixed; bottom:60px; left:50%; transform:translateX(-50%);
-      z-index:61; background:#1a1d27; border:1px solid #3a3d4a; border-radius:12px;
+      z-index:61; background:rgba(18,21,30,0.8); border:1px solid rgba(255,255,255,0.1); border-radius:14px;
       padding:16px; width:90%; max-width:600px; max-height:50vh; overflow-y:auto;
-      box-shadow:0 8px 32px rgba(0,0,0,0.6);
+      box-shadow:0 8px 40px rgba(0,0,0,0.5);
+      backdrop-filter:blur(20px) saturate(1.4); -webkit-backdrop-filter:blur(20px) saturate(1.4);
     }
     body.edit-mode .add-drawer.open { display:block; }
     .add-drawer h3 { font-size:14px; color:#e4e6eb; margin-bottom:12px; font-weight:600; }
     .add-drawer-empty { color:#8b8fa3; font-size:12px; }
     .add-drawer-item {
       display:flex; align-items:center; justify-content:space-between;
-      padding:8px 10px; background:#2a2d3a; border-radius:6px; margin-bottom:6px;
+      padding:8px 10px; background:rgba(30,33,46,0.5); border-radius:8px; margin-bottom:6px;
     }
     .add-drawer-item span { font-size:12px; color:#e4e6eb; }
     .add-drawer-item .add-btn {
@@ -321,7 +337,7 @@
     .settings-btn:hover { color:#e4e6eb; }
 
     .reset-layout-btn {
-      background:none; border:1px solid #3a3d4a; color:#8b8fa3; cursor:pointer;
+      background:none; border:1px solid rgba(255,255,255,0.1); color:#8b8fa3; cursor:pointer;
       padding:4px 12px; border-radius:4px; font-size:11px; margin-right:8px;
       display:none;
     }
@@ -330,11 +346,14 @@
 
     /* Sections */
     .section {
-      background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px;
+      background: rgba(18,21,30,0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
       margin-bottom: 20px; overflow: hidden;
+      backdrop-filter: blur(16px) saturate(1.3);
+      -webkit-backdrop-filter: blur(16px) saturate(1.3);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 4px 24px rgba(0,0,0,0.2);
     }
     .section-header {
-      padding: 14px 18px; border-bottom: 1px solid #2a2d3a; font-size: 14px; font-weight: 600;
+      padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; font-weight: 600;
       display: flex; align-items: center; justify-content: space-between;
     }
     .section-header .count { font-size: 11px; color: #8b8fa3; font-weight: 400; }
@@ -354,15 +373,15 @@
     /* Tables */
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     thead th {
-      text-align: left; padding: 8px 14px; background: #151820; color: #8b8fa3;
+      text-align: left; padding: 8px 14px; background: rgba(15,18,26,0.4); color: #8b8fa3;
       font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
-      white-space: nowrap; border-bottom: 1px solid #2a2d3a;
+      white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.06);
     }
     tbody td {
-      padding: 8px 14px; border-bottom: 1px solid #1e2130; color: #c9cdd8; vertical-align: top;
+      padding: 8px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #c9cdd8; vertical-align: top;
     }
     tbody tr:last-child td { border-bottom: none; }
-    tbody tr:hover { background: #1e2130; }
+    tbody tr:hover { background: rgba(255,255,255,0.03); }
 
     /* Badges */
     .badge {
@@ -380,11 +399,11 @@
     /* Activity feed */
     .activity-feed { max-height: 420px; overflow-y: auto; }
     .activity-item {
-      padding: 10px 16px; border-bottom: 1px solid #1e2130; font-size: 12px;
+      padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px;
       display: flex; gap: 10px; align-items: flex-start;
     }
     .activity-item:last-child { border-bottom: none; }
-    .activity-item:hover { background: #1e2130; }
+    .activity-item:hover { background: rgba(255,255,255,0.03); }
     .activity-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
     .activity-content { flex: 1; min-width: 0; }
     .activity-title { color: #e4e6eb; font-weight: 500; }
@@ -398,7 +417,7 @@
       display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px;
     }
     .funnel-label { width: 130px; color: #8b8fa3; text-transform: capitalize; flex-shrink: 0; }
-    .funnel-track { flex: 1; height: 22px; background: #151820; border-radius: 4px; overflow: hidden; }
+    .funnel-track { flex: 1; height: 22px; background: rgba(15,18,26,0.4); border-radius: 6px; overflow: hidden; }
     .funnel-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; min-width: 2px; }
     .funnel-count { width: 30px; text-align: right; color: #e4e6eb; font-weight: 600; }
 
@@ -430,7 +449,7 @@
     .error-state { color: #ef4444; }
     .spinner {
       display: inline-block; width: 18px; height: 18px;
-      border: 2px solid #2a2d3a; border-top-color: #6ea8fe; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.08); border-top-color: #6ea8fe; border-radius: 50%;
       animation: spin 0.8s linear infinite; margin-bottom: 6px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -439,11 +458,13 @@
 
     /* Chat panel */
     .chat-panel {
-      background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px;
+      background: rgba(18,21,30,0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
       margin-bottom: 20px; display: flex; flex-direction: column; max-height: 460px;
+      backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 4px 24px rgba(0,0,0,0.2);
     }
     .chat-header {
-      padding: 14px 18px; border-bottom: 1px solid #2a2d3a; font-size: 14px; font-weight: 600;
+      padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; font-weight: 600;
     }
     .chat-messages {
       flex: 1; overflow-y: auto; padding: 14px 18px; min-height: 180px; max-height: 320px;
@@ -454,12 +475,12 @@
       font-size: 12px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap;
     }
     .chat-msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 2px; }
-    .chat-msg.assistant { align-self: flex-start; background: #2a2d3a; color: #e4e6eb; border-bottom-left-radius: 2px; }
+    .chat-msg.assistant { align-self: flex-start; background: rgba(30,33,46,0.7); color: #e4e6eb; border-bottom-left-radius: 2px; }
     .chat-msg.error { align-self: center; background: #ef444433; color: #ef4444; font-size: 11px; }
-    .chat-msg.thinking { align-self: flex-start; background: #2a2d3a; color: #8b8fa3; font-style: italic; }
-    .chat-input-row { display: flex; border-top: 1px solid #2a2d3a; padding: 10px 14px; gap: 8px; }
+    .chat-msg.thinking { align-self: flex-start; background: rgba(30,33,46,0.7); color: #8b8fa3; font-style: italic; }
+    .chat-input-row { display: flex; border-top: 1px solid rgba(255,255,255,0.06); padding: 10px 14px; gap: 8px; }
     .chat-input {
-      flex: 1; background: #151820; border: 1px solid #2a2d3a; color: #e4e6eb;
+      flex: 1; background: rgba(15,18,26,0.5); border: 1px solid rgba(255,255,255,0.08); color: #e4e6eb;
       padding: 8px 12px; border-radius: 8px; font-size: 12px; font-family: inherit; outline: none; resize: none;
     }
     .chat-input:focus { border-color: #2563eb; }
@@ -487,19 +508,21 @@
     }
     .return-card {
       position: relative;
-      background: #151820;
-      border: 1px solid #2a2d3a;
-      border-radius: 10px;
+      background: rgba(15,18,26,0.5);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px;
       padding: 14px;
       cursor: pointer;
       transition: all 0.2s;
       display: flex;
       gap: 12px;
       align-items: flex-start;
+      backdrop-filter: blur(12px) saturate(1.2); -webkit-backdrop-filter: blur(12px) saturate(1.2);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
     .return-card:hover {
-      border-color: #6ea8fe;
-      box-shadow: 0 0 16px rgba(110,168,254,0.15);
+      border-color: rgba(110,168,254,0.4);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 16px rgba(110,168,254,0.15);
       transform: translateY(-1px);
     }
     .return-card.overdue {
@@ -529,15 +552,15 @@
       height: 64px;
       border-radius: 8px;
       object-fit: cover;
-      border: 1px solid #2a2d3a;
+      border: 1px solid rgba(255,255,255,0.06);
     }
     .return-card-placeholder {
       flex-shrink: 0;
       width: 64px;
       height: 64px;
       border-radius: 8px;
-      background: #1a1d28;
-      border: 1px solid #2a2d3a;
+      background: rgba(18,21,30,0.4);
+      border: 1px solid rgba(255,255,255,0.06);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -595,14 +618,15 @@
     }
     .return-modal-overlay.open { display: flex; }
     .return-modal {
-      background: #1a1d27;
-      border: 1px solid #2a2d3a;
-      border-radius: 14px;
+      background: rgba(18,21,30,0.85);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
       width: 90%;
       max-width: 440px;
       padding: 28px;
       position: relative;
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
     }
     .return-modal-close {
       position: absolute;
@@ -651,25 +675,25 @@
     }
     .return-btn-good:hover { background: #16a34a; }
     .return-btn-issues {
-      background: #2a2d3a;
+      background: rgba(30,33,46,0.6);
       color: #e4e6eb;
-      border: 1px solid #3a3d4a;
+      border: 1px solid rgba(255,255,255,0.1);
     }
-    .return-btn-issues:hover { background: #3a3d4a; }
+    .return-btn-issues:hover { background: rgba(45,48,62,0.7); }
     .return-btn-danger {
       background: #ef4444;
       color: #fff;
     }
     .return-btn-danger:hover { background: #dc2626; }
     .return-btn-secondary {
-      background: #2a2d3a;
+      background: rgba(30,33,46,0.6);
       color: #e4e6eb;
-      border: 1px solid #3a3d4a;
+      border: 1px solid rgba(255,255,255,0.1);
     }
-    .return-btn-secondary:hover { background: #3a3d4a; }
+    .return-btn-secondary:hover { background: rgba(45,48,62,0.7); }
     .return-btn-back {
       background: none;
-      border: 1px solid #3a3d4a;
+      border: 1px solid rgba(255,255,255,0.1);
       color: #8b8fa3;
       padding: 8px 14px;
       font-size: 12px;
@@ -684,7 +708,7 @@
     .return-issue-chip {
       padding: 6px 12px;
       border-radius: 16px;
-      border: 1px solid #3a3d4a;
+      border: 1px solid rgba(255,255,255,0.1);
       background: #1a1d28;
       color: #8b8fa3;
       font-size: 12px;
@@ -704,8 +728,8 @@
     .return-textarea {
       width: 100%;
       min-height: 80px;
-      background: #151820;
-      border: 1px solid #2a2d3a;
+      background: rgba(15,18,26,0.5);
+      border: 1px solid rgba(255,255,255,0.08);
       border-radius: 8px;
       color: #e4e6eb;
       padding: 10px 12px;
@@ -876,7 +900,7 @@
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
         <div class="label" style="display:flex;align-items:center;justify-content:space-between;">
           <span>AI Boost</span>
-          <select id="aiBoostPeriod" onchange="refreshAiBoost()" style="background:#0d0f17;color:#8b8fa3;border:1px solid #2a2d3a;border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;">
+          <select id="aiBoostPeriod" onchange="refreshAiBoost()" style="background:rgba(10,12,18,0.6);color:#8b8fa3;border:1px solid rgba(255,255,255,0.08);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;">
             <option value="month">Monthly</option>
             <option value="year">Yearly</option>
           </select>
@@ -935,7 +959,7 @@
         <div class="section-header">
           Earnings
           <span class="count">
-            <select id="chartPeriod" onchange="loadCharts()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">
+            <select id="chartPeriod" onchange="loadCharts()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
               <option value="weekly">Weekly (8w)</option>
               <option value="monthly">Monthly (6m)</option>
             </select>
@@ -1072,14 +1096,14 @@
         <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
           <span>Item Revenue</span>
           <div style="display:flex;gap:6px;align-items:center;">
-            <select id="itemPeriod" onchange="loadTopItems()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">
+            <select id="itemPeriod" onchange="loadTopItems()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
               <option value="month">This Month</option>
               <option value="3m">3 Months</option>
               <option value="6m" selected>6 Months</option>
               <option value="12m">12 Months</option>
               <option value="all">All Time</option>
             </select>
-            <button onclick="showItemBreakdown()" style="background:#3a3d4a;border:none;color:#8b8fa3;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;" title="Full breakdown">Details</button>
+            <button onclick="showItemBreakdown()" style="background:rgba(45,48,62,0.6);border:none;color:#8b8fa3;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;" title="Full breakdown">Details</button>
           </div>
         </div>
         <div class="section-body padded" id="topItemsBody">
@@ -1089,11 +1113,11 @@
 
       <!-- Item Breakdown Modal -->
       <div id="itemModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;overflow-y:auto;">
-        <div style="max-width:900px;margin:40px auto;background:#1a1d2e;border-radius:12px;border:1px solid #2a2d3a;padding:20px;">
+        <div style="max-width:900px;margin:40px auto;background:rgba(18,21,32,0.85);border-radius:14px;border:1px solid rgba(255,255,255,0.1);padding:20px;backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <h3 style="color:#e4e6eb;margin:0;font-size:16px;">Item Revenue Breakdown</h3>
             <div style="display:flex;gap:8px;align-items:center;">
-              <select id="modalPeriod" onchange="loadItemBreakdown()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;">
+              <select id="modalPeriod" onchange="loadItemBreakdown()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;">
                 <option value="month">This Month</option>
                 <option value="3m">3 Months</option>
                 <option value="6m" selected>6 Months</option>
@@ -1131,7 +1155,7 @@
             <button onclick="switchMissedTab('blocked')" id="missedTabBlocked" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:4px 0 0 4px;background:#2563eb;color:#fff;">Denied</button>
             <button onclick="switchMissedTab('notinstock')" id="missedTabNotInStock" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0 4px 4px 0;">Not in Stock</button>
           </div>
-          <select id="lostRevenuePeriod" onchange="loadLostRevenue()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">
+          <select id="lostRevenuePeriod" onchange="loadLostRevenue()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
             <option value="month">This Month</option>
             <option value="3m" selected>3 Months</option>
             <option value="6m">6 Months</option>
@@ -1155,7 +1179,7 @@
     <div class="section">
       <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
         <span>Investment Scorecard</span>
-        <select id="roiPeriod" onchange="loadROI()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">
+        <select id="roiPeriod" onchange="loadROI()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
           <option value="3m">3 Months</option>
           <option value="6m" selected>6 Months</option>
           <option value="12m">12 Months</option>
@@ -1175,7 +1199,7 @@
       <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
         <span>Sell Recommender</span>
         <div style="display:flex;align-items:center;gap:8px;">
-          <select id="sellRecoFilter" onchange="filterSellReco()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">
+          <select id="sellRecoFilter" onchange="filterSellReco()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
             <option value="all">All</option>
             <option value="sell">Sell</option>
             <option value="consider">Consider</option>
@@ -1192,15 +1216,15 @@
     </div>
     <!-- Price Import Modal -->
     <div id="priceImportModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
-      <div style="background:#1a1d2e;border-radius:12px;padding:20px;max-width:600px;width:90%;max-height:80vh;overflow:auto;">
+      <div style="background:rgba(18,21,32,0.85);border-radius:14px;padding:20px;max-width:600px;width:90%;max-height:80vh;overflow:auto;border:1px solid rgba(255,255,255,0.1);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <h3 style="color:#e4e6eb;margin:0;font-size:14px;">Import eBay Resale Prices</h3>
           <button onclick="closePriceImport()" style="background:none;border:none;color:#8b8fa3;cursor:pointer;font-size:18px;">&times;</button>
         </div>
         <p style="color:#8b8fa3;font-size:11px;margin:0 0 8px;">Paste JSON: <code>{"Item Name": price, ...}</code>. Use <a href="/recommender/ebay-template" target="_blank" style="color:#3b82f6;">template</a> for item names.</p>
-        <textarea id="priceImportInput" style="width:100%;height:200px;background:#0d1117;color:#e4e6eb;border:1px solid #2a2d3a;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{"Sony FX3": 2900, "Sony A7 III": 760, ...}'></textarea>
+        <textarea id="priceImportInput" style="width:100%;height:200px;background:rgba(10,14,20,0.6);color:#e4e6eb;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{"Sony FX3": 2900, "Sony A7 III": 760, ...}'></textarea>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
-          <button onclick="loadPriceTemplate()" style="background:#2a2d3a;border:none;color:#8b8fa3;padding:6px 14px;border-radius:4px;font-size:11px;cursor:pointer;">Load Template</button>
+          <button onclick="loadPriceTemplate()" style="background:rgba(30,33,46,0.6);border:none;color:#8b8fa3;padding:6px 14px;border-radius:6px;font-size:11px;cursor:pointer;">Load Template</button>
           <button onclick="submitPriceImport()" id="priceImportBtn" style="background:#22c55e;border:none;color:#000;padding:6px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">Import</button>
         </div>
         <div id="priceImportResult" style="margin-top:8px;font-size:11px;color:#8b8fa3;"></div>
@@ -1219,7 +1243,7 @@
           <button onclick="syncCompetitors()" id="insightsSyncBtn" style="background:#06b6d4;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Sync</button>
         </div>
       </div>
-      <div style="display:flex;gap:0;border-bottom:1px solid #2a2d3a;padding:0 12px;">
+      <div style="display:flex;gap:0;border-bottom:1px solid rgba(255,255,255,0.06);padding:0 12px;">
         <button class="insights-tab active" data-budget="0-500" onclick="switchInsightsTab(this)">£0-500</button>
         <button class="insights-tab" data-budget="500-2000" onclick="switchInsightsTab(this)">£500-2K</button>
         <button class="insights-tab" data-budget="2000+" onclick="switchInsightsTab(this)">£2K+</button>
@@ -1737,7 +1761,7 @@
         var html = all.length > 0 ? all.slice(0, 6).map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
         // Pending section (separated, rose-colored)
         if (data.pendingDetails && data.pendingDetails.length > 0) {
-          html += '<div style="border-top:1px solid #2a2d3a;margin:8px 0;"></div>';
+          html += '<div style="border-top:1px solid rgba(255,255,255,0.06);margin:8px 0;"></div>';
           html += '<div style="font-size:10px;color:#f472b6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pending Rentals</div>';
           html += data.pendingDetails.slice(0, 6).map(function(r) { return renderPendingRow(r); }).join('');
         }
@@ -2050,7 +2074,7 @@
       var dropOff = total > 0 ? ((dead / total) * 100).toFixed(0) : '0';
       var activePipeline = booked + pending;
 
-      html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #2a2d3a;">';
+      html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">';
       // Row 1: Conversion rate (hero metric)
       html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">';
       html += '<span style="color:#b0b3c0;font-size:12px;font-weight:600;">Conversion rate</span>';
@@ -2059,17 +2083,17 @@
       // Row 2: Metric grid
       html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">';
       // Engagement rate
-      html += '<div style="background:#151820;border-radius:6px;padding:6px 8px;text-align:center;">';
+      html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
       html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">' + engageRate + '%</div>';
       html += '<div style="font-size:9px;color:#6b6f82;">engage rate</div>';
       html += '</div>';
       // Booking rate
-      html += '<div style="background:#151820;border-radius:6px;padding:6px 8px;text-align:center;">';
+      html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
       html += '<div style="font-size:14px;font-weight:700;color:#c084fc;">' + bookRate + '%</div>';
       html += '<div style="font-size:9px;color:#6b6f82;">book rate</div>';
       html += '</div>';
       // Drop-off
-      html += '<div style="background:#151820;border-radius:6px;padding:6px 8px;text-align:center;">';
+      html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
       html += '<div style="font-size:14px;font-weight:700;color:#6b7280;">' + dropOff + '%</div>';
       html += '<div style="font-size:9px;color:#6b6f82;">drop-off</div>';
       html += '</div>';
@@ -2106,7 +2130,7 @@
       var totalRevenue = data && data.totalRevenue ? data.totalRevenue : 0;
       var itemsTotal = items.reduce(function(s, i) { return s + (i.profit || 0); }, 0);
       if (otherRevenue > 0) {
-        html += '<div class="top-item" style="border-top:1px solid #2a2d3a;margin-top:4px;padding-top:8px;">';
+        html += '<div class="top-item" style="border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;padding-top:8px;">';
         html += '<span class="top-item-name" style="color:#8b8fa3;font-style:italic;">Other / Unattributed</span>';
         html += '<span class="top-item-count"></span>';
         html += '<span class="top-item-avg"></span>';
@@ -2159,7 +2183,7 @@
         var html = '<div style="margin-bottom:12px;color:#8b8fa3;">Period: <b style="color:#e4e6eb;">' + period + '</b> &mdash; Total: <b style="color:#22c55e;">\u00A3' + data.totalRevenue.toLocaleString() + '</b> across ' + data.items.length + ' items' + (otherRev > 0 ? ' + <span style="color:#8b8fa3;">\u00A3' + otherRev.toLocaleString() + ' unmatched</span>' : '') + '</div>';
         html += '<div style="overflow-x:auto;">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
-        html += '<thead><tr style="border-bottom:2px solid #2a2d3a;color:#8b8fa3;text-align:left;">';
+        html += '<thead><tr style="border-bottom:2px solid rgba(255,255,255,0.08);color:#8b8fa3;text-align:left;">';
         html += '<th style="padding:6px 8px;">Item</th>';
         html += '<th style="padding:6px 4px;text-align:right;">Total</th>';
         html += '<th style="padding:6px 4px;text-align:right;">Count</th>';
@@ -2937,7 +2961,7 @@
         return;
       }
       var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;"><th style="text-align:left;padding:4px 6px;">Item Requested</th><th style="text-align:right;padding:4px 6px;">Requests</th><th style="text-align:right;padding:4px 6px;">Avg Days</th></tr>';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:4px 6px;">Item Requested</th><th style="text-align:right;padding:4px 6px;">Requests</th><th style="text-align:right;padding:4px 6px;">Avg Days</th></tr>';
       data.forEach(function(item) {
         html += '<tr style="border-bottom:1px solid #1e2130;">';
         html += '<td style="padding:4px 6px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(item.item) + '">' + escapeHtml(item.item) + '</td>';
@@ -2963,7 +2987,7 @@
         return;
       }
       var html = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
-      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;"><th style="text-align:left;padding:3px 6px;">Item</th><th style="text-align:center;padding:3px 4px;">Confidence</th><th style="text-align:right;padding:3px 4px;">Revenue</th><th style="text-align:right;padding:3px 4px;">Denied</th><th style="text-align:right;padding:3px 4px;">Rentals/Mo</th><th style="text-align:right;padding:3px 4px;">Days/Mo</th></tr>';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:3px 6px;">Item</th><th style="text-align:center;padding:3px 4px;">Confidence</th><th style="text-align:right;padding:3px 4px;">Revenue</th><th style="text-align:right;padding:3px 4px;">Denied</th><th style="text-align:right;padding:3px 4px;">Rentals/Mo</th><th style="text-align:right;padding:3px 4px;">Days/Mo</th></tr>';
       var ACCESSORY_SET = {'PL to Sony E mount':1,'PL to EF mount':1,'PL to RF mount':1,'PL to L mount':1,'CF Express Type A card':1,'ND filter':1,'Cinebloom filter mist':1,'256GB card':1,'DJI gimbal battery':1,'Sony NPF 970 batteries 2x sets':1,'V-mount 95mAh':1,'V-mount 150mAh':1,'Suction cups':1};
       data.filter(function(item) { return !ACCESSORY_SET[item.item]; }).slice(0, 20).forEach(function(item) {
         var confColor = item.confidence === 'high' ? '#22c55e' : item.confidence === 'medium' ? '#f59e0b' : '#ef4444';
@@ -3038,10 +3062,10 @@
             '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px;">' +
             '<span style="color:#e4e6eb;">' + escapeHtml(f.name) + '</span>' +
             '<span style="color:#22c55e;">+' + Math.round(f.rate * 100) + '%</span></div>' +
-            '<div style="background:#2a2d3a;border-radius:3px;height:4px;overflow:hidden;">' +
+            '<div style="background:rgba(255,255,255,0.06);border-radius:3px;height:4px;overflow:hidden;">' +
             '<div style="background:#22c55e;height:100%;width:' + barW + '%;border-radius:3px;"></div></div></div>';
         }).join('');
-        html += '<div style="border-top:1px solid #2a2d3a;margin-top:6px;padding-top:6px;font-size:11px;display:flex;justify-content:space-between;">' +
+        html += '<div style="border-top:1px solid rgba(255,255,255,0.06);margin-top:6px;padding-top:6px;font-size:11px;display:flex;justify-content:space-between;">' +
           '<span style="color:#8b8fa3;">Actual: \u00A3' + Math.round(data.actualRevenue).toLocaleString() + '</span>' +
           '<span style="color:#8b8fa3;">Without AI: \u00A3' + Math.round(data.withoutAiEstimate).toLocaleString() + '</span></div>';
         exp.innerHTML = html;
@@ -3061,7 +3085,7 @@
         return;
       }
       var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;"><th style="text-align:left;padding:4px 8px;">Item</th><th style="text-align:right;padding:4px 8px;">Denied</th><th style="text-align:right;padding:4px 8px;">Lost Revenue</th><th style="text-align:right;padding:4px 8px;">Stock</th><th style="text-align:right;padding:4px 8px;">Buy More?</th></tr>';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:4px 8px;">Item</th><th style="text-align:right;padding:4px 8px;">Denied</th><th style="text-align:right;padding:4px 8px;">Lost Revenue</th><th style="text-align:right;padding:4px 8px;">Stock</th><th style="text-align:right;padding:4px 8px;">Buy More?</th></tr>';
       data.forEach(function(item) {
         html += '<tr style="border-bottom:1px solid #1e2130;">';
         html += '<td style="padding:4px 8px;color:#e4e6eb;">' + item.item + '</td>';
@@ -3262,7 +3286,7 @@
 
       // Show top market items if available
       if (data.opportunities && data.opportunities.length > 0) {
-        html += '<div style="margin-top:14px;border-top:1px solid #2a2d3a;padding-top:12px;">';
+        html += '<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.06);padding-top:12px;">';
         html += '<div style="font-size:11px;color:#8b8fa3;margin-bottom:8px;font-weight:600;">Top Items Found on Market</div>';
         html += '<table><thead><tr><th>Item</th><th>Daily Price</th><th>Listings</th><th>Similar To</th><th>Est. Revenue</th></tr></thead><tbody>';
         data.opportunities.slice(0, 8).forEach(function(o) {
@@ -3787,7 +3811,7 @@
       }
 
       var html = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
-      html += '<tr style="color:#8b8fa3;border-bottom:1px solid #2a2d3a;">';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);">';
       html += '<th style="text-align:left;padding:3px 6px;">Item</th>';
       html += '<th style="text-align:center;padding:3px 4px;">Verdict</th>';
       html += '<th style="text-align:right;padding:3px 4px;">Score</th>';
@@ -3806,7 +3830,7 @@
         else { vc = '#22c55e'; vbg = 'rgba(34,197,94,0.15)'; }
 
         var idleColor = r.daysSinceLastRental !== null && r.daysSinceLastRental > 60 ? '#ef4444' : '#8b8fa3';
-        var qtyBadge = r.qtyOwned > 1 ? ' <span style="background:#2a2d3a;padding:0 4px;border-radius:3px;font-size:9px;color:#8b8fa3;">×' + r.qtyOwned + '</span>' : '';
+        var qtyBadge = r.qtyOwned > 1 ? ' <span style="background:rgba(255,255,255,0.06);padding:0 4px;border-radius:3px;font-size:9px;color:#8b8fa3;">×' + r.qtyOwned + '</span>' : '';
 
         // Bundle column: color-coded bundleRate%
         var bundleColor = r.bundleRate >= 70 ? '#22c55e' : r.bundleRate >= 30 ? '#f59e0b' : '#555';
