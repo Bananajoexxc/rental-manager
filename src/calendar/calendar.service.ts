@@ -536,6 +536,23 @@ export class CalendarService implements OnModuleInit {
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   }
 
+  /**
+   * Sanitize an extracted time: reject times outside business hours (07:00-22:00).
+   * If time is 01:00-06:59, assume AM/PM conversion error and add 12 hours.
+   */
+  private sanitizeTime(time: string): string | null {
+    const match = time.match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    let hour = parseInt(match[1], 10);
+    const min = parseInt(match[2], 10);
+    // Likely AM/PM error: 01:00-06:59 → add 12h (e.g., 03:00 meant 15:00)
+    if (hour >= 1 && hour <= 6) {
+      hour += 12;
+    }
+    if (hour < 7 || hour > 22) return null; // outside 07:00-22:00
+    return `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+  }
+
   async updateBookingTimes(
     rentalId: string,
     pickupTime?: string,
@@ -553,11 +570,47 @@ export class CalendarService implements OnModuleInit {
       return null;
     }
 
+    const refBooking = bookings[0];
     const updateData: any = {};
-    if (pickupTime) updateData.pickup_time = pickupTime;
-    if (returnTime) updateData.return_time = returnTime;
-    if (pickupDate) updateData.pickup_date = new Date(pickupDate);
-    if (returnDate) updateData.return_date = new Date(returnDate);
+
+    // Sanitize times: reject outside business hours, fix AM/PM errors
+    if (pickupTime) {
+      const sanitized = this.sanitizeTime(pickupTime);
+      if (sanitized) {
+        updateData.pickup_time = sanitized;
+      } else {
+        this.logger.warn(`updateBookingTimes: rejected pickup time ${pickupTime} (outside 07:00-22:00) for rental ${rentalId}`);
+      }
+    }
+    if (returnTime) {
+      const sanitized = this.sanitizeTime(returnTime);
+      if (sanitized) {
+        updateData.return_time = sanitized;
+      } else {
+        this.logger.warn(`updateBookingTimes: rejected return time ${returnTime} (outside 07:00-22:00) for rental ${rentalId}`);
+      }
+    }
+
+    // Validate dates: pickup/return dates must be within ±3 days of booking start/end.
+    // This prevents AI hallucinating wrong dates (e.g., "Friday" → this Friday, not the rental's Friday).
+    if (pickupDate && refBooking.start_date) {
+      const pd = new Date(pickupDate);
+      const diff = Math.abs(pd.getTime() - refBooking.start_date.getTime()) / 86400000;
+      if (diff <= 3) {
+        updateData.pickup_date = pd;
+      } else {
+        this.logger.warn(`updateBookingTimes: rejected pickup date ${pickupDate} (${Math.round(diff)}d from start ${refBooking.start_date.toISOString().split('T')[0]}) for rental ${rentalId}`);
+      }
+    }
+    if (returnDate && refBooking.end_date) {
+      const rd = new Date(returnDate);
+      const diff = Math.abs(rd.getTime() - refBooking.end_date.getTime()) / 86400000;
+      if (diff <= 3) {
+        updateData.return_date = rd;
+      } else {
+        this.logger.warn(`updateBookingTimes: rejected return date ${returnDate} (${Math.round(diff)}d from end ${refBooking.end_date.toISOString().split('T')[0]}) for rental ${rentalId}`);
+      }
+    }
 
     if (Object.keys(updateData).length === 0) return null;
 
@@ -566,7 +619,7 @@ export class CalendarService implements OnModuleInit {
       data: updateData,
     });
 
-    this.logger.log(`Updated ${updated.count} booking(s) for rental ${rentalId}: pickup=${pickupTime || 'unchanged'} ${pickupDate || ''}, return=${returnTime || 'unchanged'} ${returnDate || ''}`);
+    this.logger.log(`Updated ${updated.count} booking(s) for rental ${rentalId}: pickup=${updateData.pickup_time || 'unchanged'} ${updateData.pickup_date ? updateData.pickup_date.toISOString().split('T')[0] : ''}, return=${updateData.return_time || 'unchanged'} ${updateData.return_date ? updateData.return_date.toISOString().split('T')[0] : ''}`);
     return updated;
   }
 
@@ -652,17 +705,25 @@ export class CalendarService implements OnModuleInit {
     const renterName = rental.renter_info || 'Unknown';
     const account = rental.account || 'dbcinema';
 
-    for (const item of mainItems) {
-      // Check if a booking already exists for this rental + item (any status)
-      const existing = await this.prisma.booking.findFirst({
-        where: {
-          rental_id: rental.id,
-          item_name: item.name,
-          status: { in: ['confirmed', 'pending_review'] },
-        },
-      });
+    // Load ALL existing bookings for this rental upfront (single query, prevents race condition).
+    // Per-item queries inside the loop are vulnerable to concurrent creation by parallel scan paths.
+    const existingBookings = await this.prisma.booking.findMany({
+      where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
+      select: { item_name: true },
+    });
+    const existingItemNames = new Set(existingBookings.map(b => b.item_name));
+    // Also build a fuzzy set: match each existing item name against inventory to catch near-dupes
+    // (e.g., "Anamorphic Great Joy 35mm" vs "Anamorphic Great Joy lens 35mm")
+    const existingFuzzyNames = new Set<string>();
+    for (const name of existingItemNames) {
+      existingFuzzyNames.add(name);
+      const fuzzyMatch = findBestMatch(name, getInventoryItemNames());
+      if (fuzzyMatch) existingFuzzyNames.add(fuzzyMatch);
+    }
 
-      if (existing) {
+    for (const item of mainItems) {
+      // Skip if this item (or a fuzzy match) already has a booking for this rental
+      if (existingItemNames.has(item.name) || existingFuzzyNames.has(item.name)) {
         this.logger.debug(`Booking already exists for ${item.name} on rental ${rental.id}`);
         continue;
       }

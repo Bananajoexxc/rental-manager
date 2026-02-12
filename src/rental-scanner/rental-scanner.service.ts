@@ -342,6 +342,16 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
+        // Cascade renter name updates to bookings (Hygglo API may return full name later)
+        if (rental.renterInfo && rental.renterInfo !== existingRental.renter_info) {
+          try {
+            await this.prisma.booking.updateMany({
+              where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review'] } },
+              data: { renter_name: rental.renterInfo },
+            });
+          } catch { /* non-critical */ }
+        }
+
         // Cascade rental status changes to bookings (e.g., pending → upcoming promotes bookings)
         if (rental.status !== existingRental.status) {
           try {
