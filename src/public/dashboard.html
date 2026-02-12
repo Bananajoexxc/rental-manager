@@ -1706,16 +1706,39 @@
 
       // Active rentals
       document.getElementById('statActiveBookings').textContent = data.activeRentals != null ? data.activeRentals : '--';
-      var sub = [];
-      if (data.ongoingRentals) sub.push(data.ongoingRentals + ' ongoing');
-      if (data.upcomingRentals) sub.push(data.upcomingRentals + ' upcoming');
-      document.getElementById('statActiveBookingsSub').textContent = sub.join(' + ');
+      var subEl = document.getElementById('statActiveBookingsSub');
+      var subHtml = '';
+      var subParts = [];
+      if (data.ongoingRentals) subParts.push('<span style="color:#f59e0b;">' + data.ongoingRentals + ' ongoing</span>');
+      if (data.upcomingRentals) subParts.push('<span style="color:#a78bfa;">' + data.upcomingRentals + ' upcoming</span>');
+      if (data.pendingRentals) subParts.push('<span style="color:#f472b6;">' + data.pendingRentals + ' pending</span>');
+      subHtml = subParts.join(' + ');
 
-      // Active expand: combined ongoing + upcoming
+      // Colored status bar for active rentals (ongoing/upcoming/pending)
+      var onC = data.ongoingRentals || 0;
+      var upC = data.upcomingRentals || 0;
+      var peC = data.pendingRentals || 0;
+      if (onC + upC + peC > 0) {
+        subHtml += '<div style="display:flex;gap:3px;height:8px;border-radius:4px;overflow:hidden;margin-top:6px;">' +
+          (onC ? '<div style="flex:' + onC + ';background:#f59e0b;border-radius:2px;" title="' + onC + ' ongoing"></div>' : '') +
+          (upC ? '<div style="flex:' + upC + ';background:#a78bfa;border-radius:2px;" title="' + upC + ' upcoming"></div>' : '') +
+          (peC ? '<div style="flex:' + peC + ';background:#f472b6;border-radius:2px;" title="' + peC + ' pending"></div>' : '') +
+        '</div>';
+      }
+      subEl.innerHTML = subHtml;
+
+      // Active expand: combined ongoing + upcoming + pending section
       var activeEl = document.getElementById('expandActive');
       if (activeEl) {
         var all = (data.ongoingDetails || []).concat(data.upcomingDetails || []);
-        activeEl.innerHTML = all.length > 0 ? all.slice(0, 6).map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
+        var html = all.length > 0 ? all.slice(0, 6).map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
+        // Pending section (separated, rose-colored)
+        if (data.pendingDetails && data.pendingDetails.length > 0) {
+          html += '<div style="border-top:1px solid #2a2d3a;margin:8px 0;"></div>';
+          html += '<div style="font-size:10px;color:#f472b6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pending Rentals</div>';
+          html += data.pendingDetails.slice(0, 6).map(function(r) { return renderPendingRow(r); }).join('');
+        }
+        activeEl.innerHTML = html;
       }
 
       // Ongoing + upcoming stat cards
@@ -1754,6 +1777,26 @@
           (itemsText ? '<div class="stat-rental-items">' + escapeHtml(itemsText) + '</div>' : '') +
         '</div>' +
         '<div class="stat-rental-amount">\u00A3' + r.earnings + '</div>' +
+      '</div>';
+    }
+
+    function renderPendingRow(r) {
+      var photoHtml = r.photo
+        ? '<img class="stat-rental-photo" src="' + escapeHtml(r.photo) + '" onerror="this.style.display=\'none\'" />'
+        : '<div class="stat-rental-photo" style="display:flex;align-items:center;justify-content:center;font-size:14px;">📷</div>';
+      var itemsText = r.items && r.items.length > 0 ? r.items.join(', ') : '';
+      var dateStr = '';
+      if (r.startDate) {
+        var d = new Date(r.startDate);
+        dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      }
+      return '<div class="stat-rental-row" style="border-left:3px solid #f472b6;padding-left:6px;">' +
+        photoHtml +
+        '<div class="stat-rental-info">' +
+          '<div class="stat-rental-name">' + escapeHtml(r.renter) + (dateStr ? ' · ' + dateStr : '') + '</div>' +
+          (itemsText ? '<div class="stat-rental-items">' + escapeHtml(itemsText) + '</div>' : '') +
+        '</div>' +
+        '<div class="stat-rental-amount" style="color:#f472b6;font-size:10px;">Pending</div>' +
       '</div>';
     }
 
@@ -1852,21 +1895,24 @@
         bParts.push(rentalCount + ' rentals');
         confirmedSub.textContent = bParts.join(' \u00B7 ');
 
-        // Confirmed expand: breakdown bars
+        // Confirmed expand: breakdown bars (+ pending segment, display only)
         var confirmedExp = document.getElementById('expandConfirmed');
         if (confirmedExp && data.breakdown) {
           var bd = data.breakdown;
-          var total = bd.completed + bd.ongoing + bd.upcoming;
+          var pendingC = window._lastBookingStats ? (window._lastBookingStats.pendingRentals || 0) : (data.pendingRentals || 0);
+          var total = bd.completed + bd.ongoing + bd.upcoming + pendingC;
           confirmedExp.innerHTML = total > 0
             ? '<div style="display:flex;gap:3px;height:8px;border-radius:4px;overflow:hidden;">' +
                 (bd.completed ? '<div style="flex:' + bd.completed + ';background:#22c55e;border-radius:2px;" title="' + bd.completed + ' completed"></div>' : '') +
                 (bd.ongoing ? '<div style="flex:' + bd.ongoing + ';background:#f59e0b;border-radius:2px;" title="' + bd.ongoing + ' ongoing"></div>' : '') +
                 (bd.upcoming ? '<div style="flex:' + bd.upcoming + ';background:#a78bfa;border-radius:2px;" title="' + bd.upcoming + ' upcoming"></div>' : '') +
+                (pendingC ? '<div style="flex:' + pendingC + ';background:#f472b6;border-radius:2px;" title="' + pendingC + ' pending"></div>' : '') +
               '</div>' +
-              '<div style="display:flex;gap:12px;margin-top:6px;font-size:10px;">' +
+              '<div style="display:flex;gap:12px;margin-top:6px;font-size:10px;flex-wrap:wrap;">' +
                 '<span style="color:#22c55e;">\u25CF ' + bd.completed + ' done</span>' +
                 '<span style="color:#f59e0b;">\u25CF ' + bd.ongoing + ' active</span>' +
                 '<span style="color:#a78bfa;">\u25CF ' + bd.upcoming + ' upcoming</span>' +
+                (pendingC ? '<span style="color:#f472b6;">\u25CF ' + pendingC + ' pending</span>' : '') +
               '</div>'
             : '';
         }
@@ -1942,10 +1988,13 @@
     }
 
     // ---- Funnel ----
-    var stageOrder = ['inquiry', 'interested', 'ready_to_book', 'booked', 'confirmed', 'completed', 'dead'];
+    var stageOrder = ['inquiry', 'interested', 'ready_to_book', 'pending', 'confirmed', 'completed', 'dead'];
     var stageColors = {
       inquiry: '#6ea8fe', interested: '#818cf8', ready_to_book: '#a78bfa',
-      booked: '#f59e0b', confirmed: '#22c55e', completed: '#10b981', dead: '#6b7280'
+      pending: '#f472b6', confirmed: '#22c55e', completed: '#10b981', dead: '#6b7280'
+    };
+    var stageLabels = {
+      ready_to_book: 'ready to book'
     };
 
     function renderFunnel(data) {
@@ -1965,7 +2014,7 @@
         var count = data[stage] || 0;
         var pct = (count / maxCount) * 100;
         var color = stageColors[stage] || '#6b7280';
-        var label = stage.replace(/_/g, ' ');
+        var label = stageLabels[stage] || stage.replace(/_/g, ' ');
         html += '<div class="funnel-bar">';
         html += '<div class="funnel-label">' + escapeHtml(label) + '</div>';
         html += '<div class="funnel-track"><div class="funnel-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>';

@@ -4,7 +4,7 @@ import { PrismaService } from './prisma/prisma.service';
 import { BlacklistService } from './blacklist/blacklist.service';
 import { PlaywrightService } from './playwright/playwright.service';
 import { HyggloService } from './hygglo/hygglo.service';
-import { isAccessoryItem } from './utils/item-matcher';
+import { isAccessoryItem, findBestMatch, getInventoryItemNames } from './utils/item-matcher';
 
 interface BookingRow {
   id: string;
@@ -279,6 +279,50 @@ export class AppService {
       };
     };
 
+    // === Pending verification rentals (display only — NOT in any earnings/count calculations) ===
+    // "Pending" = owner accepted on Hygglo, but platform is verifying the renter.
+    // Detected via order_step='VERIFIED' (the VERIFIED step is active, meaning awaiting docs/ID).
+    const pendingVerificationRentals = await this.prisma.rental.findMany({
+      where: {
+        order_step: 'VERIFIED',
+        ...(account ? { account } : {}),
+      },
+      select: {
+        id: true, title: true, renter_info: true, account: true,
+        start_date: true, end_date: true, photos_urls: true,
+      },
+      orderBy: { start_date: 'asc' },
+    });
+
+    // Group by renter+date (one person on one date = one pending visit)
+    const pendingVisitMap = new Map<string, {
+      renter: string; items: string[]; startDate: Date; endDate: Date;
+      account: string; photo: string | null;
+    }>();
+    for (const r of pendingVerificationRentals) {
+      const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const dateKey = r.start_date ? r.start_date.toISOString().split('T')[0] : '';
+      const key = `${renterNorm}|${dateKey}`;
+      const existing = pendingVisitMap.get(key);
+      if (existing) {
+        existing.items.push(r.title);
+        if (r.end_date && (!existing.endDate || r.end_date > existing.endDate)) {
+          existing.endDate = r.end_date;
+        }
+        if (!existing.photo && r.photos_urls?.[0]) existing.photo = r.photos_urls[0];
+      } else {
+        pendingVisitMap.set(key, {
+          renter: r.renter_info || 'Unknown',
+          items: [r.title],
+          startDate: r.start_date!,
+          endDate: r.end_date!,
+          account: r.account || 'dbcinema',
+          photo: r.photos_urls?.[0] || null,
+        });
+      }
+    }
+    const pendingDetails = Array.from(pendingVisitMap.values());
+
     return {
       // Rental-level counts (what Daniel cares about) — from booking table (reconciled)
       ongoingRentals: ongoingRentals.length,
@@ -298,6 +342,9 @@ export class AppService {
         renter: r.renter_info || 'Unknown',
         earnings: Math.round((r.rental_price || 0) * 100) / 100,
       })),
+      // Pending Hygglo rentals (display only — NO earnings impact)
+      pendingRentals: pendingVisitMap.size,
+      pendingDetails,
     };
   }
 
@@ -489,11 +536,20 @@ export class AppService {
       }
     }
 
+    const inventoryNames = getInventoryItemNames();
     return Array.from(rentalMap.values()).map(r => {
       if (!r.notes) r.notes = {};
-      const mergedItems: string[] = [...(r.notes.allItems || [])];
-      for (const item of r.items) {
-        if (!mergedItems.includes(item)) mergedItems.push(item);
+      // Dedup allItems through inventory matching — "Anamorphic Great Joy 35mm" and
+      // "Anamorphic Great Joy lens 35mm" both resolve to the same inventory item
+      const mergedItems: string[] = [];
+      const seenInventory = new Set<string>();
+      for (const item of [...(r.notes.allItems || []), ...r.items]) {
+        const matched = findBestMatch(item, inventoryNames);
+        const key = matched || item; // use inventory name if matched, else raw
+        if (!seenInventory.has(key)) {
+          seenInventory.add(key);
+          mergedItems.push(matched || item); // prefer canonical inventory name
+        }
       }
       r.notes.allItems = mergedItems;
 
@@ -505,7 +561,10 @@ export class AppService {
       }
       r.notes.allItems = mainItems;
       r.notes.accessories = accessories;
-      r.notes.pendingItems = r.pendingItems.filter(pi => !mainItems.includes(pi) && !accessories.includes(pi));
+      r.notes.pendingItems = r.pendingItems.filter(pi => {
+        const piMatch = findBestMatch(pi, inventoryNames) || pi;
+        return !seenInventory.has(piMatch) && !accessories.includes(pi);
+      });
       return {
         ...r,
         pendingItems: r.pendingItems,
@@ -519,6 +578,8 @@ export class AppService {
     // Excludes old completed/cancelled/obsolete rentals
     const twoWeeksAgo = new Date();
     twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
     const where: any = {
       status: 'active',
@@ -541,6 +602,16 @@ export class AppService {
       const stage = s.conversation_stage || 'inquiry';
       counts[stage] = (counts[stage] || 0) + 1;
     }
+
+    // "Pending" = owner accepted on Hygglo but platform verifying renter (order_step='VERIFIED').
+    const pendingVerCount = await this.prisma.rental.count({
+      where: {
+        order_step: 'VERIFIED',
+        ...(account ? { account } : {}),
+      },
+    });
+    counts['pending'] = pendingVerCount;
+
     return counts;
   }
 

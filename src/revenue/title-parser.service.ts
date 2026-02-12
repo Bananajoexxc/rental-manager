@@ -316,7 +316,19 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
       merged.set(visionItem.item, visionItem);
     }
 
-    const result = Array.from(merged.values());
+    // Collapse items that map to the same inventory item via findBestMatch
+    // e.g. "Anamorphic Great Joy 35mm" and "Anamorphic Great Joy lens 35mm" → keep one
+    const inventoryNames = getInventoryItemNames();
+    const dedupedByInventory = new Map<string, ParsedItem>();
+    for (const item of merged.values()) {
+      const matched = findBestMatch(item.item, inventoryNames);
+      const key = matched || item.item;
+      if (!dedupedByInventory.has(key)) {
+        // Prefer the canonical inventory name if matched
+        dedupedByInventory.set(key, matched ? { ...item, item: matched } : item);
+      }
+    }
+    const result = Array.from(dedupedByInventory.values());
     const changed = result.length !== currentItems.length ||
       result.some(r => !currentItems.find(c => c.item === r.item));
 

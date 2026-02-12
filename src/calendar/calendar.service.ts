@@ -636,6 +636,7 @@ export class CalendarService implements OnModuleInit {
       status?: string | null;
     },
     extractedItems: string[],
+    options?: { forceStatus?: 'pending_review' | 'confirmed' },
   ): Promise<any[]> {
     if (!rental.start_date || !rental.end_date) {
       this.logger.warn(`Cannot create bookings for rental ${rental.id}: missing dates`);
@@ -736,11 +737,17 @@ export class CalendarService implements OnModuleInit {
       const itemFee = 0;
 
       // Booking status depends on BOTH rental acceptance AND inventory availability:
+      // - forceStatus override (e.g., auto-accepted new rentals await owner acknowledgment)
       // - pending rental → always pending_review (not yet accepted on Hygglo)
       // - accepted rental + available → confirmed
       // - accepted rental + overbooked → pending_review
-      const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
-      const bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
+      let bookingStatus: 'confirmed' | 'pending_review';
+      if (options?.forceStatus) {
+        bookingStatus = !availability.available ? 'pending_review' : options.forceStatus;
+      } else {
+        const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+        bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
+      }
 
       // Build rich notes JSON: all bundle items (main + accessories) + auto-block info
       const bundleNotes: any = {
@@ -1011,10 +1018,16 @@ export class CalendarService implements OnModuleInit {
         const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
         const bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
 
-        // Revenue: split total across all non-accessory parsed items
+        // Revenue: split total across UNIQUE non-accessory inventory items
+        // Dedup by matched inventory name so "Great Joy 35mm" and "Great Joy lens 35mm"
+        // count as ONE item for revenue splitting
+        const seenForRevenue = new Set<string>();
         const mainParsedItems = parsedItems.filter(p => {
           const m = findBestMatch(p.item, inventoryNames);
-          return m && !isAccessoryItem(m);
+          if (!m || isAccessoryItem(m)) return false;
+          if (seenForRevenue.has(m)) return false;
+          seenForRevenue.add(m);
+          return true;
         });
         const totalRevenue = rental.rental_price || 0;
         const perItemRevenue = mainParsedItems.length > 0

@@ -67,6 +67,10 @@ export class VerificationService {
 
   /**
    * Inspect order detail response for verification-related fields.
+   * The v4 API uses a `steps` array where each step has {key, completed, active}.
+   * Steps: REQUEST → APPROVED → FUNDS_RESERVED → VERIFIED → BOOKED_AFTER_VERIFIED → ...
+   * If VERIFIED step is active=true, renter is being verified.
+   * If BOOKED_AFTER_VERIFIED (or later) is completed, verification passed.
    */
   private inspectOrderDetailForVerification(detail: any): VerificationStatus {
     const result: VerificationStatus = {
@@ -75,34 +79,28 @@ export class VerificationService {
       method: 'api',
     };
 
-    // Check status labels
-    const status = detail.status?.toLowerCase?.() || '';
-    const statusLabel = detail.statusLabel?.toLowerCase?.() || '';
+    // Primary signal: steps array from Hygglo v4 API
+    if (Array.isArray(detail.steps)) {
+      const verifiedStep = detail.steps.find((s: any) => s.key === 'VERIFIED');
+      const bookedStep = detail.steps.find((s: any) => s.key === 'BOOKED_AFTER_VERIFIED');
 
-    if (status.includes('verification') || statusLabel.includes('verification')) {
-      result.needsVerification = true;
+      if (verifiedStep?.active === true && verifiedStep?.completed === false) {
+        result.needsVerification = true;
+      }
+      if (verifiedStep?.completed === true || bookedStep?.completed === true) {
+        result.verificationComplete = true;
+        result.needsVerification = false;
+      }
     }
 
-    if (status === 'verified' || statusLabel.includes('verified')) {
-      result.verificationComplete = true;
-      result.needsVerification = false;
-    }
-
-    // Check for verification fields directly
-    if (detail.verificationRequired === true) {
-      result.needsVerification = true;
-    }
-    if (detail.verificationComplete === true || detail.verified === true) {
-      result.verificationComplete = true;
-      result.needsVerification = false;
-    }
-
-    // Check renter verification status
-    const renterVerification = detail.users?.otherPart?.verified;
-    if (renterVerification === true) {
-      result.verificationComplete = true;
-    } else if (renterVerification === false && detail.status === 'pending') {
-      result.needsVerification = true;
+    // Fallback: labels.orderStatus.header
+    const header = (detail.labels?.orderStatus?.header || '').toLowerCase();
+    if (!result.needsVerification && !result.verificationComplete) {
+      if (header.includes('waiting') && header.includes('document')) {
+        result.needsVerification = true;
+      } else if (header.includes('booked and ready') || header.includes('everything is booked')) {
+        result.verificationComplete = true;
+      }
     }
 
     return result;

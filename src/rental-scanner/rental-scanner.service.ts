@@ -323,6 +323,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         }
 
         // Update existing rental (including dates and price if newly available)
+        const orderStep = this.extractActiveOrderStep(rental._detail);
         const updatedRental = await this.prisma.rental.update({
           where: { listing_id: rental.listingId },
           data: {
@@ -338,6 +339,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             currency: rental.currency ?? existingRental.currency,
             listing_location: rental.listingLocation ?? existingRental.listing_location,
             ...(parsedItems !== undefined ? { parsed_items: parsedItems as any } : {}),
+            ...(orderStep ? { order_step: orderStep } : {}),
             updated_at: new Date(),
           },
         });
@@ -464,6 +466,46 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        // Auto-promote: if rental is accepted on Hygglo but bookings are still pending_review
+        // (from auto-accepted detection on first scan), promote after 2 hours.
+        // Uses booking.updated_at (not rental.created_at) so manually-demoted bookings get a fresh window.
+        const isAccepted = ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+        if (isAccepted && hasBookings > 0) {
+          const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+          try {
+            const pendingBookings = await this.prisma.booking.findMany({
+              where: { rental_id: existingRental.id, status: 'pending_review' },
+              select: { id: true, item_name: true, updated_at: true },
+            });
+            if (pendingBookings.length > 0) {
+              let promoted = 0;
+              for (const pb of pendingBookings) {
+                // Only promote if this booking has been pending_review for 2+ hours
+                const bookingAge = Date.now() - new Date(pb.updated_at).getTime();
+                if (bookingAge < TWO_HOURS_MS) continue;
+
+                const avail = await this.calendarService.checkAvailability(
+                  pb.item_name,
+                  updatedRental.start_date!,
+                  updatedRental.end_date!,
+                );
+                if (avail.available) {
+                  await this.prisma.booking.update({
+                    where: { id: pb.id },
+                    data: { status: 'confirmed' },
+                  });
+                  promoted++;
+                }
+              }
+              if (promoted > 0) {
+                this.logger.log(`📅 Auto-promoted ${promoted} pending bookings for accepted rental: ${rental.title}`);
+              }
+            }
+          } catch (err) {
+            this.logger.warn(`Auto-promote failed for ${rental.title}: ${err.message}`);
+          }
+        }
+
         // Update renter rating on existing rentals (catches rating changes over time)
         if (rental.renterRating !== undefined && rental.renterRating !== null) {
           try {
@@ -511,6 +553,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Save new rental to database (including price data)
+      const orderStep = this.extractActiveOrderStep(rental._detail);
       const savedRental = await this.prisma.rental.create({
         data: {
           listing_id: rental.listingId,
@@ -528,6 +571,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           currency: rental.currency ?? null,
           listing_location: rental.listingLocation ?? null,
           ...(parsedItems ? { parsed_items: parsedItems } : {}),
+          ...(orderStep ? { order_step: orderStep } : {}),
         },
       });
 
@@ -597,14 +641,22 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           rental_price: ownerEarnings ?? savedRental.rental_price,
         };
 
+        // Auto-accepted detection: if this NEW rental arrives already as upcoming/ongoing,
+        // it was auto-accepted on Hygglo (instant booking) before the scanner could track it.
+        // Create bookings as pending_review so they don't appear in the calendar until the
+        // owner is notified. They auto-promote to confirmed after 2 hours via the scan cycle.
+        const isAutoAccepted = ['upcoming', 'ongoing'].includes(savedRental.status || '');
+        const bookingOptions = isAutoAccepted ? { forceStatus: 'pending_review' as const } : undefined;
+
         const createdBookings = await this.calendarService.createBookingsFromRental(
           rentalForBooking,
           allItemNames,
+          bookingOptions,
         );
 
         if (createdBookings.length > 0) {
           const overbookedItems = createdBookings.filter(b => b.wasOverbooked && b.maxQuantity > 0);
-          this.logger.log(`📅 Auto-created ${createdBookings.length} booking(s) for rental ${savedRental.title}`);
+          this.logger.log(`📅 Auto-created ${createdBookings.length} booking(s) for rental ${savedRental.title}${isAutoAccepted ? ' [AUTO-ACCEPTED → pending_review]' : ''}`);
 
           // Persist matched inventory items back to parsed_items (detail.items are transient)
           // This ensures reconciliation/backfill can see all items, not just title-parsed ones
@@ -630,15 +682,31 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             this.logger.warn(`Failed to persist detail.items to parsed_items: ${err.message}`);
           }
 
-          // Send booking summary to Telegram
+          // Notifications
           if (this.telegramService) {
-            const bookingLines = createdBookings.map(b => {
-              const status = b.wasOverbooked ? '⚠️ OVERBOOKED' : '✅';
-              const rev = b.revenue ? ` £${b.revenue}` : '';
-              return `│  ${status} ${b.item_name} x${b.quantity}${rev}`;
-            });
+            // Auto-accepted rental: send FORCED notification so Daniel knows about this booking
+            if (isAutoAccepted) {
+              const earnings = ownerEarnings ?? savedRental.rental_price ?? 0;
+              const items = createdBookings.map(b => b.item_name).join(', ');
+              const startStr = savedRental.start_date ? new Date(savedRental.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '?';
+              const endStr = savedRental.end_date ? new Date(savedRental.end_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '?';
+              try {
+                await this.telegramService.sendProactiveMessage(
+                  `⚠️ AUTO-ACCEPTED rental detected!\n` +
+                  `👤 ${savedRental.renter_info || 'Unknown'} · 💰 £${Math.round(earnings)}\n` +
+                  `📅 ${startStr}–${endStr} · ${savedRental.account || 'dbcinema'}\n` +
+                  `📦 ${items}\n\n` +
+                  `Calendar entry is PENDING — will auto-confirm in ~2h.\n` +
+                  `Check Hygglo if you didn't expect this booking.`,
+                  'Markdown',
+                  { force: true },
+                );
+              } catch (err) {
+                this.logger.warn(`Failed to send auto-accepted notification: ${err.message}`);
+              }
+            }
 
-            // Only notify owner if there's an availability conflict (overbooked items)
+            // Availability conflict notification
             if (overbookedItems.length > 0) {
               this.telegramService.sendRentalUpdate(savedRental.id, {
                 type: 'availability_conflict', priority: 'high',
@@ -715,6 +783,17 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       });
       return { isNew: false };
     }
+  }
+
+  /**
+   * Extract the active Hygglo order step from the detail's steps array.
+   * Steps: REQUEST → APPROVED → FUNDS_RESERVED → VERIFIED → BOOKED_AFTER_VERIFIED → DELIVERED → RETURNED → REVIEWED
+   * Returns the key of the step where active=true, or null if not available.
+   */
+  private extractActiveOrderStep(detail: any): string | null {
+    if (!detail?.steps || !Array.isArray(detail.steps)) return null;
+    const active = detail.steps.find((s: any) => s.active === true);
+    return active?.key || null;
   }
 
   /**

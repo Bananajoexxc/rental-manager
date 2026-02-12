@@ -26,6 +26,7 @@ model rental {
   account         String?         // 'dbcinema' or 'leo' — which Hygglo account this rental belongs to
   listing_location String?        // Advertised pickup location from the listing (e.g. "Stratford", "Shoreditch") — may be fake
   parsed_items    Json?           // AI-parsed items: [{item: "Sony FX3", qty: 1}, {item: "Sony GM 24-70mm f2.8", qty: 1}]
+  order_step      String?         // Active Hygglo order step: REQUEST, APPROVED, FUNDS_RESERVED, VERIFIED, BOOKED_AFTER_VERIFIED, DELIVERED, RETURNED, REVIEWED
   created_at      DateTime        @default(now())
   updated_at      DateTime        @updatedAt
   extracted_items extracteditem[]
