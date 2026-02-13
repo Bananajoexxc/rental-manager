@@ -967,7 +967,17 @@
     <div class="section" style="margin-bottom:20px;">
       <div class="section-header" style="flex-wrap:wrap;gap:6px;">
         <span>Lifetime Revenue <span id="lifetimeTotal" style="font-size:14px;color:#22c55e;font-weight:700;"></span></span>
-        <div id="lifetimeStats" style="display:flex;gap:16px;font-size:11px;color:#8b8fa3;font-weight:400;"></div>
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div id="lifetimeStats" style="display:flex;gap:16px;font-size:11px;color:#8b8fa3;font-weight:400;"></div>
+          <label id="targetToggle" style="display:none;align-items:center;gap:5px;font-size:10px;color:#8b8fa3;cursor:pointer;user-select:none;white-space:nowrap;">
+            <span style="position:relative;width:28px;height:16px;display:inline-block;">
+              <input type="checkbox" id="showTargetsChk" onchange="toggleTargetBars(this.checked)" style="opacity:0;width:0;height:0;">
+              <span id="targetSlider" style="position:absolute;inset:0;background:rgba(255,255,255,0.1);border-radius:8px;transition:background .2s;cursor:pointer;"></span>
+              <span id="targetKnob" style="position:absolute;top:2px;left:2px;width:12px;height:12px;background:#8b8fa3;border-radius:50%;transition:transform .2s,background .2s;"></span>
+            </span>
+            Targets
+          </label>
+        </div>
       </div>
       <div class="section-body">
         <div style="position:relative;height:280px;padding:10px;">
@@ -3151,6 +3161,24 @@
     }
 
     // ---- Lifetime Revenue Chart ----
+    var showTargetBars = localStorage.getItem('showTargetBars') !== 'false'; // default ON
+
+    function toggleTargetBars(on) {
+      showTargetBars = on;
+      localStorage.setItem('showTargetBars', on ? 'true' : 'false');
+      updateTargetToggleUI(on);
+      if (lifetimeChartInstance) lifetimeChartInstance.update();
+    }
+    function updateTargetToggleUI(on) {
+      var knob = document.getElementById('targetKnob');
+      var slider = document.getElementById('targetSlider');
+      var chk = document.getElementById('showTargetsChk');
+      if (chk) chk.checked = on;
+      if (knob) knob.style.transform = on ? 'translateX(12px)' : 'translateX(0)';
+      if (knob) knob.style.background = on ? '#94a3b8' : '#4b5563';
+      if (slider) slider.style.background = on ? 'rgba(148,163,184,0.25)' : 'rgba(255,255,255,0.08)';
+    }
+
     function loadLifetimeChart() {
       var acctAmp = getAccountParam();
       fetchJSON('/revenue/lifetime' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(function(data) {
@@ -3210,15 +3238,82 @@
         return monthNames[parseInt(parts[1], 10) - 1] + ' ' + parts[0].slice(2);
       });
 
-      var cumulativeData = data.months.map(function(d) { return d.cumulative; });
+      // For future months (target-only, no actual revenue), hide from cumulative line
+      var cumulativeData = data.months.map(function(d) { return d.revenue > 0 || d.count > 0 ? d.cumulative : null; });
       // Organic = total revenue minus AI attribution
       var organicData = data.months.map(function(d) { return Math.round((d.revenue - (d.aiAttribution || 0)) * 100) / 100; });
       // AI Boost = aiAttribution (0 for pre-AI months)
       var aiBoostData = data.months.map(function(d) { return d.aiAttribution || 0; });
 
+      // Build target lookup: month index → target value
+      var targetByIndex = {};
+      if (data.targets) {
+        data.targets.forEach(function(t) {
+          for (var i = 0; i < data.months.length; i++) {
+            if (data.months[i].month === t.month) { targetByIndex[i] = t.target; break; }
+          }
+        });
+      }
+      // Show toggle if targets exist
+      var hasTargets = Object.keys(targetByIndex).length > 0;
+      var toggleEl = document.getElementById('targetToggle');
+      if (toggleEl) {
+        toggleEl.style.display = hasTargets ? 'flex' : 'none';
+        if (hasTargets) updateTargetToggleUI(showTargetBars);
+      }
+
+      // Plugin: draw expected revenue as grey dashed bars behind the real bars
+      var expectedBarsPlugin = {
+        id: 'expectedBars',
+        beforeDatasetsDraw: function(chart) {
+          if (!showTargetBars) return;
+          var xScale = chart.scales.x;
+          var y1Scale = chart.scales.y1;
+          if (!xScale || !y1Scale) return;
+          var ctx = chart.ctx;
+          // Get bar width from the organic dataset
+          var organicMeta = chart.getDatasetMeta(1); // organic is dataset index 1
+          if (!organicMeta || !organicMeta.data || organicMeta.data.length === 0) return;
+          var sampleBar = organicMeta.data[organicMeta.data.length - 1];
+          var barW = sampleBar ? sampleBar.width : 20;
+
+          for (var idx in targetByIndex) {
+            var target = targetByIndex[idx];
+            if (!target) continue;
+            var barEl = organicMeta.data[idx];
+            if (!barEl) continue;
+            var cx = barEl.x;
+            var topY = y1Scale.getPixelForValue(target);
+            var baseY = y1Scale.getPixelForValue(0);
+            var h = baseY - topY;
+            if (h <= 0) continue;
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(148, 163, 184, 0.12)';
+            ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([5, 4]);
+            var r = 3;
+            var x = cx - barW / 2;
+            ctx.beginPath();
+            ctx.moveTo(x + r, topY);
+            ctx.lineTo(x + barW - r, topY);
+            ctx.quadraticCurveTo(x + barW, topY, x + barW, topY + r);
+            ctx.lineTo(x + barW, baseY);
+            ctx.lineTo(x, baseY);
+            ctx.lineTo(x, topY + r);
+            ctx.quadraticCurveTo(x, topY, x + r, topY);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      };
+
       lifetimeChartInstance = new Chart(ctx, {
         type: 'line',
-        plugins: [aiGlowPlugin],
+        plugins: [aiGlowPlugin, expectedBarsPlugin],
         data: {
           labels: labels,
           datasets: [
@@ -3276,6 +3371,11 @@
                 label: function(context) {
                   var idx = context.dataIndex;
                   var month = data.months[idx];
+                  // Append expected revenue info to the first bar tooltip
+                  var extra = '';
+                  if (targetByIndex[idx] && context.datasetIndex === 1) {
+                    extra = '\nExpected: \u00A3' + targetByIndex[idx].toLocaleString();
+                  }
                   if (context.dataset.label === 'AI Boost') {
                     if (!month || !month.aiAttribution) return null;
                     return 'AI Boost: \u00A3' + month.aiAttribution.toLocaleString() + ' (' + boostPct + '% rate)';
@@ -3286,7 +3386,7 @@
                     if (month.aiAttribution > 0) {
                       label += '  |  Total: \u00A3' + month.revenue.toLocaleString();
                     }
-                    return label;
+                    return extra ? [label, extra.trim()] : label;
                   }
                   return context.dataset.label + ': \u00A3' + context.parsed.y.toLocaleString();
                 }
@@ -3854,10 +3954,43 @@
     }
 
     function returnNoIssues() {
-      // Show celebration screen first — let Daniel choose thank-you or no-follow-up
       if (!currentReturnRental) return;
-      closeReturnModal();
-      showCelebration(currentReturnRental.earnings, false, currentReturnRental.id, true, 'good');
+      var rental = currentReturnRental;
+      // Close modal and immediately process the return (mark as returned on Hygglo, no messages)
+      document.getElementById('returnModalOverlay').classList.remove('open');
+      currentReturnRental = null;
+
+      // Show processing celebration immediately
+      showCelebration(rental.earnings, false, rental.id, false, 'good');
+      document.getElementById('celebrationSubtitle').textContent = 'Marking as returned on Hygglo...';
+      var btn = document.getElementById('celebrationThankYouBtn');
+      var noFollowBtn = document.getElementById('celebrationNoFollowUpBtn');
+      if (btn) { btn.style.display = 'none'; }
+      if (noFollowBtn) { noFollowBtn.style.display = 'none'; }
+
+      fetch('/rentals/' + rental.id + '/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(result) {
+        if (result.success) {
+          var sub = 'earned';
+          if (result.markedOnHygglo) {
+            sub += ' \u2014 marked as returned on Hygglo \u2705';
+          } else {
+            sub += ' \u2014 could not mark on Hygglo (try manually)';
+          }
+          document.getElementById('celebrationSubtitle').textContent = sub;
+        } else {
+          document.getElementById('celebrationSubtitle').textContent = result.error || 'Failed to process return';
+        }
+        setTimeout(loadReturnHub, 1000);
+      })
+      .catch(function(err) {
+        document.getElementById('celebrationSubtitle').textContent = 'Error: ' + (err.message || 'Unknown');
+      });
     }
 
     var RETURN_ISSUE_OPTIONS = [
@@ -4120,6 +4253,19 @@
     }
 
     function closeCelebration() {
+      // If return hasn't been processed yet (user closing without clicking a button),
+      // auto-process with "no follow up" so the return isn't silently dropped
+      if (celebrationPendingReturn && celebrationRentalId) {
+        celebrationPendingReturn = false;
+        fetch('/rentals/' + celebrationRentalId + '/return', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
+        })
+        .then(function(res) { return res.json(); })
+        .then(function() { setTimeout(loadReturnHub, 1000); })
+        .catch(function() {});
+      }
       document.getElementById('celebrationOverlay').classList.remove('open');
       stopConfetti();
     }

@@ -369,9 +369,10 @@ export class RevenueService {
     weakestMonth: { month: string; revenue: number } | null;
     boostRate: number;
     aiActiveFrom: string;
+    targets: { month: string; target: number }[];
   }> {
     const rentals = await this.getRentalsWithRevenue(account);
-    if (rentals.length === 0) return { months: [], totalRevenue: 0, totalMonths: 0, avgMonthly: 0, strongestMonth: null, weakestMonth: null, boostRate: 0, aiActiveFrom: '2026-02' };
+    if (rentals.length === 0) return { months: [], totalRevenue: 0, totalMonths: 0, avgMonthly: 0, strongestMonth: null, weakestMonth: null, boostRate: 0, aiActiveFrom: '2026-02', targets: [] };
 
     // Find the earliest start_date
     let earliest = new Date();
@@ -448,6 +449,37 @@ export class RevenueService {
       ? completedMature.reduce((worst, m) => m.revenue < worst.revenue ? m : worst)
       : null;
 
+    // Revenue targets for current month + next month based on real data
+    const targets: { month: string; target: number }[] = [];
+
+    // Current month target: use projection (confirmed + daily rate × remaining)
+    const projection = await this.getMonthlyProjection(account);
+    targets.push({ month: currentMonth, target: Math.round(projection.projectedMonthEarnings) });
+
+    // Next month target: weighted average of last 3 completed months (most recent = heaviest)
+    const completedMonths = results.filter(m => m.month < currentMonth && m.revenue > 0);
+    const recent3 = completedMonths.slice(-3);
+    let nextTarget = avgMonthly; // fallback
+    if (recent3.length >= 3) {
+      nextTarget = Math.round(recent3[2].revenue * 0.5 + recent3[1].revenue * 0.3 + recent3[0].revenue * 0.2);
+    } else if (recent3.length >= 2) {
+      nextTarget = Math.round(recent3[recent3.length - 1].revenue * 0.6 + recent3[recent3.length - 2].revenue * 0.4);
+    } else if (recent3.length === 1) {
+      nextTarget = Math.round(recent3[0].revenue);
+    }
+    const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const nextMonthKey = nextMonthDate.toISOString().split('T')[0].substring(0, 7);
+    targets.push({ month: nextMonthKey, target: nextTarget });
+
+    // Add next month entry to results so the chart has an x-axis label for it
+    results.push({
+      month: nextMonthKey,
+      revenue: 0,
+      cumulative: Math.round(cumulative * 100) / 100,
+      count: 0,
+      aiAttribution: 0,
+    });
+
     return {
       months: results,
       totalRevenue: Math.round(cumulative * 100) / 100,
@@ -457,6 +489,7 @@ export class RevenueService {
       weakestMonth: weakest ? { month: weakest.month, revenue: weakest.revenue } : null,
       boostRate,
       aiActiveFrom: AI_ACTIVE_FROM,
+      targets,
     };
   }
 
@@ -517,12 +550,10 @@ export class RevenueService {
     const ongoing = visits.filter(v => this.getLifecycle({ startDate: v.startDate, endDate: v.endDate }) === 'ongoing').length;
     const upcoming = visits.filter(v => this.getLifecycle({ startDate: v.startDate, endDate: v.endDate }) === 'upcoming').length;
 
-    // Upcoming earnings to avoid double-counting in projection
-    const upcomingEarnings = visits
-      .filter(v => this.getLifecycle({ startDate: v.startDate, endDate: v.endDate }) === 'upcoming')
-      .reduce((sum, v) => sum + v.earnings, 0);
+    // Daily rate = ALL confirmed revenue / days elapsed — goes up with every new booking
+    const currentDailyRate = daysElapsed > 0 ? currentEarnings / daysElapsed : 0;
 
-    // Historical data: previous 2 months (by pickup date)
+    // Historical data: previous 2 months (by pickup date) — floor for projection
     const prev1Start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const prev1End = currentMonthStart;
     const prev2Start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
@@ -536,9 +567,6 @@ export class RevenueService {
     const prev1Days = Math.round((prev1End.getTime() - prev1Start.getTime()) / 86400000);
     const prev2Days = Math.round((prev2End.getTime() - prev2Start.getTime()) / 86400000);
 
-    // Current month daily run rate
-    const currentDailyRate = daysElapsed > 0 ? currentEarnings / daysElapsed : 0;
-
     // Historical daily average (weighted: 60% recent, 40% older)
     let historicalDaily: number;
     if (prev1Earnings > 0 && prev2Earnings > 0) {
@@ -549,19 +577,12 @@ export class RevenueService {
       historicalDaily = 0;
     }
 
-    // Use the HIGHER of current trajectory vs historical average
-    let dailyAvgEarnings: number;
-    if (currentDailyRate > 0 && historicalDaily > 0) {
-      dailyAvgEarnings = Math.max(currentDailyRate, historicalDaily);
-    } else if (currentDailyRate > 0) {
-      dailyAvgEarnings = currentDailyRate;
-    } else {
-      dailyAvgEarnings = historicalDaily;
-    }
+    // Displayed daily avg = current month's actual rate (responsive to new bookings)
+    const dailyAvgEarnings = currentDailyRate;
 
-    // Projection: current confirmed + (daily rate × remaining days) - already-counted upcoming
-    const projectedFromRemaining = Math.max(0, dailyAvgEarnings * daysRemaining - upcomingEarnings);
-    const projectedEarnings = currentEarnings + projectedFromRemaining;
+    // Projection uses MAX(current, historical) as the rate — historical is floor
+    const projectionRate = Math.max(currentDailyRate, historicalDaily);
+    const projectedEarnings = currentEarnings + projectionRate * daysRemaining;
 
     return {
       currentMonthEarnings: Math.round(currentEarnings * 100) / 100,

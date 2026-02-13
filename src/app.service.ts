@@ -880,32 +880,42 @@ export class AppService {
       this.logger.log(`No follow-up for rental ${rentalId} (${renterName}) — skipped by owner`);
     }
 
-    // Mark as returned on Hygglo — awaited so dashboard gets real result
-    if (rental.status !== 'completed') {
-      const listingId = rental.listing_id;
-      const forceReturn = !!body.dashboardApproved;
-      try {
-        const apiResult = await this.hyggloService.markAsReturned(listingId, account, forceReturn);
-        if (apiResult.success) {
-          await this.prisma.rental.update({ where: { id: rentalId }, data: { status: 'completed' } });
-          this.logger.log(`Marked rental ${rentalId} as returned via Hygglo API + updated local status`);
-          markedOnHygglo = true;
-        } else {
-          this.logger.debug(`API markAsReturned failed, trying Playwright: ${apiResult.error}`);
-          const pwResult = await this.playwrightService.markAsReturned(listingId, account, forceReturn);
-          if (pwResult.success) {
-            await this.prisma.rental.update({ where: { id: rentalId }, data: { status: 'completed' } });
-            this.logger.log(`Marked rental ${rentalId} as returned via Playwright + updated local status`);
-            markedOnHygglo = true;
-          } else {
-            this.logger.warn(`Failed to mark rental ${rentalId} as returned on Hygglo: API=${apiResult.error}, Playwright=${pwResult.error}`);
-          }
-        }
-      } catch (err) {
-        this.logger.warn(`markAsReturned failed for rental ${rentalId}: ${err.message}`);
+    // Mark as returned on Hygglo — always attempt regardless of local status
+    // (scanner may auto-complete locally but rental may still be open on Hygglo)
+    const listingId = rental.listing_id;
+    const forceReturn = !!body.dashboardApproved;
+    try {
+      // Try API first (fast)
+      const apiResult = await this.hyggloService.markAsReturned(listingId, account, forceReturn);
+      if (apiResult.success) {
+        this.logger.log(`Marked rental ${rentalId} as returned via Hygglo API`);
+        markedOnHygglo = true;
+      } else {
+        this.logger.debug(`API markAsReturned failed for ${rentalId}: ${apiResult.error}`);
       }
-    } else {
-      markedOnHygglo = true; // Already completed
+
+      // Always also try Playwright — API may return 200 without actually marking on Hygglo
+      try {
+        const pwResult = await this.playwrightService.markAsReturned(listingId, account, forceReturn);
+        if (pwResult.success) {
+          this.logger.log(`Marked rental ${rentalId} as returned via Playwright`);
+          markedOnHygglo = true;
+        } else if (!markedOnHygglo) {
+          this.logger.warn(`Failed to mark rental ${rentalId} as returned on Hygglo: API=${apiResult.error}, Playwright=${pwResult.error}`);
+        }
+      } catch (pwErr) {
+        if (!markedOnHygglo) {
+          this.logger.warn(`Playwright markAsReturned failed for ${rentalId}: ${pwErr.message}`);
+        }
+      }
+
+      // Update local status if marked on Hygglo
+      if (markedOnHygglo && rental.status !== 'completed') {
+        await this.prisma.rental.update({ where: { id: rentalId }, data: { status: 'completed' } });
+        this.logger.log(`Updated rental ${rentalId} local status to completed`);
+      }
+    } catch (err) {
+      this.logger.warn(`markAsReturned failed for rental ${rentalId}: ${err.message}`);
     }
 
     // Create return_processing record
