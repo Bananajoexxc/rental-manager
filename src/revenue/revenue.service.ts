@@ -1905,7 +1905,7 @@ export class RevenueService {
     const rentals = await this.prisma.rental.findMany({
       where: {
         rental_price: { gt: 0 },
-        parsed_items: { not: null },
+        parsed_items: { not: Prisma.JsonNull },
         end_date: { gte: periodStart, lt: periodEnd },
       },
       select: {
@@ -1954,7 +1954,7 @@ export class RevenueService {
     const allRentals = await this.prisma.rental.findMany({
       where: {
         rental_price: { gt: 0 },
-        parsed_items: { not: null },
+        parsed_items: { not: Prisma.JsonNull },
         end_date: { lt: periodEnd },
       },
       select: {
