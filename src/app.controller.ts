@@ -350,6 +350,32 @@ export class AppController {
     return await this.revenueService.calibrateBaselines();
   }
 
+  @Get('revenue/bundle-revenue')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Top bundles/sets by cumulative revenue' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Top bundle revenue' })
+  async getTopBundles(@Query('limit') limit?: string) {
+    return await this.revenueService.getTopBundles(limit ? parseInt(limit, 10) : 20);
+  }
+
+  @Get('revenue/bundle-revenue-history')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Bundle revenue history by month' })
+  @ApiQuery({ name: 'bundle', required: false, description: 'Bundle key filter' })
+  @ApiResponse({ status: 200, description: 'Bundle revenue snapshots' })
+  async getBundleRevenueHistory(@Query('bundle') bundle?: string) {
+    return await this.revenueService.getBundleRevenueHistory(bundle || undefined);
+  }
+
+  @Get('revenue/bundle-revenue-backfill')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Backfill bundle revenue snapshots for all historical months' })
+  @ApiResponse({ status: 200, description: 'Backfill results' })
+  async backfillBundleRevenueSnapshots() {
+    return await this.revenueService.backfillBundleRevenueSnapshots();
+  }
+
   // --- Calendar ---
 
   @Get('calendar/bookings')
@@ -505,6 +531,17 @@ export class AppController {
           additionalParts.push(`\n\nBUNDLE PRICING (listed bundle rates, different from individual item prices):\n${bundleLines.join('\n')}`);
         }
       } catch { /* bundle pricing optional */ }
+
+      // Top bundle/set revenue (actual rental performance of item combinations)
+      try {
+        const topBundles = await this.revenueService.getTopBundles(15);
+        if (topBundles.length > 0) {
+          const bundleRevLines = topBundles.map((b: any) =>
+            `- ${b.bundle_label}: £${b.cumulative_revenue} (${b.cumulative_rentals} rentals, ${b.first_rental?.toISOString().split('T')[0] || '?'} to ${b.last_rental?.toISOString().split('T')[0] || '?'})`
+          );
+          additionalParts.push(`\n\nTOP BUNDLE/SET REVENUE (actual completed rental performance):\n${bundleRevLines.join('\n')}`);
+        }
+      } catch { /* bundle revenue optional */ }
 
       // Competitor intelligence: competitor catalog, pricing, reviews, market gaps
       try {

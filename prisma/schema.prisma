@@ -763,6 +763,36 @@ model item_earnings_snapshot {
   @@index([item_name])
 }
 
+// === Bundle/Set Monthly Revenue Snapshot ===
+
+model bundle_revenue_snapshot {
+  id              String   @id @default(uuid())
+  period_start    DateTime // 1st of month
+  period_end      DateTime // 1st of next month
+
+  bundle_key      String   // sorted item names joined with ' + '
+  bundle_label    String   // human-readable label (e.g. "Sony FX3 + 24-70mm GM Kit")
+  items           String[] // individual item names in the bundle
+  listing_title   String?  // representative Hygglo listing title
+
+  revenue         Float    // total owner earnings for this bundle combo in this period
+  rental_count    Int      // number of completed rentals
+  avg_per_rental  Float    // average revenue per rental
+  days_rented     Int      // total rental days
+
+  // Cumulative
+  cumulative_revenue  Float
+  cumulative_rentals  Int
+  first_rental        DateTime?
+  last_rental         DateTime?
+
+  created_at      DateTime @default(now())
+
+  @@unique([period_start, bundle_key])
+  @@index([period_start])
+  @@index([bundle_key])
+}
+
 // === eBay Price Cache (Sell Recommender) ===
 
 model ebay_price_cache {

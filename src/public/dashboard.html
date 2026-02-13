@@ -2258,6 +2258,28 @@
         });
 
         html += '</tbody></table></div>';
+
+        // Retired/old items section (grey, separated)
+        var unmatchedItems = data.unmatchedItems || [];
+        if (unmatchedItems.length > 0) {
+          html += '<div style="margin-top:16px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:12px;">';
+          html += '<div style="color:#6b7280;font-size:11px;font-style:italic;margin-bottom:8px;">Old / Retired Items (no longer in inventory)</div>';
+          html += '<table style="width:100%;border-collapse:collapse;font-size:11px;opacity:0.55;">';
+          html += '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.05);color:#6b7280;text-align:left;">';
+          html += '<th style="padding:4px 8px;">Item</th>';
+          html += '<th style="padding:4px 4px;text-align:right;">Total</th>';
+          html += '<th style="padding:4px 4px;text-align:right;">Count</th>';
+          html += '</tr></thead><tbody>';
+          unmatchedItems.forEach(function(ui) {
+            html += '<tr style="border-bottom:1px solid #1a1d2a;">';
+            html += '<td style="padding:4px 8px;color:#6b7280;">' + escapeHtml(ui.item) + '</td>';
+            html += '<td style="padding:4px 4px;text-align:right;color:#6b7280;">\u00A3' + ui.totalRevenue + '</td>';
+            html += '<td style="padding:4px 4px;text-align:right;color:#6b7280;">' + ui.totalCount + '</td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table></div>';
+        }
+
         body.innerHTML = html;
       }).catch(function(e) {
         body.innerHTML = '<div class="error-state">Error: ' + e.message + '</div>';

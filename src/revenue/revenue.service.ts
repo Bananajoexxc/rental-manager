@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyggloService, HyggloAccount } from '../hygglo/hygglo.service';
+import { Prisma } from '@prisma/client';
 import { isAccessoryItem, MASTER_INVENTORY, findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
 import { getOneDayPrice } from '../data/pricing-catalog';
 
@@ -681,6 +682,7 @@ export class RevenueService {
         count: data.count,
         avgPerRental: data.count > 0 ? Math.round((data.profit / data.count) * 100) / 100 : 0,
       }))
+      .filter(i => i.profit > 0) // Only show items with actual attributed revenue
       .sort((a, b) => b.profit - a.profit);
 
     // Ensure displayed items + retiredItems + otherRevenue = total period revenue (no revenue lost)
@@ -1856,6 +1858,251 @@ export class RevenueService {
 
     this.logger.log(`Item earnings backfill: ${monthsProcessed} months, ${itemsTotal} item-rows`);
     return { monthsProcessed, itemsTotal };
+  }
+
+  // ==========================================
+  // Bundle/Set Revenue Snapshots
+  // ==========================================
+
+  /**
+   * Monthly cron: snapshot bundle revenue for the previous month.
+   * Runs at 5:45am on the 1st (after item earnings at 5:30).
+   */
+  @Cron('0 45 5 1 * *')
+  async monthlyBundleRevenueSnapshot(): Promise<void> {
+    this.logger.log('=== MONTHLY BUNDLE REVENUE SNAPSHOT: Starting ===');
+    try {
+      const now = new Date();
+      const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const periodEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+      const count = await this.takeBundleRevenueSnapshot(periodStart, periodEnd);
+      this.logger.log(`Bundle revenue snapshot: ${count} rows saved for ${periodStart.toISOString().substring(0, 7)}`);
+    } catch (err) {
+      this.logger.error(`Monthly bundle revenue snapshot failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Generate a human-readable label for a bundle from its item names.
+   */
+  private generateBundleLabel(items: string[]): string {
+    // Filter out accessories/generic items for a clean label
+    const main = items.filter(i =>
+      !i.includes('card') && !i.includes('ND filter') && !i.includes('battery') &&
+      !i.includes('256GB') && !i.includes('512GB')
+    );
+    if (main.length === 0) return items.join(' + ');
+    if (main.length <= 3) return main.join(' + ');
+    return main.slice(0, 2).join(' + ') + ' +' + (main.length - 2) + ' more';
+  }
+
+  /**
+   * Core logic: snapshot bundle/set revenue for a period.
+   * Groups completed rentals by their parsed item combination.
+   */
+  async takeBundleRevenueSnapshot(periodStart: Date, periodEnd: Date): Promise<number> {
+    // Get completed multi-item rentals in this period (end_date within period)
+    const rentals = await this.prisma.rental.findMany({
+      where: {
+        rental_price: { gt: 0 },
+        parsed_items: { not: null },
+        end_date: { gte: periodStart, lt: periodEnd },
+      },
+      select: {
+        title: true,
+        parsed_items: true,
+        rental_price: true,
+        start_date: true,
+        end_date: true,
+      },
+    });
+
+    // Group by sorted item combination
+    const bundleGroups = new Map<string, {
+      items: string[];
+      title: string;
+      revenue: number;
+      count: number;
+      days: number;
+    }>();
+
+    for (const r of rentals) {
+      const parsedItems = r.parsed_items as { item: string; qty: number }[];
+      if (!parsedItems || parsedItems.length < 2) continue;
+
+      const itemNames = parsedItems.map(i => i.item).sort();
+      const bundleKey = itemNames.join(' + ');
+
+      if (!bundleGroups.has(bundleKey)) {
+        bundleGroups.set(bundleKey, {
+          items: itemNames,
+          title: r.title?.substring(0, 200) || '',
+          revenue: 0,
+          count: 0,
+          days: 0,
+        });
+      }
+      const g = bundleGroups.get(bundleKey)!;
+      g.revenue += r.rental_price || 0;
+      g.count += 1;
+      if (r.start_date && r.end_date) {
+        g.days += Math.max(1, Math.round((r.end_date.getTime() - r.start_date.getTime()) / 86400000) + 1);
+      }
+    }
+
+    // Get cumulative all-time stats per bundle (up to and including this period)
+    const allRentals = await this.prisma.rental.findMany({
+      where: {
+        rental_price: { gt: 0 },
+        parsed_items: { not: null },
+        end_date: { lt: periodEnd },
+      },
+      select: {
+        parsed_items: true,
+        rental_price: true,
+        start_date: true,
+        end_date: true,
+      },
+    });
+
+    const cumulativeMap = new Map<string, { revenue: number; count: number; firstRental: Date | null; lastRental: Date | null }>();
+    for (const r of allRentals) {
+      const parsedItems = r.parsed_items as { item: string; qty: number }[];
+      if (!parsedItems || parsedItems.length < 2) continue;
+      const bundleKey = parsedItems.map(i => i.item).sort().join(' + ');
+      if (!cumulativeMap.has(bundleKey)) {
+        cumulativeMap.set(bundleKey, { revenue: 0, count: 0, firstRental: null, lastRental: null });
+      }
+      const c = cumulativeMap.get(bundleKey)!;
+      c.revenue += r.rental_price || 0;
+      c.count += 1;
+      if (!c.firstRental || (r.start_date && r.start_date < c.firstRental)) c.firstRental = r.start_date;
+      if (!c.lastRental || (r.end_date && r.end_date > c.lastRental)) c.lastRental = r.end_date;
+    }
+
+    // Save snapshots for bundles that had activity in this period OR have cumulative history
+    let savedCount = 0;
+    const allBundleKeys = new Set([...bundleGroups.keys(), ...cumulativeMap.keys()]);
+
+    for (const bundleKey of allBundleKeys) {
+      const periodData = bundleGroups.get(bundleKey);
+      const cumData = cumulativeMap.get(bundleKey);
+
+      const revenue = periodData ? Math.round(periodData.revenue * 100) / 100 : 0;
+      const rentalCount = periodData?.count || 0;
+      // Only save bundles that have had at least some revenue
+      if (revenue === 0 && (!cumData || cumData.revenue === 0)) continue;
+      // Only save if this period had activity (skip zero-revenue months to reduce bloat)
+      if (revenue === 0) continue;
+
+      const items = periodData?.items || bundleKey.split(' + ');
+      const data = {
+        period_start: periodStart,
+        period_end: periodEnd,
+        bundle_key: bundleKey,
+        bundle_label: this.generateBundleLabel(items),
+        items,
+        listing_title: periodData?.title || null,
+        revenue,
+        rental_count: rentalCount,
+        avg_per_rental: rentalCount > 0 ? Math.round((revenue / rentalCount) * 100) / 100 : 0,
+        days_rented: periodData?.days || 0,
+        cumulative_revenue: Math.round((cumData?.revenue || 0) * 100) / 100,
+        cumulative_rentals: cumData?.count || 0,
+        first_rental: cumData?.firstRental || null,
+        last_rental: cumData?.lastRental || null,
+      };
+
+      const existing = await this.prisma.bundle_revenue_snapshot.findFirst({
+        where: { period_start: periodStart, bundle_key: bundleKey },
+      });
+
+      if (existing) {
+        await this.prisma.bundle_revenue_snapshot.update({ where: { id: existing.id }, data });
+      } else {
+        await this.prisma.bundle_revenue_snapshot.create({ data });
+      }
+      savedCount++;
+    }
+
+    return savedCount;
+  }
+
+  /**
+   * Get bundle revenue history.
+   */
+  async getBundleRevenueHistory(bundleKey?: string): Promise<any[]> {
+    const where: any = {};
+    if (bundleKey) where.bundle_key = bundleKey;
+
+    return this.prisma.bundle_revenue_snapshot.findMany({
+      where,
+      orderBy: [{ cumulative_revenue: 'desc' }, { period_start: 'asc' }],
+    });
+  }
+
+  /**
+   * Get top bundles by all-time revenue (latest snapshot per bundle).
+   */
+  async getTopBundles(limit: number = 20): Promise<any[]> {
+    // Get the most recent snapshot for each bundle
+    const all = await this.prisma.bundle_revenue_snapshot.findMany({
+      orderBy: { period_start: 'desc' },
+    });
+
+    // Deduplicate: keep latest snapshot per bundle_key
+    const latest = new Map<string, any>();
+    for (const row of all) {
+      if (!latest.has(row.bundle_key)) {
+        latest.set(row.bundle_key, row);
+      }
+    }
+
+    return [...latest.values()]
+      .sort((a, b) => b.cumulative_revenue - a.cumulative_revenue)
+      .slice(0, limit);
+  }
+
+  /**
+   * Backfill bundle revenue snapshots from earliest rental.
+   */
+  async backfillBundleRevenueSnapshots(): Promise<{ monthsProcessed: number; bundlesTotal: number }> {
+    const earliest = await this.prisma.rental.findFirst({
+      where: { rental_price: { gt: 0 }, parsed_items: { not: null } },
+      orderBy: { start_date: 'asc' },
+      select: { start_date: true },
+    });
+
+    if (!earliest?.start_date) {
+      return { monthsProcessed: 0, bundlesTotal: 0 };
+    }
+
+    const now = new Date();
+    const cursor = new Date(earliest.start_date.getFullYear(), earliest.start_date.getMonth(), 1);
+    const lastMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    let monthsProcessed = 0;
+    let bundlesTotal = 0;
+
+    while (cursor < lastMonth) {
+      const periodStart = new Date(cursor);
+      const periodEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+
+      const existing = await this.prisma.bundle_revenue_snapshot.findFirst({
+        where: { period_start: periodStart },
+      });
+
+      if (!existing) {
+        const count = await this.takeBundleRevenueSnapshot(periodStart, periodEnd);
+        bundlesTotal += count;
+        monthsProcessed++;
+      }
+
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    this.logger.log(`Bundle revenue backfill: ${monthsProcessed} months, ${bundlesTotal} bundle-rows`);
+    return { monthsProcessed, bundlesTotal };
   }
 
   private getPeriodStart(period: 'week' | 'month' | 'all'): Date | null {
