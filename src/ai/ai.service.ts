@@ -21,6 +21,8 @@ export interface AiContext {
   maxTokens?: number;
   /** Structured rental dates for countdown enrichment */
   rentalDates?: { start?: Date; end?: Date };
+  /** Current funnel stage — used to gate prompt components (saves input tokens) */
+  conversationStage?: string;
 }
 
 @Injectable()
@@ -91,7 +93,8 @@ export class AiService {
     const parts: string[] = [];
 
     // Get base system prompt from prompt manager (DB-backed modular components)
-    const basePrompt = await this.promptManager.buildSystemPrompt('message');
+    // Pass conversation stage to gate irrelevant components (saves ~800-2000 input tokens in later stages)
+    const basePrompt = await this.promptManager.buildSystemPrompt('message', context.conversationStage);
     parts.push(basePrompt);
 
     if (temporalBlock) {

@@ -883,9 +883,9 @@ export class MemoryService implements OnModuleInit {
 
       const messageCount = messages.length;
       if (!forceRefresh && state?.conversation_summary && messageCount > 0) {
-        // Return cached summary if very recently built (within 15s) — avoids redundant calls
+        // Return cached summary if recently built (within 5min) — avoids redundant Haiku calls
         const summaryAge = state.updated_at ? Date.now() - state.updated_at.getTime() : Infinity;
-        if (summaryAge < 15_000) return state.conversation_summary;
+        if (summaryAge < 300_000) return state.conversation_summary;
       }
 
       // Build summary from even a single message — don't wait for 4

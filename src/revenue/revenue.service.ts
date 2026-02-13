@@ -5,6 +5,8 @@ import { HyggloService, HyggloAccount } from '../hygglo/hygglo.service';
 import { Prisma } from '@prisma/client';
 import { isAccessoryItem, MASTER_INVENTORY, findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
 import { getOneDayPrice } from '../data/pricing-catalog';
+import { HISTORICAL_REVENUE, getHistoricalMonth, getHistoricalStart } from '../data/historical-revenue';
+import { getTotalEquipmentValue } from '../data/acquisition-costs';
 
 /** Rental table row used for revenue calculations (captures ALL Hygglo revenue, not just matched items) */
 interface RentalRevenueRow {
@@ -361,7 +363,7 @@ export class RevenueService {
    * Returns every month from the first rental to now.
    */
   async getLifetimeRevenue(account?: string): Promise<{
-    months: { month: string; revenue: number; cumulative: number; count: number; aiAttribution: number }[];
+    months: { month: string; revenue: number; cumulative: number; count: number; aiAttribution: number; dbcinemaRevenue: number; leoRevenue: number; danielRevenue: number; vertusRevenue: number; damageRevenue: number; bookedRevenue: number; bookedDbcinema: number; bookedLeo: number }[];
     totalRevenue: number;
     totalMonths: number;
     avgMonthly: number;
@@ -372,19 +374,27 @@ export class RevenueService {
     targets: { month: string; target: number }[];
   }> {
     const rentals = await this.getRentalsWithRevenue(account);
-    if (rentals.length === 0) return { months: [], totalRevenue: 0, totalMonths: 0, avgMonthly: 0, strongestMonth: null, weakestMonth: null, boostRate: 0, aiActiveFrom: '2026-02', targets: [] };
+    const hasHistorical = !account && HISTORICAL_REVENUE.length > 0;
+    if (rentals.length === 0 && !hasHistorical) return { months: [], totalRevenue: 0, totalMonths: 0, avgMonthly: 0, strongestMonth: null, weakestMonth: null, boostRate: 0, aiActiveFrom: '2026-02', targets: [], };
 
-    // Find the earliest start_date
+    // Find the earliest start_date (include historical data if not filtered by account)
     let earliest = new Date();
     for (const r of rentals) {
       if (r.start_date && r.start_date < earliest) earliest = r.start_date;
+    }
+    // Extend to cover historical revenue from retired accounts (Daniel, Vertus)
+    const histStart = getHistoricalStart();
+    if (hasHistorical && histStart) {
+      const [hy, hm] = histStart.split('-').map(Number);
+      const histDate = new Date(hy, hm - 1, 1);
+      if (histDate < earliest) earliest = histDate;
     }
 
     const now = new Date();
     const startMonth = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
     const endMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    const results: { month: string; revenue: number; cumulative: number; count: number; aiAttribution: number }[] = [];
+    const results: { month: string; revenue: number; cumulative: number; count: number; aiAttribution: number; dbcinemaRevenue: number; leoRevenue: number; danielRevenue: number; vertusRevenue: number; damageRevenue: number; bookedRevenue: number; bookedDbcinema: number; bookedLeo: number }[] = [];
     let cumulative = 0;
 
     // Get the current AI boost rate for attribution calculation
@@ -411,6 +421,12 @@ export class RevenueService {
       const rounded = Math.round(revenue * 100) / 100;
       cumulative += rounded;
 
+      // Split revenue by account
+      const dbRev = monthRentals.filter(r => r.account === 'dbcinema').reduce((s, r) => s + (r.rental_price || 0), 0);
+      const leoRev = monthRentals.filter(r => r.account === 'leo').reduce((s, r) => s + (r.rental_price || 0), 0);
+      // Attribute null-account rentals to dbcinema (legacy primary)
+      const unattributed = revenue - dbRev - leoRev;
+
       // AI attribution: only for months >= 2026-02 (when AI went live)
       const monthKey = monthStart.toISOString().split('T')[0].substring(0, 7);
       const aiAttribution = monthKey >= AI_ACTIVE_FROM
@@ -423,9 +439,57 @@ export class RevenueService {
         cumulative: Math.round(cumulative * 100) / 100,
         count: visitKeys.size,
         aiAttribution,
+        dbcinemaRevenue: Math.round((dbRev + unattributed) * 100) / 100,
+        leoRevenue: Math.round(leoRev * 100) / 100,
+        danielRevenue: 0,
+        vertusRevenue: 0,
+        damageRevenue: 0,
+        bookedRevenue: 0,
+        bookedDbcinema: 0,
+        bookedLeo: 0,
       });
 
       cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    // Merge historical revenue from retired accounts (Daniel, Vertus) + damage costs
+    // Only when viewing all accounts (not filtered by specific account)
+    if (hasHistorical) {
+      let cumulativeAdj = 0;
+      for (const entry of results) {
+        const hist = getHistoricalMonth(entry.month);
+        if (hist) {
+          const damageRevenue = hist.damageCosts;
+
+          if (hist.totalOverallMade > 0) {
+            // Full historical override: totalOverallMade is the definitive total (payment-date)
+            const netRental = hist.totalOverallMade - damageRevenue;
+            // Cap tracked revenue to net rental (payment-date vs rental-date timing lag)
+            const totalTracked = entry.dbcinemaRevenue + entry.leoRevenue;
+            if (totalTracked > netRental) {
+              const ratio = netRental / totalTracked;
+              entry.dbcinemaRevenue = Math.round(entry.dbcinemaRevenue * ratio * 100) / 100;
+              entry.leoRevenue = Math.round(entry.leoRevenue * ratio * 100) / 100;
+            }
+            const cappedTracked = Math.min(totalTracked, netRental);
+            // Remainder after tracked accounts = Daniel + Vertus (split 50/50)
+            const remainder = Math.max(0, netRental - cappedTracked);
+            const danielShare = Math.round(remainder / 2 * 100) / 100;
+            const vertusShare = Math.round((remainder - danielShare) * 100) / 100;
+            entry.danielRevenue = danielShare;
+            entry.vertusRevenue = vertusShare;
+            entry.damageRevenue = damageRevenue;
+            entry.revenue = hist.totalOverallMade;
+          } else if (damageRevenue > 0) {
+            // Damage-only overlay: don't override tracked rental revenue, just add damage
+            entry.damageRevenue = damageRevenue;
+            entry.revenue += damageRevenue;
+          }
+        }
+        cumulativeAdj += entry.revenue;
+        entry.cumulative = Math.round(cumulativeAdj * 100) / 100;
+      }
+      cumulative = cumulativeAdj;
     }
 
     // Compute stats: avg monthly, strongest month, weakest month
@@ -471,6 +535,23 @@ export class RevenueService {
     const nextMonthKey = nextMonthDate.toISOString().split('T')[0].substring(0, 7);
     targets.push({ month: nextMonthKey, target: nextTarget });
 
+    // Query confirmed bookings for next month to show "already booked" preview
+    const nextStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const nextEnd = new Date(now.getFullYear(), now.getMonth() + 2, 1);
+    const bookedWhere: any = {
+      status: 'confirmed',
+      start_date: { gte: nextStart, lt: nextEnd },
+      revenue: { gt: 0 },
+    };
+    if (account) bookedWhere.account = account;
+    const booked = await this.prisma.booking.findMany({
+      where: bookedWhere,
+      select: { revenue: true, account: true },
+    });
+    const bookedTotal = booked.reduce((s, b) => s + (b.revenue || 0), 0);
+    const bookedDb = booked.filter(b => b.account === 'dbcinema' || (!b.account && !account)).reduce((s, b) => s + (b.revenue || 0), 0);
+    const bookedLeo = booked.filter(b => b.account === 'leo').reduce((s, b) => s + (b.revenue || 0), 0);
+
     // Add next month entry to results so the chart has an x-axis label for it
     results.push({
       month: nextMonthKey,
@@ -478,6 +559,14 @@ export class RevenueService {
       cumulative: Math.round(cumulative * 100) / 100,
       count: 0,
       aiAttribution: 0,
+      dbcinemaRevenue: 0,
+      leoRevenue: 0,
+      danielRevenue: 0,
+      vertusRevenue: 0,
+      damageRevenue: 0,
+      bookedRevenue: Math.round(bookedTotal * 100) / 100,
+      bookedDbcinema: Math.round(bookedDb * 100) / 100,
+      bookedLeo: Math.round(bookedLeo * 100) / 100,
     });
 
     return {
@@ -2541,6 +2630,821 @@ export class RevenueService {
     return {
       start: new Date(now.getFullYear(), now.getMonth() - monthsBack + 1, 1),
       end: new Date(now.getFullYear(), now.getMonth() + 1, 1), // cap at end of current month
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // UK TAX CALCULATION — Sole trader, not VAT registered
+  // Tax year runs April 6 → April 5. Uses 2025/26 rates.
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * Get the UK tax year boundaries for a given date.
+   * UK tax year: 6 April Year1 → 5 April Year2
+   */
+  private getUkTaxYear(date: Date = new Date()): { label: string; start: Date; end: Date } {
+    const year = date.getFullYear();
+    const month = date.getMonth(); // 0-indexed
+    const day = date.getDate();
+
+    // If before April 6, we're in the previous year's tax year
+    const taxYearStartYear = (month < 3 || (month === 3 && day < 6)) ? year - 1 : year;
+    return {
+      label: `${taxYearStartYear}/${(taxYearStartYear + 1).toString().slice(-2)}`,
+      start: new Date(taxYearStartYear, 3, 6), // April 6
+      end: new Date(taxYearStartYear + 1, 3, 5, 23, 59, 59, 999), // April 5 next year
+    };
+  }
+
+  /**
+   * Calculate UK income tax for a sole trader (2025/26 rates).
+   * Personal allowance: £12,570
+   * Basic rate: 20% on £12,571–£50,270
+   * Higher rate: 40% on £50,271–£125,140
+   * Additional rate: 45% above £125,140
+   */
+  private calculateIncomeTax(taxableProfit: number): {
+    total: number;
+    personalAllowance: number;
+    basicRate: number;
+    higherRate: number;
+    additionalRate: number;
+    bands: { band: string; rate: number; taxable: number; tax: number }[];
+  } {
+    const PERSONAL_ALLOWANCE = 12570;
+    const BASIC_LIMIT = 50270;
+    const HIGHER_LIMIT = 125140;
+
+    // Personal allowance tapers above £100,000 (£1 lost per £2 over £100k)
+    let personalAllowance = PERSONAL_ALLOWANCE;
+    if (taxableProfit > 100000) {
+      personalAllowance = Math.max(0, PERSONAL_ALLOWANCE - Math.floor((taxableProfit - 100000) / 2));
+    }
+
+    const taxableAfterAllowance = Math.max(0, taxableProfit - personalAllowance);
+
+    const bands: { band: string; rate: number; taxable: number; tax: number }[] = [];
+
+    // Basic rate: 20% on first £37,700 (£50,270 - £12,570)
+    const basicBand = Math.min(taxableAfterAllowance, BASIC_LIMIT - PERSONAL_ALLOWANCE);
+    const basicTax = basicBand * 0.20;
+    if (basicBand > 0) bands.push({ band: 'Basic (20%)', rate: 20, taxable: Math.round(basicBand), tax: Math.round(basicTax) });
+
+    // Higher rate: 40% on £50,271–£125,140
+    const higherBand = Math.max(0, Math.min(taxableAfterAllowance, HIGHER_LIMIT - PERSONAL_ALLOWANCE) - (BASIC_LIMIT - PERSONAL_ALLOWANCE));
+    const higherTax = higherBand * 0.40;
+    if (higherBand > 0) bands.push({ band: 'Higher (40%)', rate: 40, taxable: Math.round(higherBand), tax: Math.round(higherTax) });
+
+    // Additional rate: 45% above £125,140
+    const additionalBand = Math.max(0, taxableAfterAllowance - (HIGHER_LIMIT - personalAllowance));
+    const additionalTax = additionalBand * 0.45;
+    if (additionalBand > 0) bands.push({ band: 'Additional (45%)', rate: 45, taxable: Math.round(additionalBand), tax: Math.round(additionalTax) });
+
+    return {
+      total: Math.round(basicTax + higherTax + additionalTax),
+      personalAllowance,
+      basicRate: Math.round(basicTax),
+      higherRate: Math.round(higherTax),
+      additionalRate: Math.round(additionalTax),
+      bands,
+    };
+  }
+
+  /**
+   * Calculate Class 4 National Insurance (2025/26 rates).
+   * Class 2 abolished from April 2025.
+   * Class 4: 6% on £12,570–£50,270, 2% above £50,270.
+   */
+  private calculateClass4NIC(taxableProfit: number): {
+    total: number;
+    mainRate: number;
+    upperRate: number;
+    bands: { band: string; rate: number; taxable: number; nic: number }[];
+  } {
+    const LOWER_THRESHOLD = 12570;
+    const UPPER_THRESHOLD = 50270;
+
+    const bands: { band: string; rate: number; taxable: number; nic: number }[] = [];
+
+    // Main rate: 6% on £12,570–£50,270
+    const mainBand = Math.max(0, Math.min(taxableProfit, UPPER_THRESHOLD) - LOWER_THRESHOLD);
+    const mainNic = mainBand * 0.06;
+    if (mainBand > 0) bands.push({ band: 'Main (6%)', rate: 6, taxable: Math.round(mainBand), nic: Math.round(mainNic) });
+
+    // Upper rate: 2% above £50,270
+    const upperBand = Math.max(0, taxableProfit - UPPER_THRESHOLD);
+    const upperNic = upperBand * 0.02;
+    if (upperBand > 0) bands.push({ band: 'Upper (2%)', rate: 2, taxable: Math.round(upperBand), nic: Math.round(upperNic) });
+
+    return {
+      total: Math.round(mainNic + upperNic),
+      mainRate: Math.round(mainNic),
+      upperRate: Math.round(upperNic),
+      bands,
+    };
+  }
+
+  /**
+   * Full tax summary for the current UK tax year.
+   * Revenue: From rental table (Daniel's take-home after platform fees).
+   * Deductions: Insurance payouts excluded, equipment AIA capital allowance.
+   */
+  async getTaxSummary(account?: string) {
+    const now = new Date();
+    const taxYear = this.getUkTaxYear(now);
+    const rentals = await this.getRentalsWithRevenue(account);
+
+    // Filter rentals to current tax year
+    const taxYearRentals = rentals.filter(r =>
+      r._effectiveDate >= taxYear.start && r._effectiveDate <= taxYear.end
+    );
+
+    // Gross rental revenue (this is already Daniel's earnings after ~36% platform fees)
+    const grossRevenue = taxYearRentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
+
+    // Insurance/damage payouts from historical data (these months in the tax year)
+    let insurancePayouts = 0;
+    const taxYearStartMonth = `${taxYear.start.getFullYear()}-${String(taxYear.start.getMonth() + 1).padStart(2, '0')}`;
+    const nowMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    for (const hist of HISTORICAL_REVENUE) {
+      if (hist.month >= taxYearStartMonth && hist.month <= nowMonth && hist.damageCosts > 0) {
+        insurancePayouts += hist.damageCosts;
+      }
+    }
+
+    // Revenue excluding insurance
+    const revenueExInsurance = grossRevenue;
+    // Note: grossRevenue from rental table doesn't include insurance payouts.
+    // Insurance payouts from historical data were added to the lifetime chart but
+    // aren't in the rental table. So grossRevenue is already "clean" rental income.
+    // We still track insurancePayouts for display purposes.
+
+    // Equipment capital allowances (AIA) — 100% deduction in year of purchase
+    const equipment = getTotalEquipmentValue();
+
+    // Days elapsed in tax year → project full year
+    const msElapsed = now.getTime() - taxYear.start.getTime();
+    const daysElapsed = Math.max(1, Math.round(msElapsed / 86400000));
+    const totalTaxYearDays = Math.round((taxYear.end.getTime() - taxYear.start.getTime()) / 86400000);
+    const projectedAnnualRevenue = Math.round(grossRevenue * totalTaxYearDays / daysElapsed);
+
+    // Taxable profit = revenue - capital allowances (AIA)
+    // AIA can reduce profit to zero but not below
+    const capitalAllowance = Math.min(equipment.totalValue, Math.round(projectedAnnualRevenue));
+    const taxableProfit = Math.max(0, projectedAnnualRevenue - capitalAllowance);
+
+    // Also calculate on ACTUAL revenue so far (not projected)
+    const actualCapitalAllowance = Math.min(equipment.totalValue, Math.round(grossRevenue));
+    const actualTaxableProfit = Math.max(0, Math.round(grossRevenue) - actualCapitalAllowance);
+
+    // Tax calculations on projected full year
+    const incomeTax = this.calculateIncomeTax(taxableProfit);
+    const class4NIC = this.calculateClass4NIC(taxableProfit);
+    const totalTax = incomeTax.total + class4NIC.total;
+    const effectiveRate = projectedAnnualRevenue > 0 ? Math.round(totalTax / projectedAnnualRevenue * 1000) / 10 : 0;
+    const netAfterTax = projectedAnnualRevenue - totalTax;
+
+    // Tax calculations on actual YTD revenue
+    const actualIncomeTax = this.calculateIncomeTax(actualTaxableProfit);
+    const actualClass4NIC = this.calculateClass4NIC(actualTaxableProfit);
+    const actualTotalTax = actualIncomeTax.total + actualClass4NIC.total;
+    const actualEffectiveRate = grossRevenue > 0 ? Math.round(actualTotalTax / grossRevenue * 1000) / 10 : 0;
+
+    // Determine tax band
+    let taxCategory = 'Below personal allowance';
+    if (taxableProfit > 125140) taxCategory = 'Additional rate taxpayer';
+    else if (taxableProfit > 50270) taxCategory = 'Higher rate taxpayer';
+    else if (taxableProfit > 12570) taxCategory = 'Basic rate taxpayer';
+
+    // Monthly revenue breakdown for the tax year
+    const monthlyBreakdown: { month: string; revenue: number }[] = [];
+    const cursor = new Date(taxYear.start.getFullYear(), taxYear.start.getMonth(), 1);
+    const endCursor = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    while (cursor < endCursor) {
+      const monthStart = new Date(cursor);
+      const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      const monthRevenue = taxYearRentals
+        .filter(r => r._effectiveDate >= monthStart && r._effectiveDate < monthEnd)
+        .reduce((sum, r) => sum + (r.rental_price || 0), 0);
+      monthlyBreakdown.push({
+        month: `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`,
+        revenue: Math.round(monthRevenue),
+      });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    return {
+      taxYear: taxYear.label,
+      taxYearStart: taxYear.start.toISOString().split('T')[0],
+      taxYearEnd: taxYear.end.toISOString().split('T')[0],
+      daysElapsed,
+      totalTaxYearDays,
+      daysRemaining: totalTaxYearDays - daysElapsed,
+
+      // Revenue
+      grossRevenue: Math.round(grossRevenue),
+      projectedAnnualRevenue,
+      insurancePayouts: Math.round(insurancePayouts),
+      insuranceNote: 'Excluded — not taxable when equipment replaced (AIA offsets balancing charge)',
+
+      // Capital allowances
+      equipmentValue: equipment.totalValue,
+      capitalAllowanceUsed: capitalAllowance,
+      capitalAllowanceNote: 'Annual Investment Allowance (AIA) — 100% first-year deduction on business equipment',
+      equipmentItems: equipment.items.slice(0, 15), // Top 15 by value
+
+      // Projected full year
+      taxableProfit,
+      taxCategory,
+      incomeTax: incomeTax.total,
+      incomeTaxBands: incomeTax.bands,
+      personalAllowance: incomeTax.personalAllowance,
+      class4NIC: class4NIC.total,
+      class4NIBands: class4NIC.bands,
+      totalTax,
+      effectiveRate,
+      netAfterTax,
+
+      // Actual YTD
+      actual: {
+        revenue: Math.round(grossRevenue),
+        capitalAllowance: actualCapitalAllowance,
+        taxableProfit: actualTaxableProfit,
+        incomeTax: actualIncomeTax.total,
+        class4NIC: actualClass4NIC.total,
+        totalTax: actualTotalTax,
+        effectiveRate: actualEffectiveRate,
+      },
+
+      monthlyBreakdown,
+
+      // "No AIA" scenario: what tax would be without capital allowances
+      noAia: (() => {
+        const noAiaProfit = projectedAnnualRevenue;
+        const noAiaIT = this.calculateIncomeTax(noAiaProfit);
+        const noAiaNIC = this.calculateClass4NIC(noAiaProfit);
+        const noAiaTotal = noAiaIT.total + noAiaNIC.total;
+        let noAiaCategory = 'Below personal allowance';
+        if (noAiaProfit > 125140) noAiaCategory = 'Additional rate taxpayer';
+        else if (noAiaProfit > 50270) noAiaCategory = 'Higher rate taxpayer';
+        else if (noAiaProfit > 12570) noAiaCategory = 'Basic rate taxpayer';
+        return {
+          taxableProfit: noAiaProfit,
+          taxCategory: noAiaCategory,
+          personalAllowance: noAiaIT.personalAllowance,
+          incomeTax: noAiaIT.total,
+          incomeTaxBands: noAiaIT.bands,
+          class4NIC: noAiaNIC.total,
+          class4NIBands: noAiaNIC.bands,
+          totalTax: noAiaTotal,
+          effectiveRate: projectedAnnualRevenue > 0 ? Math.round(noAiaTotal / projectedAnnualRevenue * 1000) / 10 : 0,
+          netAfterTax: projectedAnnualRevenue - noAiaTotal,
+        };
+      })(),
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // MULTI-YEAR TAX CALCULATION
+  // ════════════════════════════════════════════════════════════════════
+
+  /** UK tax rate tables per tax year (rates changed year-to-year) */
+  private static readonly TAX_RATES: Record<string, {
+    personalAllowance: number;
+    basicLimit: number;
+    higherLimit: number;
+    basicRate: number;
+    higherRate: number;
+    additionalRate: number;
+    class4MainRate: number;
+    class4UpperRate: number;
+    class4LowerThreshold: number;
+    class4UpperThreshold: number;
+    class2WeeklyRate: number;
+    class2SmallProfitsThreshold: number;
+    filingDeadline: Date;
+    paymentDeadline: Date;
+  }> = {
+    '2022/23': {
+      personalAllowance: 12570, basicLimit: 50270, higherLimit: 150000,
+      basicRate: 0.20, higherRate: 0.40, additionalRate: 0.45,
+      class4MainRate: 0.0973, class4UpperRate: 0.02,
+      class4LowerThreshold: 11909, class4UpperThreshold: 50270,
+      class2WeeklyRate: 3.15, class2SmallProfitsThreshold: 6725,
+      filingDeadline: new Date(2024, 0, 31), // Jan 31 2024
+      paymentDeadline: new Date(2024, 0, 31),
+    },
+    '2023/24': {
+      personalAllowance: 12570, basicLimit: 50270, higherLimit: 125140,
+      basicRate: 0.20, higherRate: 0.40, additionalRate: 0.45,
+      class4MainRate: 0.09, class4UpperRate: 0.02,
+      class4LowerThreshold: 12570, class4UpperThreshold: 50270,
+      class2WeeklyRate: 3.45, class2SmallProfitsThreshold: 6725,
+      filingDeadline: new Date(2025, 0, 31), // Jan 31 2025
+      paymentDeadline: new Date(2025, 0, 31),
+    },
+    '2024/25': {
+      personalAllowance: 12570, basicLimit: 50270, higherLimit: 125140,
+      basicRate: 0.20, higherRate: 0.40, additionalRate: 0.45,
+      class4MainRate: 0.06, class4UpperRate: 0.02,
+      class4LowerThreshold: 12570, class4UpperThreshold: 50270,
+      class2WeeklyRate: 0, class2SmallProfitsThreshold: 0, // Abolished
+      filingDeadline: new Date(2026, 0, 31), // Jan 31 2026
+      paymentDeadline: new Date(2026, 0, 31),
+    },
+    '2025/26': {
+      personalAllowance: 12570, basicLimit: 50270, higherLimit: 125140,
+      basicRate: 0.20, higherRate: 0.40, additionalRate: 0.45,
+      class4MainRate: 0.06, class4UpperRate: 0.02,
+      class4LowerThreshold: 12570, class4UpperThreshold: 50270,
+      class2WeeklyRate: 0, class2SmallProfitsThreshold: 0, // Abolished
+      filingDeadline: new Date(2027, 0, 31), // Jan 31 2027
+      paymentDeadline: new Date(2027, 0, 31),
+    },
+  };
+
+  /**
+   * Additional business deductions beyond AIA equipment write-off.
+   * Home office: actual cost method (30% business use of rent — reasonable for
+   * sole trader managing rental business from bedroom 8-10hrs/day, 5-6 days/week).
+   * Capital losses: one-off items sold at a loss.
+   * DZO lenses: stolen, insurance payout > cost. AIA clawed back via balancing charge,
+   * £800 excess CGT-exempt within annual allowance. Net effect: tax-neutral.
+   */
+  private static readonly RENT_HISTORY: { from: string; to: string; monthlyRent: number }[] = [
+    { from: '2022-08-01', to: '2025-05-14', monthlyRent: 1200 },
+    { from: '2025-05-15', to: '2026-04-05', monthlyRent: 1700 },
+  ];
+  private static readonly HOME_OFFICE_BUSINESS_PCT = 0.30;
+
+  private static readonly CAPITAL_LOSSES: { yearLabel: string; description: string; amount: number }[] = [
+    { yearLabel: '2024/25', description: 'Camera (bought for rental, never rented, sold at loss)', amount: 4500 },
+  ];
+
+  /** Calculate home office deduction for a tax year using actual cost method */
+  private calculateHomeOfficeDeduction(yearLabel: string): { totalRent: number; deduction: number; months: number } {
+    const startYear = parseInt(yearLabel.split('/')[0]);
+    const taxYearStart = new Date(startYear, 3, 6); // Apr 6
+    const taxYearEnd = new Date(startYear + 1, 3, 5, 23, 59, 59, 999); // Apr 5
+
+    let totalRent = 0;
+    // For each day in the tax year, determine which rent period applies
+    const cursor = new Date(taxYearStart);
+    let monthsCount = 0;
+    while (cursor <= taxYearEnd) {
+      const monthStart = new Date(cursor);
+      const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999); // last day of month
+      const effectiveStart = monthStart < taxYearStart ? taxYearStart : monthStart;
+      const effectiveEnd = monthEnd > taxYearEnd ? taxYearEnd : monthEnd;
+      const daysInMonth = monthEnd.getDate();
+      const daysInRange = Math.round((effectiveEnd.getTime() - effectiveStart.getTime()) / 86400000) + 1;
+
+      // Find applicable rent for this month
+      const dateStr = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+      let monthlyRent = 0;
+      for (const period of RevenueService.RENT_HISTORY) {
+        if (dateStr >= period.from && dateStr <= period.to) {
+          monthlyRent = period.monthlyRent;
+          break;
+        }
+      }
+
+      if (monthlyRent > 0) {
+        totalRent += Math.round(monthlyRent * daysInRange / daysInMonth);
+        monthsCount += daysInRange / daysInMonth;
+      }
+
+      cursor.setMonth(cursor.getMonth() + 1);
+      cursor.setDate(1);
+    }
+
+    const deduction = Math.round(totalRent * RevenueService.HOME_OFFICE_BUSINESS_PCT);
+    return { totalRent: Math.round(totalRent), deduction, months: Math.round(monthsCount * 10) / 10 };
+  }
+
+  /** Calculate income tax with year-specific rates */
+  private calculateIncomeTaxForYear(taxableProfit: number, yearLabel: string) {
+    const rates = RevenueService.TAX_RATES[yearLabel] || RevenueService.TAX_RATES['2025/26'];
+
+    let personalAllowance = rates.personalAllowance;
+    if (taxableProfit > 100000) {
+      personalAllowance = Math.max(0, rates.personalAllowance - Math.floor((taxableProfit - 100000) / 2));
+    }
+
+    const taxableAfterAllowance = Math.max(0, taxableProfit - personalAllowance);
+    const bands: { band: string; rate: number; taxable: number; tax: number }[] = [];
+
+    const basicBand = Math.min(taxableAfterAllowance, rates.basicLimit - rates.personalAllowance);
+    const basicTax = basicBand * rates.basicRate;
+    if (basicBand > 0) bands.push({ band: `Basic (${rates.basicRate * 100}%)`, rate: rates.basicRate * 100, taxable: Math.round(basicBand), tax: Math.round(basicTax) });
+
+    const higherBand = Math.max(0, Math.min(taxableAfterAllowance, rates.higherLimit - rates.personalAllowance) - (rates.basicLimit - rates.personalAllowance));
+    const higherTax = higherBand * rates.higherRate;
+    if (higherBand > 0) bands.push({ band: `Higher (${rates.higherRate * 100}%)`, rate: rates.higherRate * 100, taxable: Math.round(higherBand), tax: Math.round(higherTax) });
+
+    const additionalBand = Math.max(0, taxableAfterAllowance - (rates.higherLimit - personalAllowance));
+    const additionalTax = additionalBand * rates.additionalRate;
+    if (additionalBand > 0) bands.push({ band: `Additional (${rates.additionalRate * 100}%)`, rate: rates.additionalRate * 100, taxable: Math.round(additionalBand), tax: Math.round(additionalTax) });
+
+    return {
+      total: Math.round(basicTax + higherTax + additionalTax),
+      personalAllowance,
+      bands,
+    };
+  }
+
+  /** Calculate Class 4 NIC with year-specific rates */
+  private calculateClass4NICForYear(taxableProfit: number, yearLabel: string) {
+    const rates = RevenueService.TAX_RATES[yearLabel] || RevenueService.TAX_RATES['2025/26'];
+    const bands: { band: string; rate: number; taxable: number; nic: number }[] = [];
+
+    const mainBand = Math.max(0, Math.min(taxableProfit, rates.class4UpperThreshold) - rates.class4LowerThreshold);
+    const mainNic = mainBand * rates.class4MainRate;
+    if (mainBand > 0) bands.push({ band: `Main (${(rates.class4MainRate * 100).toFixed(2)}%)`, rate: +(rates.class4MainRate * 100).toFixed(2), taxable: Math.round(mainBand), nic: Math.round(mainNic) });
+
+    const upperBand = Math.max(0, taxableProfit - rates.class4UpperThreshold);
+    const upperNic = upperBand * rates.class4UpperRate;
+    if (upperBand > 0) bands.push({ band: `Upper (${rates.class4UpperRate * 100}%)`, rate: rates.class4UpperRate * 100, taxable: Math.round(upperBand), nic: Math.round(upperNic) });
+
+    return { total: Math.round(mainNic + upperNic), bands };
+  }
+
+  /** Calculate Class 2 NIC for years where it applies */
+  private calculateClass2NIC(taxableProfit: number, yearLabel: string): number {
+    const rates = RevenueService.TAX_RATES[yearLabel];
+    if (!rates || rates.class2WeeklyRate === 0) return 0;
+    if (taxableProfit < rates.class2SmallProfitsThreshold) return 0;
+    return Math.round(rates.class2WeeklyRate * 52);
+  }
+
+  /**
+   * Get revenue broken down by UK tax year.
+   * Uses historical data for months where HISTORICAL_REVENUE has totalRevenue > 0,
+   * and rental table data for months where historical is 0 (sentinel).
+   * Prorates April at the April 6 boundary: 5/30 to old year, 25/30 to new year.
+   */
+  private async getRevenueByTaxYear(account?: string): Promise<Map<string, { revenue: number; months: { month: string; revenue: number; source: string }[] }>> {
+    const rentals = await this.getRentalsWithRevenue(account);
+
+    // Build monthly revenue from rental table
+    const rentalMonthlyMap = new Map<string, number>();
+    for (const r of rentals) {
+      if (!r._effectiveDate || !r.rental_price) continue;
+      const key = `${r._effectiveDate.getFullYear()}-${String(r._effectiveDate.getMonth() + 1).padStart(2, '0')}`;
+      rentalMonthlyMap.set(key, (rentalMonthlyMap.get(key) || 0) + r.rental_price);
+    }
+
+    // Build combined monthly revenue: historical where available, rental table otherwise
+    const allMonths = new Map<string, { revenue: number; source: string }>();
+
+    // Add all historical months with real data
+    for (const hist of HISTORICAL_REVENUE) {
+      if (hist.totalRevenue > 0) {
+        allMonths.set(hist.month, { revenue: hist.totalRevenue, source: 'historical' });
+      }
+    }
+
+    // Add rental table months where historical is sentinel (0) or missing
+    for (const [month, rev] of rentalMonthlyMap.entries()) {
+      const existing = allMonths.get(month);
+      if (!existing) {
+        allMonths.set(month, { revenue: rev, source: 'rental_table' });
+      }
+      // If historical exists with real data, keep it — it's the authoritative source
+    }
+
+    // Map months to tax years with April proration
+    const taxYears = new Map<string, { revenue: number; months: { month: string; revenue: number; source: string }[] }>();
+
+    for (const [month, data] of allMonths.entries()) {
+      const [yearStr, monthStr] = month.split('-');
+      const year = parseInt(yearStr);
+      const mon = parseInt(monthStr); // 1-indexed
+
+      if (mon === 4) {
+        // April: prorate at April 6 boundary — 5/30 to old year, 25/30 to new year
+        const oldYearLabel = `${year - 1}/${String(year).slice(-2)}`;
+        const newYearLabel = `${year}/${String(year + 1).slice(-2)}`;
+        const oldPortion = Math.round(data.revenue * 5 / 30);
+        const newPortion = data.revenue - oldPortion;
+
+        if (oldPortion > 0) {
+          const entry = taxYears.get(oldYearLabel) || { revenue: 0, months: [] };
+          entry.revenue += oldPortion;
+          entry.months.push({ month, revenue: oldPortion, source: data.source + ' (Apr 1-5)' });
+          taxYears.set(oldYearLabel, entry);
+        }
+        if (newPortion > 0) {
+          const entry = taxYears.get(newYearLabel) || { revenue: 0, months: [] };
+          entry.revenue += newPortion;
+          entry.months.push({ month, revenue: newPortion, source: data.source + ' (Apr 6-30)' });
+          taxYears.set(newYearLabel, entry);
+        }
+      } else {
+        // Non-April: full month to appropriate tax year
+        // Tax year runs Apr 6 to Apr 5: Jan-Mar = previous year's tax year, May-Dec = current year's tax year
+        const taxYearStartYear = mon <= 3 ? year - 1 : year;
+        const yearLabel = `${taxYearStartYear}/${String(taxYearStartYear + 1).slice(-2)}`;
+
+        const entry = taxYears.get(yearLabel) || { revenue: 0, months: [] };
+        entry.revenue += data.revenue;
+        entry.months.push({ month, revenue: Math.round(data.revenue), source: data.source });
+        taxYears.set(yearLabel, entry);
+      }
+    }
+
+    return taxYears;
+  }
+
+  /** Calculate late filing penalties for a given tax year */
+  private calculateFilingPenalties(taxOwed: number, filingDeadline: Date, now: Date): {
+    total: number;
+    breakdown: { description: string; amount: number; applies: boolean }[];
+    daysLate: number;
+  } {
+    if (now <= filingDeadline) return { total: 0, breakdown: [], daysLate: 0 };
+
+    const daysLate = Math.round((now.getTime() - filingDeadline.getTime()) / 86400000);
+    const breakdown: { description: string; amount: number; applies: boolean }[] = [];
+    let total = 0;
+
+    // 1 day late: £100
+    const initialPenalty = 100;
+    breakdown.push({ description: 'Initial late filing penalty (1 day+)', amount: initialPenalty, applies: true });
+    total += initialPenalty;
+
+    // 3 months late: £10/day for up to 90 days = max £900
+    if (daysLate > 90) {
+      const dailyPenaltyDays = Math.min(daysLate - 90, 90);
+      const dailyPenalty = Math.min(dailyPenaltyDays * 10, 900);
+      breakdown.push({ description: `Daily penalty (£10/day × ${dailyPenaltyDays} days, 3-6 months)`, amount: dailyPenalty, applies: dailyPenalty > 0 });
+      total += dailyPenalty;
+    } else {
+      breakdown.push({ description: 'Daily penalty (3+ months — not yet)', amount: 0, applies: false });
+    }
+
+    // 6 months late: greater of £300 or 5% of tax due
+    if (daysLate > 180) {
+      const sixMonthPenalty = Math.max(300, Math.round(taxOwed * 0.05));
+      breakdown.push({ description: `6-month penalty (max of £300 or 5% of tax)`, amount: sixMonthPenalty, applies: true });
+      total += sixMonthPenalty;
+    } else {
+      breakdown.push({ description: '6-month penalty — not yet', amount: 0, applies: false });
+    }
+
+    // 12 months late: additional greater of £300 or 5% of tax due
+    if (daysLate > 365) {
+      const twelveMonthPenalty = Math.max(300, Math.round(taxOwed * 0.05));
+      breakdown.push({ description: `12-month penalty (max of £300 or 5% of tax)`, amount: twelveMonthPenalty, applies: true });
+      total += twelveMonthPenalty;
+    } else {
+      breakdown.push({ description: '12-month penalty — not yet', amount: 0, applies: false });
+    }
+
+    return { total, breakdown, daysLate };
+  }
+
+  /** Calculate late payment penalties */
+  private calculatePaymentPenalties(taxOwed: number, paymentDeadline: Date, now: Date): {
+    total: number;
+    breakdown: { description: string; amount: number; applies: boolean }[];
+    daysLate: number;
+  } {
+    if (taxOwed <= 0 || now <= paymentDeadline) return { total: 0, breakdown: [], daysLate: 0 };
+
+    const daysLate = Math.round((now.getTime() - paymentDeadline.getTime()) / 86400000);
+    const breakdown: { description: string; amount: number; applies: boolean }[] = [];
+    let total = 0;
+
+    // 30 days late: 5% of outstanding tax
+    if (daysLate > 30) {
+      const p = Math.round(taxOwed * 0.05);
+      breakdown.push({ description: '30-day surcharge (5% of tax)', amount: p, applies: true });
+      total += p;
+    } else {
+      breakdown.push({ description: '30-day surcharge — not yet', amount: 0, applies: false });
+    }
+
+    // 6 months late: additional 5%
+    if (daysLate > 180) {
+      const p = Math.round(taxOwed * 0.05);
+      breakdown.push({ description: '6-month surcharge (5% of tax)', amount: p, applies: true });
+      total += p;
+    } else {
+      breakdown.push({ description: '6-month surcharge — not yet', amount: 0, applies: false });
+    }
+
+    // 12 months late: additional 5%
+    if (daysLate > 365) {
+      const p = Math.round(taxOwed * 0.05);
+      breakdown.push({ description: '12-month surcharge (5% of tax)', amount: p, applies: true });
+      total += p;
+    } else {
+      breakdown.push({ description: '12-month surcharge — not yet', amount: 0, applies: false });
+    }
+
+    return { total, breakdown, daysLate };
+  }
+
+  /** Calculate interest on unpaid tax (HMRC late payment interest rate ~7.75% as of Feb 2026) */
+  private calculateInterest(taxOwed: number, paymentDeadline: Date, now: Date): number {
+    if (taxOwed <= 0 || now <= paymentDeadline) return 0;
+    const daysLate = Math.round((now.getTime() - paymentDeadline.getTime()) / 86400000);
+    // HMRC interest: Bank of England base rate + 2.5%. Currently ~7.75% annual.
+    return Math.round(taxOwed * 0.0775 * daysLate / 365);
+  }
+
+  /**
+   * Full multi-year tax summary covering all rental years (2022/23 through 2025/26).
+   * Includes per-year tax calculations with/without AIA, late filing/payment penalties, and interest.
+   */
+  async getMultiYearTaxSummary(account?: string) {
+    const now = new Date();
+    const revenueByYear = await this.getRevenueByTaxYear(account);
+    const equipment = getTotalEquipmentValue();
+    const currentTaxYear = this.getUkTaxYear(now);
+
+    const years: any[] = [];
+    let grandTotalTax = 0;
+    let grandTotalPenalties = 0;
+    let grandTotalInterest = 0;
+
+    const yearLabels = ['2022/23', '2023/24', '2024/25', '2025/26'];
+
+    for (const yearLabel of yearLabels) {
+      const rates = RevenueService.TAX_RATES[yearLabel];
+      if (!rates) continue;
+
+      const yearData = revenueByYear.get(yearLabel);
+      const revenue = yearData ? Math.round(yearData.revenue) : 0;
+      const months = yearData?.months || [];
+      const isCurrent = yearLabel === currentTaxYear.label;
+      const isPast = !isCurrent && rates.paymentDeadline < now;
+
+      // Tax year date range
+      const startYear = parseInt(yearLabel.split('/')[0]);
+      const taxYearStart = new Date(startYear, 3, 6);
+      const taxYearEnd = new Date(startYear + 1, 3, 5, 23, 59, 59, 999);
+
+      // For current year, project annual revenue
+      let annualRevenue = revenue;
+      let projectedNote = '';
+      if (isCurrent) {
+        const msElapsed = now.getTime() - taxYearStart.getTime();
+        const daysElapsed = Math.max(1, Math.round(msElapsed / 86400000));
+        const totalDays = Math.round((taxYearEnd.getTime() - taxYearStart.getTime()) / 86400000);
+        annualRevenue = Math.round(revenue * totalDays / daysElapsed);
+        projectedNote = `Projected from ${daysElapsed} days of data`;
+      }
+
+      // === Business deductions (always claimable) ===
+      const homeOffice = this.calculateHomeOfficeDeduction(yearLabel);
+      const capitalLosses = RevenueService.CAPITAL_LOSSES
+        .filter(l => l.yearLabel === yearLabel)
+        .reduce((sum, l) => sum + l.amount, 0);
+      const capitalLossItems = RevenueService.CAPITAL_LOSSES.filter(l => l.yearLabel === yearLabel);
+      const totalOtherDeductions = homeOffice.deduction + capitalLosses;
+
+      // === Scenario 1: No AIA (but with home office + capital losses) ===
+      const noAiaTaxableProfit = Math.max(0, annualRevenue - totalOtherDeductions);
+      const noAiaIT = this.calculateIncomeTaxForYear(noAiaTaxableProfit, yearLabel);
+      const noAiaNIC = this.calculateClass4NICForYear(noAiaTaxableProfit, yearLabel);
+      const noAiaClass2 = this.calculateClass2NIC(noAiaTaxableProfit, yearLabel);
+      const noAiaTax = noAiaIT.total + noAiaNIC.total + noAiaClass2;
+
+      // === Scenario 2: With AIA + all deductions ===
+      const aiaDeduction = Math.min(equipment.totalValue, annualRevenue);
+      const allDeductions = aiaDeduction + totalOtherDeductions;
+      const aiaTaxableProfit = Math.max(0, annualRevenue - allDeductions);
+      const aiaIT = this.calculateIncomeTaxForYear(aiaTaxableProfit, yearLabel);
+      const aiaNIC = this.calculateClass4NICForYear(aiaTaxableProfit, yearLabel);
+      const aiaClass2 = this.calculateClass2NIC(aiaTaxableProfit, yearLabel);
+      const aiaTax = aiaIT.total + aiaNIC.total + aiaClass2;
+
+      // Use "no AIA" tax for penalty calculations (conservative — assumes no AIA claimed yet)
+      const taxForPenalties = noAiaTax;
+
+      // Filing penalties
+      const filingPenalties = this.calculateFilingPenalties(taxForPenalties, rates.filingDeadline, now);
+
+      // Payment penalties
+      const paymentPenalties = this.calculatePaymentPenalties(taxForPenalties, rates.paymentDeadline, now);
+
+      // Interest on unpaid tax
+      const interest = this.calculateInterest(taxForPenalties, rates.paymentDeadline, now);
+
+      // Status determination
+      let status: 'no_tax' | 'current' | 'future' | 'overdue' | 'urgent';
+      if (isCurrent) {
+        status = 'current';
+      } else if (rates.filingDeadline > now) {
+        status = 'future';
+      } else if (noAiaTax === 0) {
+        status = 'no_tax';
+      } else if (filingPenalties.daysLate <= 30) {
+        status = 'urgent';
+      } else {
+        status = 'overdue';
+      }
+
+      const totalPenalties = filingPenalties.total + paymentPenalties.total;
+
+      grandTotalTax += noAiaTax;
+      grandTotalPenalties += totalPenalties;
+      grandTotalInterest += interest;
+
+      years.push({
+        yearLabel,
+        taxYearStart: taxYearStart.toISOString().split('T')[0],
+        taxYearEnd: taxYearEnd.toISOString().split('T')[0],
+        status,
+        isCurrent,
+        revenue,
+        annualRevenue,
+        projectedNote,
+        months,
+
+        // Business deductions (always claimable, separate from AIA)
+        deductions: {
+          homeOffice: {
+            totalRent: homeOffice.totalRent,
+            businessPct: RevenueService.HOME_OFFICE_BUSINESS_PCT * 100,
+            deduction: homeOffice.deduction,
+            months: homeOffice.months,
+            method: 'Actual cost (30% business use of rent)',
+          },
+          capitalLosses: capitalLossItems.map(l => ({ description: l.description, amount: l.amount })),
+          totalOtherDeductions,
+        },
+
+        // No AIA scenario (with home office + capital losses, but no equipment AIA)
+        noAia: {
+          taxableProfit: noAiaTaxableProfit,
+          personalAllowance: noAiaIT.personalAllowance,
+          incomeTax: noAiaIT.total,
+          incomeTaxBands: noAiaIT.bands,
+          class4NIC: noAiaNIC.total,
+          class4NIBands: noAiaNIC.bands,
+          class2NIC: noAiaClass2,
+          totalTax: noAiaTax,
+          effectiveRate: annualRevenue > 0 ? Math.round(noAiaTax / annualRevenue * 1000) / 10 : 0,
+        },
+
+        // With AIA scenario (all deductions: AIA + home office + capital losses)
+        withAia: {
+          aiaDeduction,
+          totalDeductions: allDeductions,
+          taxableProfit: aiaTaxableProfit,
+          personalAllowance: aiaIT.personalAllowance,
+          incomeTax: aiaIT.total,
+          incomeTaxBands: aiaIT.bands,
+          class4NIC: aiaNIC.total,
+          class4NIBands: aiaNIC.bands,
+          class2NIC: aiaClass2,
+          totalTax: aiaTax,
+          effectiveRate: annualRevenue > 0 ? Math.round(aiaTax / annualRevenue * 1000) / 10 : 0,
+          note: 'AIA can only be claimed once per item. Allocation across years depends on actual purchase dates.',
+        },
+
+        // Penalties (based on no-AIA tax — conservative)
+        penalties: {
+          filingDeadline: rates.filingDeadline.toISOString().split('T')[0],
+          paymentDeadline: rates.paymentDeadline.toISOString().split('T')[0],
+          filingDaysLate: filingPenalties.daysLate,
+          filing: filingPenalties,
+          payment: paymentPenalties,
+          interest,
+          totalPenalties,
+          totalOwed: noAiaTax + totalPenalties + interest,
+        },
+      });
+    }
+
+    const totalHomeOffice = years.reduce((s, y) => s + y.deductions.homeOffice.deduction, 0);
+    const totalCapitalLosses = years.reduce((s: number, y: any) => s + y.deductions.capitalLosses.reduce((ss: number, l: any) => ss + l.amount, 0), 0);
+
+    return {
+      generatedAt: now.toISOString(),
+      currentTaxYear: currentTaxYear.label,
+      equipmentTotalValue: equipment.totalValue,
+      equipmentNote: 'AIA can be allocated to any year with sufficient equipment purchases. Without knowing exact purchase dates, full value is shown for each year as a ceiling.',
+      homeOfficeMethod: `Actual cost method: ${RevenueService.HOME_OFFICE_BUSINESS_PCT * 100}% business use of rent (sole trader managing rental business from bedroom)`,
+      dzoLensesNote: 'DZO lenses (cost £5,200, insurance £6,000): AIA deduction clawed back via £5,200 balancing charge (disposal value capped at cost per CAA 2001 s.62). £800 excess is CGT-exempt within annual allowance. Net effect: tax-neutral.',
+
+      years,
+
+      grandTotals: {
+        totalTax: grandTotalTax,
+        totalPenalties: grandTotalPenalties,
+        totalInterest: grandTotalInterest,
+        totalOwed: grandTotalTax + grandTotalPenalties + grandTotalInterest,
+        totalHomeOfficeDeductions: totalHomeOffice,
+        totalCapitalLosses,
+        withAia: {
+          totalTax: years.reduce((s, y) => s + y.withAia.totalTax, 0),
+          totalOwed: years.reduce((s, y) => s + y.withAia.totalTax + y.penalties.totalPenalties + y.penalties.interest, 0),
+        },
+      },
     };
   }
 }

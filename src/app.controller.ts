@@ -13,6 +13,7 @@ import { BlacklistService } from './blacklist/blacklist.service';
 import { PrismaService } from './prisma/prisma.service';
 import { TelegramService } from './telegram/telegram.service';
 import { RevenueService } from './revenue/revenue.service';
+import { TaxReportService } from './revenue/tax-report.service';
 import { TitleParserService } from './revenue/title-parser.service';
 import { HyggloService } from './hygglo/hygglo.service';
 import { ACCESSORY_ITEMS, isAccessoryItem } from './utils/item-matcher';
@@ -49,6 +50,7 @@ export class AppController {
     private readonly conversationStageService: ConversationStageService,
     private readonly itemMatcherAi: ItemMatcherAiService,
     private readonly sellRecommenderService: SellRecommenderService,
+    private readonly taxReportService: TaxReportService,
   ) {}
 
   // In-memory session store for renter chat testing
@@ -282,6 +284,39 @@ export class AppController {
   @ApiResponse({ status: 200, description: 'Fresh AI boost evaluation results' })
   async evaluateAiBoost() {
     return await this.revenueService.evaluateAiPerformance();
+  }
+
+  @Get('revenue/tax-summary')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'UK sole trader tax calculation for current tax year' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Tax breakdown with income tax, NIC, capital allowances' })
+  async getTaxSummary(@Query('account') account?: string) {
+    return await this.revenueService.getTaxSummary(account || undefined);
+  }
+
+  @Get('revenue/tax-multi-year')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Multi-year UK tax calculation with penalties (2022/23–2025/26)' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Full multi-year tax breakdown with penalties and interest' })
+  async getMultiYearTaxSummary(@Query('account') account?: string) {
+    return await this.revenueService.getMultiYearTaxSummary(account || undefined);
+  }
+
+  @Get('revenue/tax-report.pdf')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Download multi-year tax report as PDF' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'PDF tax report' })
+  async getTaxReportPdf(@Query('account') account?: string, @Res() res?: any) {
+    const buffer = await this.taxReportService.generateTaxReport(account || undefined);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename="tax-report.pdf"',
+      'Content-Length': buffer.length,
+    });
+    res.end(buffer);
   }
 
   @Get('revenue/funnel-history')
@@ -562,6 +597,32 @@ export class AppController {
           additionalParts.push(`\n\nRETIRED/SOLD ITEMS (no longer in inventory, historical earnings):\n${retiredLines.join('\n')}`);
         }
       } catch { /* revenue data optional */ }
+
+      // Monthly income distribution by account (DB Cinema, Leo, Daniel, Vertus, Damage Claims)
+      try {
+        const lifetime = await this.revenueService.getLifetimeRevenue();
+        if (lifetime.months.length > 0) {
+          const lines = lifetime.months
+            .filter(m => m.revenue > 0)
+            .map(m => {
+              const parts = [`${m.month}: £${Math.round(m.revenue)} total`];
+              if (m.dbcinemaRevenue) parts.push(`DB Cinema £${Math.round(m.dbcinemaRevenue)}`);
+              if (m.leoRevenue) parts.push(`Leo £${Math.round(m.leoRevenue)}`);
+              if (m.danielRevenue) parts.push(`Daniel £${Math.round(m.danielRevenue)}`);
+              if (m.vertusRevenue) parts.push(`Vertus £${Math.round(m.vertusRevenue)}`);
+              if (m.damageRevenue) parts.push(`Damage Claims £${Math.round(m.damageRevenue)}`);
+              if (m.aiAttribution) parts.push(`AI Boost £${Math.round(m.aiAttribution)}`);
+              return `- ${parts.join(' | ')}`;
+            });
+          const summary = [
+            `Total lifetime revenue: £${Math.round(lifetime.totalRevenue)}`,
+            `Avg monthly (mature): £${lifetime.avgMonthly}`,
+            lifetime.strongestMonth ? `Best month: ${lifetime.strongestMonth.month} £${Math.round(lifetime.strongestMonth.revenue)}` : '',
+            lifetime.weakestMonth ? `Weakest month: ${lifetime.weakestMonth.month} £${Math.round(lifetime.weakestMonth.revenue)}` : '',
+          ].filter(Boolean).join(' | ');
+          additionalParts.push(`\n\nMONTHLY INCOME DISTRIBUTION BY ACCOUNT:\n${summary}\n\nAccounts: DB Cinema (primary, active), Leo Adams (active since Aug 2025), Daniel (retired), Vertus (retired). Damage Claims = insurance payouts.\n${lines.join('\n')}`);
+        }
+      } catch { /* lifetime revenue optional */ }
 
       // Bundle pricing reference (bundles are distinct listings with different prices from individual items)
       try {

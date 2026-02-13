@@ -553,14 +553,19 @@ Only suggest stuff that actually works together AND that we have in stock.`,
   }
 
   /**
-   * Build system prompt from modular components
+   * Build system prompt from modular components.
+   * When conversationStage is provided, gates context components by funnel stage
+   * to save input tokens (~800-2000 tokens in later stages).
    */
-  async buildSystemPrompt(contextType: 'message' | 'analysis' | 'extraction' = 'message'): Promise<string> {
+  async buildSystemPrompt(
+    contextType: 'message' | 'analysis' | 'extraction' = 'message',
+    conversationStage?: string,
+  ): Promise<string> {
     await this.ensureFreshCache();
 
     const parts: string[] = [];
 
-    // Core components (always include)
+    // Core components (always include — stable prefix for prompt caching)
     const coreComponents = [
       'identity',
       'security_rules',
@@ -575,16 +580,24 @@ Only suggest stuff that actually works together AND that we have in stock.`,
       }
     }
 
-    // Context-specific components
+    // Context-specific components — gated by funnel stage when available
     if (contextType === 'message' || contextType === 'analysis') {
-      const contextComponents = [
-        'pricing_domain',
-        'delivery_domain',
-        'compatibility_rules',
+      const stage = conversationStage || '';
+      const isLateStage = ['booking_sent', 'awaiting_verification', 'confirmed', 'dead'].includes(stage);
+      const isConfirmed = stage === 'confirmed';
+      const isDead = stage === 'dead';
+
+      // Stage-gating matrix:
+      // - pricing/delivery/compatibility/enquiry: needed pre-booking, not after
+      // - scheduling: needed QUALIFIED+ (discussing pickup/return logistics)
+      // - time_booking_rules: only needed at CONFIRMED (time extraction)
+      // - location_rules: ALWAYS (contains security-critical deception rules)
+      const contextComponents: string[] = [
+        ...(!isLateStage && !isDead ? ['pricing_domain', 'delivery_domain', 'compatibility_rules'] : []),
         'location_rules',
-        'scheduling_rules',
-        'time_booking_rules',
-        'enquiry_handling',
+        ...(!isDead && (isConfirmed || !isLateStage) ? ['scheduling_rules'] : []),
+        ...(isConfirmed ? ['time_booking_rules'] : []),
+        ...(!isLateStage && !isDead ? ['enquiry_handling'] : []),
       ];
 
       for (const name of contextComponents) {

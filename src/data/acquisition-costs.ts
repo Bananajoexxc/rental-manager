@@ -264,7 +264,47 @@ export const OWNED_ITEM_COSTS: Record<string, number> = {
   'Smoke machine fogger': 50,
   'Smoke Ninja Pro hazer': 180,
   'Smoke Ninja': 130,
+  // Power (batteries & stations)
+  'V-mount 95mAh': 150,
+  'V-mount 150mAh': 250,
+  'Sony NPF 970 batteries 2x sets': 50,
+  'DJI gimbal battery': 60,
+  // Filters & cards
+  'ND filter': 100,
+  'Cinebloom filter mist': 80,
+  '256GB card': 30,
+  'CF Express Type A card': 120,
+  // Accessories
+  'Suction cups': 40,
+  // Mount adapters
+  'PL to Sony E mount': 200,
+  'PL to EF mount': 150,
+  'PL to RF mount': 150,
+  'PL to L mount': 150,
 };
+
+/**
+ * Calculate total equipment value (cost × quantity) for all owned inventory.
+ * Used for capital allowance (AIA) tax calculations.
+ */
+export function getTotalEquipmentValue(): { totalValue: number; items: { name: string; qty: number; unitCost: number; totalCost: number }[] } {
+  // Import at call time to avoid circular deps
+  const { MASTER_INVENTORY } = require('../utils/item-matcher');
+  const items: { name: string; qty: number; unitCost: number; totalCost: number }[] = [];
+  let totalValue = 0;
+
+  for (const [name, qty] of Object.entries(MASTER_INVENTORY) as [string, number][]) {
+    const unitCost = OWNED_ITEM_COSTS[name] || 0;
+    const totalCost = unitCost * qty;
+    if (unitCost > 0) {
+      items.push({ name, qty, unitCost, totalCost });
+    }
+    totalValue += totalCost;
+  }
+
+  items.sort((a, b) => b.totalCost - a.totalCost);
+  return { totalValue, items };
+}
 
 /**
  * Get the purchase cost for an owned inventory item.

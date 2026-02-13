@@ -957,6 +957,21 @@
         <div class="sub" id="statSellRecoSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandSellReco"></div></div>
       </div>
+      <div class="stat-card" data-stat="tax" data-stat-label="Tax Liability" draggable="false" style="border-left:3px solid #ef4444;">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
+        <div class="label" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>UK Tax</span>
+          <select id="taxView" onchange="refreshTax()" style="background:rgba(10,12,18,0.6);color:#8b8fa3;border:1px solid rgba(255,255,255,0.08);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;">
+            <option value="multi">All Years + Penalties</option>
+            <option value="projected">Current Yr (w/ AIA)</option>
+            <option value="actual">Current YTD (w/ AIA)</option>
+            <option value="noaia">Current Yr (no AIA)</option>
+          </select>
+        </div>
+        <div class="value red" id="statTaxLiability">--</div>
+        <div class="sub" id="statTaxSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandTax"></div></div>
+      </div>
       <!-- Best & Worst Month stats moved to Lifetime Revenue chart header -->
     </div>
     </div>
@@ -969,14 +984,6 @@
         <span>Lifetime Revenue <span id="lifetimeTotal" style="font-size:14px;color:#22c55e;font-weight:700;"></span></span>
         <div style="display:flex;align-items:center;gap:16px;">
           <div id="lifetimeStats" style="display:flex;gap:16px;font-size:11px;color:#8b8fa3;font-weight:400;"></div>
-          <label id="targetToggle" style="display:none;align-items:center;gap:5px;font-size:10px;color:#8b8fa3;cursor:pointer;user-select:none;white-space:nowrap;">
-            <span style="position:relative;width:28px;height:16px;display:inline-block;">
-              <input type="checkbox" id="showTargetsChk" onchange="toggleTargetBars(this.checked)" style="opacity:0;width:0;height:0;">
-              <span id="targetSlider" style="position:absolute;inset:0;background:rgba(255,255,255,0.1);border-radius:8px;transition:background .2s;cursor:pointer;"></span>
-              <span id="targetKnob" style="position:absolute;top:2px;left:2px;width:12px;height:12px;background:#8b8fa3;border-radius:50%;transition:transform .2s,background .2s;"></span>
-            </span>
-            Targets
-          </label>
         </div>
       </div>
       <div class="section-body">
@@ -1384,6 +1391,21 @@
     var refreshTimer = null;
     var activityPollTimer = null;
     var lastActivityId = 0;
+
+    // ---- Pause all polling when tab is hidden, resume when visible ----
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // Tab hidden — stop all timers to save server load
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+        if (activityPollTimer) { clearInterval(activityPollTimer); activityPollTimer = null; }
+      } else {
+        // Tab visible again — immediate refresh + restart timers
+        refreshAll();
+        pollActivity();
+        if (!refreshTimer) refreshTimer = setInterval(refreshAll, 30000);
+        if (!activityPollTimer) activityPollTimer = setInterval(pollActivity, 10000);
+      }
+    });
 
     // ---- Stat Card Tap-to-Expand (mobile) ----
     document.addEventListener('click', function(e) {
@@ -3166,17 +3188,7 @@
     function toggleTargetBars(on) {
       showTargetBars = on;
       localStorage.setItem('showTargetBars', on ? 'true' : 'false');
-      updateTargetToggleUI(on);
       if (lifetimeChartInstance) lifetimeChartInstance.update();
-    }
-    function updateTargetToggleUI(on) {
-      var knob = document.getElementById('targetKnob');
-      var slider = document.getElementById('targetSlider');
-      var chk = document.getElementById('showTargetsChk');
-      if (chk) chk.checked = on;
-      if (knob) knob.style.transform = on ? 'translateX(12px)' : 'translateX(0)';
-      if (knob) knob.style.background = on ? '#94a3b8' : '#4b5563';
-      if (slider) slider.style.background = on ? 'rgba(148,163,184,0.25)' : 'rgba(255,255,255,0.08)';
     }
 
     function loadLifetimeChart() {
@@ -3190,7 +3202,7 @@
     var aiGlowPlugin = {
       id: 'aiGlow',
       beforeDatasetDraw: function(chart, args) {
-        if (args.index !== 2) return; // Only apply to dataset index 2 (AI Boost)
+        if (args.index !== 6) return; // Only apply to dataset index 6 (AI Boost)
         var ctx = chart.ctx;
         ctx.save();
         ctx.shadowColor = 'rgba(34, 197, 94, 0.6)';
@@ -3199,7 +3211,7 @@
         ctx.shadowOffsetY = 0;
       },
       afterDatasetDraw: function(chart, args) {
-        if (args.index !== 2) return;
+        if (args.index !== 6) return;
         chart.ctx.restore();
       }
     };
@@ -3240,10 +3252,28 @@
 
       // For future months (target-only, no actual revenue), hide from cumulative line
       var cumulativeData = data.months.map(function(d) { return d.revenue > 0 || d.count > 0 ? d.cumulative : null; });
-      // Organic = total revenue minus AI attribution
-      var organicData = data.months.map(function(d) { return Math.round((d.revenue - (d.aiAttribution || 0)) * 100) / 100; });
+      // DB Cinema organic = dbcinemaRevenue minus its share of AI attribution
+      var dbcinemaData = data.months.map(function(d) {
+        if (!d.revenue || !d.dbcinemaRevenue) return 0;
+        var aiShare = (d.dbcinemaRevenue / d.revenue) * (d.aiAttribution || 0);
+        return Math.round((d.dbcinemaRevenue - aiShare) * 100) / 100;
+      });
+      // Leo Adams organic = leoRevenue minus its share of AI attribution
+      var leoData = data.months.map(function(d) {
+        if (!d.revenue || !d.leoRevenue) return 0;
+        var aiShare = (d.leoRevenue / d.revenue) * (d.aiAttribution || 0);
+        return Math.round((d.leoRevenue - aiShare) * 100) / 100;
+      });
+      // Daniel account (retired) — orange
+      var danielData = data.months.map(function(d) { return d.danielRevenue || 0; });
+      // Vertus account (retired) — brown
+      var vertusData = data.months.map(function(d) { return d.vertusRevenue || 0; });
+      // Damage costs / insurance claims — bright white
+      var damageData = data.months.map(function(d) { return d.damageRevenue || 0; });
       // AI Boost = aiAttribution (0 for pre-AI months)
       var aiBoostData = data.months.map(function(d) { return d.aiAttribution || 0; });
+      // Booked = confirmed booking revenue for next month only
+      var bookedData = data.months.map(function(d) { return d.bookedRevenue || 0; });
 
       // Build target lookup: month index → target value
       var targetByIndex = {};
@@ -3254,13 +3284,7 @@
           }
         });
       }
-      // Show toggle if targets exist
       var hasTargets = Object.keys(targetByIndex).length > 0;
-      var toggleEl = document.getElementById('targetToggle');
-      if (toggleEl) {
-        toggleEl.style.display = hasTargets ? 'flex' : 'none';
-        if (hasTargets) updateTargetToggleUI(showTargetBars);
-      }
 
       // Plugin: draw expected revenue as grey dashed bars behind the real bars
       var expectedBarsPlugin = {
@@ -3271,16 +3295,16 @@
           var y1Scale = chart.scales.y1;
           if (!xScale || !y1Scale) return;
           var ctx = chart.ctx;
-          // Get bar width from the organic dataset
-          var organicMeta = chart.getDatasetMeta(1); // organic is dataset index 1
-          if (!organicMeta || !organicMeta.data || organicMeta.data.length === 0) return;
-          var sampleBar = organicMeta.data[organicMeta.data.length - 1];
+          // Get bar width from the first bar dataset (DB Cinema at index 1)
+          var barMeta = chart.getDatasetMeta(1);
+          if (!barMeta || !barMeta.data || barMeta.data.length === 0) return;
+          var sampleBar = barMeta.data[barMeta.data.length - 1];
           var barW = sampleBar ? sampleBar.width : 20;
 
           for (var idx in targetByIndex) {
             var target = targetByIndex[idx];
             if (!target) continue;
-            var barEl = organicMeta.data[idx];
+            var barEl = barMeta.data[idx];
             if (!barEl) continue;
             var cx = barEl.x;
             var topY = y1Scale.getPixelForValue(target);
@@ -3331,11 +3355,55 @@
               yAxisID: 'y',
             },
             {
-              label: 'Monthly (Organic)',
-              data: organicData,
+              label: 'DB Cinema',
+              data: dbcinemaData,
               type: 'bar',
-              backgroundColor: 'rgba(99, 102, 241, 0.3)',
+              backgroundColor: 'rgba(99, 102, 241, 0.35)',
               borderColor: '#6366f1',
+              borderWidth: 1,
+              borderRadius: 0,
+              stack: 'revenue',
+              yAxisID: 'y1',
+            },
+            {
+              label: 'Leo Adams',
+              data: leoData,
+              type: 'bar',
+              backgroundColor: 'rgba(168, 85, 247, 0.35)',
+              borderColor: '#a855f7',
+              borderWidth: 1,
+              borderRadius: 0,
+              stack: 'revenue',
+              yAxisID: 'y1',
+            },
+            {
+              label: 'Daniel',
+              data: danielData,
+              type: 'bar',
+              backgroundColor: 'rgba(249, 115, 22, 0.45)',
+              borderColor: '#f97316',
+              borderWidth: 1,
+              borderRadius: 0,
+              stack: 'revenue',
+              yAxisID: 'y1',
+            },
+            {
+              label: 'Vertus',
+              data: vertusData,
+              type: 'bar',
+              backgroundColor: 'rgba(139, 90, 43, 0.5)',
+              borderColor: '#8b5a2b',
+              borderWidth: 1,
+              borderRadius: 0,
+              stack: 'revenue',
+              yAxisID: 'y1',
+            },
+            {
+              label: 'Damage Claims',
+              data: damageData,
+              type: 'bar',
+              backgroundColor: 'rgba(255, 255, 255, 0.7)',
+              borderColor: '#ffffff',
               borderWidth: 1,
               borderRadius: 0,
               stack: 'revenue',
@@ -3347,6 +3415,17 @@
               type: 'bar',
               backgroundColor: 'rgba(34, 197, 94, 0.5)',
               borderColor: '#22c55e',
+              borderWidth: 1,
+              borderRadius: 3,
+              stack: 'revenue',
+              yAxisID: 'y1',
+            },
+            {
+              label: 'Booked',
+              data: bookedData,
+              type: 'bar',
+              backgroundColor: 'rgba(148, 163, 184, 0.3)',
+              borderColor: '#94a3b8',
               borderWidth: 1,
               borderRadius: 3,
               stack: 'revenue',
@@ -3364,31 +3443,82 @@
           plugins: {
             legend: {
               position: 'top',
-              labels: { color: '#8b8fa3', font: { size: 11 }, boxWidth: 12, padding: 12 }
+              labels: {
+                color: '#8b8fa3', font: { size: 11 }, boxWidth: 12, padding: 12,
+                generateLabels: function(chart) {
+                  var defaults = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+                  if (hasTargets) {
+                    defaults.push({
+                      text: 'Targets',
+                      fillStyle: 'rgba(148,163,184,0.12)',
+                      strokeStyle: 'rgba(148,163,184,0.5)',
+                      lineWidth: 1.5,
+                      lineDash: [5, 4],
+                      hidden: !showTargetBars,
+                      datasetIndex: 999,
+                    });
+                  }
+                  return defaults;
+                }
+              },
+              onClick: function(e, legendItem, legend) {
+                if (legendItem.datasetIndex === 999) {
+                  toggleTargetBars(!showTargetBars);
+                  return;
+                }
+                Chart.defaults.plugins.legend.onClick.call(this, e, legendItem, legend);
+              }
             },
             tooltip: {
               callbacks: {
                 label: function(context) {
                   var idx = context.dataIndex;
                   var month = data.months[idx];
-                  // Append expected revenue info to the first bar tooltip
-                  var extra = '';
-                  if (targetByIndex[idx] && context.datasetIndex === 1) {
-                    extra = '\nExpected: \u00A3' + targetByIndex[idx].toLocaleString();
-                  }
+                  if (!month) return null;
                   if (context.dataset.label === 'AI Boost') {
-                    if (!month || !month.aiAttribution) return null;
+                    if (!month.aiAttribution) return null;
                     return 'AI Boost: \u00A3' + month.aiAttribution.toLocaleString() + ' (' + boostPct + '% rate)';
                   }
-                  if (context.dataset.label === 'Monthly (Organic)') {
-                    var organic = Math.round((month.revenue - (month.aiAttribution || 0)) * 100) / 100;
-                    var label = 'Organic: \u00A3' + organic.toLocaleString();
-                    if (month.aiAttribution > 0) {
-                      label += '  |  Total: \u00A3' + month.revenue.toLocaleString();
-                    }
-                    return extra ? [label, extra.trim()] : label;
+                  if (context.dataset.label === 'DB Cinema') {
+                    if (!context.parsed.y) return null;
+                    return 'DB Cinema: \u00A3' + context.parsed.y.toLocaleString();
                   }
+                  if (context.dataset.label === 'Leo Adams') {
+                    if (!context.parsed.y) return null;
+                    return 'Leo Adams: \u00A3' + context.parsed.y.toLocaleString();
+                  }
+                  if (context.dataset.label === 'Daniel') {
+                    if (!context.parsed.y) return null;
+                    return 'Daniel: \u00A3' + context.parsed.y.toLocaleString();
+                  }
+                  if (context.dataset.label === 'Vertus') {
+                    if (!context.parsed.y) return null;
+                    return 'Vertus: \u00A3' + context.parsed.y.toLocaleString();
+                  }
+                  if (context.dataset.label === 'Damage Claims') {
+                    if (!context.parsed.y) return null;
+                    return 'Damage Claims: \u00A3' + context.parsed.y.toLocaleString();
+                  }
+                  if (context.dataset.label === 'Booked') {
+                    if (!context.parsed.y) return null;
+                    return 'Booked: \u00A3' + context.parsed.y.toLocaleString();
+                  }
+                  if (context.parsed.y == null) return null;
                   return context.dataset.label + ': \u00A3' + context.parsed.y.toLocaleString();
+                },
+                afterBody: function(contexts) {
+                  if (!contexts || !contexts.length) return '';
+                  var idx = contexts[0].dataIndex;
+                  var month = data.months[idx];
+                  if (!month) return '';
+                  var lines = [];
+                  if (month.revenue > 0) {
+                    lines.push('Total Monthly: \u00A3' + month.revenue.toLocaleString());
+                  }
+                  if (targetByIndex[idx]) {
+                    lines.push('Target: \u00A3' + targetByIndex[idx].toLocaleString());
+                  }
+                  return lines.length ? '\n' + lines.join('\n') : '';
                 }
               }
             }
@@ -3619,6 +3749,273 @@
       var period = document.getElementById('aiBoostPeriod').value || 'month';
       var acctAmp = getAccountParam();
       fetchJSON('/revenue/ai-boost?period=' + period + acctAmp).then(renderAiBoost).catch(function() {});
+    }
+
+    // ── Tax Liability tile ──
+    var _taxData = null;
+    var _multiYearTaxData = null;
+
+    function renderMultiYearTax(data) {
+      _multiYearTaxData = data;
+      var el = document.getElementById('statTaxLiability');
+      var sub = document.getElementById('statTaxSub');
+      var exp = document.getElementById('expandTax');
+      if (!data || !data.years) { el.textContent = '--'; sub.textContent = ''; if (exp) exp.innerHTML = ''; return; }
+
+      var gt = data.grandTotals;
+      el.textContent = '\u00A3' + gt.totalOwed.toLocaleString();
+      sub.innerHTML = '<span style="color:#ef4444;">Tax+penalties</span> \u00B7 4 years \u00B7 ' +
+        (gt.withAia.totalOwed < gt.totalOwed ? '<span style="color:#22c55e;">w/ AIA: \u00A3' + gt.withAia.totalOwed.toLocaleString() + '</span>' : '');
+
+      if (!exp) return;
+      var h = '<div style="font-size:11px;line-height:1.7;">';
+
+      // Summary bar
+      h += '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:8px 10px;margin-bottom:10px;">';
+      h += '<div style="display:flex;justify-content:space-between;font-weight:700;font-size:13px;"><span style="color:#ef4444;">Total owed (no AIA)</span><span style="color:#ef4444;">\u00A3' + gt.totalOwed.toLocaleString() + '</span></div>';
+      h += '<div style="display:flex;justify-content:space-between;font-size:11px;color:#8b8fa3;"><span>Tax: \u00A3' + gt.totalTax.toLocaleString() + '</span><span>Penalties: \u00A3' + gt.totalPenalties.toLocaleString() + '</span><span>Interest: \u00A3' + gt.totalInterest.toLocaleString() + '</span></div>';
+      if (gt.withAia.totalOwed < gt.totalOwed) {
+        h += '<div style="display:flex;justify-content:space-between;font-weight:600;margin-top:4px;"><span style="color:#22c55e;">With full AIA</span><span style="color:#22c55e;">\u00A3' + gt.withAia.totalOwed.toLocaleString() + '</span></div>';
+      }
+      h += '</div>';
+
+      // Deduction summary
+      h += '<div style="font-size:10px;color:#f59e0b;margin-bottom:4px;">Equipment AIA: \u00A3' + data.equipmentTotalValue.toLocaleString() + ' \u2014 claimed once per item, allocation depends on purchase year</div>';
+      if (gt.totalHomeOfficeDeductions > 0) {
+        h += '<div style="font-size:10px;color:#3b82f6;margin-bottom:4px;">Home office (30% of rent): \u00A3' + gt.totalHomeOfficeDeductions.toLocaleString() + ' total across all years \u2014 always deductible</div>';
+      }
+      if (gt.totalCapitalLosses > 0) {
+        h += '<div style="font-size:10px;color:#a78bfa;margin-bottom:4px;">Capital losses: \u00A3' + gt.totalCapitalLosses.toLocaleString() + ' \u2014 camera sold at loss (business equipment)</div>';
+      }
+      if (data.dzoLensesNote) {
+        h += '<div style="font-size:10px;color:#8b8fa3;margin-bottom:8px;">DZO lenses: tax-neutral (AIA clawed back, \u00A3800 excess CGT-exempt)</div>';
+      }
+
+      // Per-year accordion
+      data.years.forEach(function(yr) {
+        var statusColors = { no_tax: '#22c55e', current: '#3b82f6', future: '#8b8fa3', overdue: '#ef4444', urgent: '#f59e0b' };
+        var statusLabels = { no_tax: 'No tax due', current: 'Current year', future: 'Not yet due', overdue: 'OVERDUE', urgent: 'ACT NOW' };
+        var sc = statusColors[yr.status] || '#8b8fa3';
+        var sl = statusLabels[yr.status] || yr.status;
+        var yearTotalOwed = yr.penalties.totalOwed;
+        var yearAiaTax = yr.withAia.totalTax;
+
+        h += '<div style="border:1px solid rgba(255,255,255,0.08);border-left:3px solid ' + sc + ';border-radius:4px;margin-bottom:6px;overflow:hidden;">';
+
+        // Year header (clickable)
+        h += '<div onclick="this.parentElement.querySelector(\'.tax-year-body\').style.display=this.parentElement.querySelector(\'.tax-year-body\').style.display===\'none\'?\'block\':\'none\'" style="cursor:pointer;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,0.02);">';
+        h += '<div><span style="font-weight:700;color:#e4e6eb;">' + yr.yearLabel + '</span> <span style="font-size:10px;color:' + sc + ';font-weight:600;margin-left:6px;">' + sl + '</span></div>';
+        h += '<div style="text-align:right;">';
+        if (yr.noAia.totalTax > 0) {
+          h += '<span style="color:#ef4444;font-weight:700;">\u00A3' + yearTotalOwed.toLocaleString() + '</span>';
+          if (yearAiaTax < yr.noAia.totalTax) h += ' <span style="font-size:10px;color:#22c55e;">(AIA: \u00A3' + yearAiaTax.toLocaleString() + ')</span>';
+        } else {
+          h += '<span style="color:#22c55e;font-weight:600;">\u00A30</span>';
+        }
+        h += '</div></div>';
+
+        // Year body (collapsed by default, except urgent/overdue with tax)
+        var showBody = (yr.status === 'urgent' || yr.status === 'overdue') && yr.noAia.totalTax > 0;
+        h += '<div class="tax-year-body" style="display:' + (showBody ? 'block' : 'none') + ';padding:6px 10px 10px;border-top:1px solid rgba(255,255,255,0.06);">';
+
+        // Revenue
+        h += '<div style="display:flex;justify-content:space-between;"><span style="color:#8b8fa3;">Revenue</span><span style="color:#22c55e;">\u00A3' + yr.revenue.toLocaleString() + '</span></div>';
+        if (yr.projectedNote) {
+          h += '<div style="display:flex;justify-content:space-between;"><span style="color:#8b8fa3;font-size:10px;">' + yr.projectedNote + '</span><span style="color:#22c55e;font-size:10px;">Proj: \u00A3' + yr.annualRevenue.toLocaleString() + '</span></div>';
+        }
+
+        // Deductions (always claimable)
+        if (yr.deductions && yr.deductions.totalOtherDeductions > 0) {
+          h += '<div style="color:#3b82f6;font-weight:600;margin-top:4px;">Deductions</div>';
+          if (yr.deductions.homeOffice.deduction > 0) {
+            h += '<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Home office (' + yr.deductions.homeOffice.months + ' mo \u00D7 30% of rent)</span><span style="color:#3b82f6;">-\u00A3' + yr.deductions.homeOffice.deduction.toLocaleString() + '</span></div>';
+          }
+          yr.deductions.capitalLosses.forEach(function(l) {
+            h += '<div style="display:flex;justify-content:space-between;font-size:10px;"><span>' + l.description + '</span><span style="color:#a78bfa;">-\u00A3' + l.amount.toLocaleString() + '</span></div>';
+          });
+          h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:#8b8fa3;"><span>Taxable profit (no AIA)</span><span>\u00A3' + yr.noAia.taxableProfit.toLocaleString() + '</span></div>';
+        }
+
+        // No AIA tax breakdown
+        h += '<div style="color:#8b8fa3;font-weight:600;margin-top:4px;">Tax (no AIA)</div>';
+        h += '<div style="display:flex;justify-content:space-between;"><span>Income Tax</span><span style="color:#ef4444;">\u00A3' + yr.noAia.incomeTax.toLocaleString() + '</span></div>';
+        h += '<div style="display:flex;justify-content:space-between;"><span>Class 4 NIC</span><span style="color:#ef4444;">\u00A3' + yr.noAia.class4NIC.toLocaleString() + '</span></div>';
+        if (yr.noAia.class2NIC > 0) {
+          h += '<div style="display:flex;justify-content:space-between;"><span>Class 2 NIC</span><span style="color:#ef4444;">\u00A3' + yr.noAia.class2NIC.toLocaleString() + '</span></div>';
+        }
+        h += '<div style="display:flex;justify-content:space-between;font-weight:600;"><span>Tax subtotal</span><span style="color:#ef4444;">\u00A3' + yr.noAia.totalTax.toLocaleString() + '</span></div>';
+
+        // With AIA
+        if (yr.withAia.totalTax < yr.noAia.totalTax) {
+          h += '<div style="color:#22c55e;font-weight:600;margin-top:4px;">With AIA (+\u00A3' + yr.withAia.aiaDeduction.toLocaleString() + ' equipment)</div>';
+          h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:#8b8fa3;"><span>Total deductions</span><span>-\u00A3' + (yr.withAia.totalDeductions || yr.withAia.aiaDeduction).toLocaleString() + '</span></div>';
+          h += '<div style="display:flex;justify-content:space-between;"><span>Taxable profit</span><span>\u00A3' + yr.withAia.taxableProfit.toLocaleString() + '</span></div>';
+          h += '<div style="display:flex;justify-content:space-between;font-weight:600;"><span>Tax with AIA</span><span style="color:#22c55e;">\u00A3' + yr.withAia.totalTax.toLocaleString() + '</span></div>';
+        }
+
+        // Penalties
+        if (yr.penalties.totalPenalties > 0 || yr.penalties.interest > 0) {
+          h += '<div style="color:#f59e0b;font-weight:600;margin-top:4px;">Penalties & Interest</div>';
+          if (yr.penalties.filingDaysLate > 0) {
+            h += '<div style="display:flex;justify-content:space-between;font-size:10px;color:#8b8fa3;"><span>Filing: ' + yr.penalties.filingDaysLate + ' days late</span><span>Due: ' + yr.penalties.filingDeadline + '</span></div>';
+          }
+          yr.penalties.filing.breakdown.forEach(function(p) {
+            if (p.applies) h += '<div style="display:flex;justify-content:space-between;"><span style="font-size:10px;">' + p.description + '</span><span style="color:#f59e0b;">\u00A3' + p.amount.toLocaleString() + '</span></div>';
+          });
+          yr.penalties.payment.breakdown.forEach(function(p) {
+            if (p.applies) h += '<div style="display:flex;justify-content:space-between;"><span style="font-size:10px;">' + p.description + '</span><span style="color:#f59e0b;">\u00A3' + p.amount.toLocaleString() + '</span></div>';
+          });
+          if (yr.penalties.interest > 0) {
+            h += '<div style="display:flex;justify-content:space-between;"><span style="font-size:10px;">Interest (7.75% annual)</span><span style="color:#f59e0b;">\u00A3' + yr.penalties.interest.toLocaleString() + '</span></div>';
+          }
+          h += '<div style="display:flex;justify-content:space-between;font-weight:600;border-top:1px solid rgba(255,255,255,0.06);padding-top:2px;margin-top:2px;"><span style="color:#ef4444;">Year total owed</span><span style="color:#ef4444;">\u00A3' + yearTotalOwed.toLocaleString() + '</span></div>';
+        }
+
+        h += '</div></div>';
+      });
+
+      // Urgency callout
+      var urgent = data.years.find(function(y) { return y.status === 'urgent'; });
+      if (urgent) {
+        h += '<div style="background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;">';
+        h += '<div style="color:#f59e0b;font-weight:700;font-size:12px;">\u26A0 ' + urgent.yearLabel + ' \u2014 only ' + urgent.penalties.filingDaysLate + ' days late!</div>';
+        h += '<div style="color:#8b8fa3;font-size:10px;">File now to limit penalty to \u00A3100. Daily \u00A310 charges start at 3 months.</div>';
+        h += '</div>';
+      }
+
+      // Notes
+      h += '<div style="border-top:1px solid rgba(255,255,255,0.06);margin-top:8px;padding-top:6px;font-size:10px;color:#8b8fa3;line-height:1.6;">';
+      h += '<div>\u2022 Penalties calculated on no-AIA tax (worst case until AIA claimed)</div>';
+      h += '<div>\u2022 AIA can only be claimed once per item \u2014 allocate to highest-tax year</div>';
+      h += '<div>\u2022 Home office: actual cost method (30% of rent \u2014 mixed-use room)</div>';
+      h += '<div>\u2022 Interest rate: Bank of England base + 2.5% (currently ~7.75%)</div>';
+      h += '<div>\u2022 Revenue = your take-home after ~36% platform fees</div>';
+      h += '<div>\u2022 DZO lenses insurance (\u00A36k) is tax-neutral \u2014 AIA clawed back, \u00A3800 excess CGT-exempt</div>';
+      h += '</div>';
+
+      // PDF download button
+      var acctParam = getAccountParam();
+      var pdfUrl = '/revenue/tax-report.pdf' + (acctParam ? '?' + acctParam.substring(1) : '');
+      h += '<div style="margin-top:10px;text-align:center;">';
+      h += '<a href="' + pdfUrl + '" target="_blank" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;padding:8px 20px;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;">Download Full Tax Report (PDF)</a>';
+      h += '<div style="font-size:9px;color:#8b8fa3;margin-top:4px;">Multi-page report with detailed breakdowns, deductions, penalties & recommendations</div>';
+      h += '</div>';
+
+      h += '</div>';
+      exp.innerHTML = h;
+    }
+
+    function renderTax(data) {
+      _taxData = data;
+      var el = document.getElementById('statTaxLiability');
+      var sub = document.getElementById('statTaxSub');
+      var exp = document.getElementById('expandTax');
+      if (!data) { el.textContent = '--'; sub.textContent = ''; if (exp) exp.innerHTML = ''; return; }
+      var view = (document.getElementById('taxView').value || 'multi');
+      if (view === 'multi') return; // handled by renderMultiYearTax
+      var isProjected = view === 'projected';
+      var isNoAia = view === 'noaia';
+      var src = isNoAia ? data.noAia : (isProjected ? data : data.actual);
+      var tax = isNoAia ? data.noAia.totalTax : (isProjected ? data.totalTax : data.actual.totalTax);
+      var rev = isNoAia ? data.projectedAnnualRevenue : (isProjected ? data.projectedAnnualRevenue : data.actual.revenue);
+      var rate = isNoAia ? data.noAia.effectiveRate : (isProjected ? data.effectiveRate : data.actual.effectiveRate);
+      var profit = isNoAia ? data.noAia.taxableProfit : (isProjected ? data.taxableProfit : data.actual.taxableProfit);
+
+      el.textContent = '\u00A3' + Math.round(tax).toLocaleString();
+      var viewLabel = isNoAia ? 'no AIA' : (isProjected ? 'projected' : data.daysElapsed + ' days');
+      sub.innerHTML = '<span style="color:#ef4444;">' + rate + '% eff.</span> \u00B7 ' +
+        data.taxYear + ' \u00B7 ' + viewLabel;
+
+      if (!exp) return;
+      var h = '';
+      h += '<div style="font-size:11px;line-height:1.8;">';
+
+      // Revenue section
+      h += '<div style="color:#8b8fa3;font-weight:600;margin-bottom:2px;">Revenue</div>';
+      if (isProjected) {
+        h += '<div style="display:flex;justify-content:space-between;"><span>YTD revenue (' + data.daysElapsed + ' days)</span><span style="color:#22c55e;">\u00A3' + data.grossRevenue.toLocaleString() + '</span></div>';
+        h += '<div style="display:flex;justify-content:space-between;"><span>Projected annual</span><span style="color:#22c55e;font-weight:600;">\u00A3' + data.projectedAnnualRevenue.toLocaleString() + '</span></div>';
+      } else {
+        h += '<div style="display:flex;justify-content:space-between;"><span>Actual revenue</span><span style="color:#22c55e;">\u00A3' + data.grossRevenue.toLocaleString() + '</span></div>';
+      }
+      if (data.insurancePayouts > 0) {
+        h += '<div style="display:flex;justify-content:space-between;color:#8b8fa3;"><span>Insurance payouts (excluded)</span><span>\u00A3' + data.insurancePayouts.toLocaleString() + '</span></div>';
+      }
+
+      // Deductions
+      if (!isNoAia) {
+        h += '<div style="color:#8b8fa3;font-weight:600;margin-top:6px;margin-bottom:2px;">Deductions</div>';
+        h += '<div style="display:flex;justify-content:space-between;"><span>Equipment AIA write-off</span><span style="color:#f59e0b;">-\u00A3' + (isProjected ? data.capitalAllowanceUsed : data.actual.capitalAllowance).toLocaleString() + '</span></div>';
+        h += '<div style="display:flex;justify-content:space-between;color:#8b8fa3;font-size:10px;"><span>Total equipment value: \u00A3' + data.equipmentValue.toLocaleString() + '</span><span></span></div>';
+      } else {
+        h += '<div style="color:#ef4444;font-size:10px;margin-top:6px;">Showing tax WITHOUT equipment AIA deduction</div>';
+      }
+
+      // Taxable profit
+      h += '<div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:6px;padding-top:4px;display:flex;justify-content:space-between;font-weight:600;"><span>Taxable profit</span><span style="color:#e4e6eb;">\u00A3' + profit.toLocaleString() + '</span></div>';
+
+      // Tax category
+      var category = isNoAia ? data.noAia.taxCategory : data.taxCategory;
+      h += '<div style="display:flex;justify-content:space-between;color:#a78bfa;"><span>Tax category</span><span>' + escapeHtml(category) + '</span></div>';
+
+      // Personal allowance
+      var pa = isNoAia ? data.noAia.personalAllowance : data.personalAllowance;
+      h += '<div style="display:flex;justify-content:space-between;color:#8b8fa3;"><span>Personal allowance</span><span>\u00A3' + pa.toLocaleString() + '</span></div>';
+
+      // Income Tax bands
+      var itBands = isNoAia ? data.noAia.incomeTaxBands : (isProjected ? data.incomeTaxBands : []);
+      var itTotal = isNoAia ? data.noAia.incomeTax : (isProjected ? data.incomeTax : data.actual.incomeTax);
+      h += '<div style="color:#8b8fa3;font-weight:600;margin-top:6px;margin-bottom:2px;">Income Tax</div>';
+      if (itBands && itBands.length > 0) {
+        itBands.forEach(function(b) {
+          h += '<div style="display:flex;justify-content:space-between;"><span style="color:#8b8fa3;">' + escapeHtml(b.band) + ' on \u00A3' + b.taxable.toLocaleString() + '</span><span style="color:#ef4444;">\u00A3' + b.tax.toLocaleString() + '</span></div>';
+        });
+      }
+      h += '<div style="display:flex;justify-content:space-between;font-weight:600;"><span>Income Tax total</span><span style="color:#ef4444;">\u00A3' + itTotal.toLocaleString() + '</span></div>';
+
+      // Class 4 NIC
+      var nicBands = isNoAia ? data.noAia.class4NIBands : (isProjected ? data.class4NIBands : []);
+      var nicTotal = isNoAia ? data.noAia.class4NIC : (isProjected ? data.class4NIC : data.actual.class4NIC);
+      h += '<div style="color:#8b8fa3;font-weight:600;margin-top:6px;margin-bottom:2px;">National Insurance (Class 4)</div>';
+      if (nicBands && nicBands.length > 0) {
+        nicBands.forEach(function(b) {
+          h += '<div style="display:flex;justify-content:space-between;"><span style="color:#8b8fa3;">' + escapeHtml(b.band) + ' on \u00A3' + b.taxable.toLocaleString() + '</span><span style="color:#ef4444;">\u00A3' + b.nic.toLocaleString() + '</span></div>';
+        });
+      }
+      h += '<div style="display:flex;justify-content:space-between;font-weight:600;"><span>Class 4 NIC total</span><span style="color:#ef4444;">\u00A3' + nicTotal.toLocaleString() + '</span></div>';
+      h += '<div style="font-size:10px;color:#8b8fa3;">Class 2 NIC: abolished April 2025</div>';
+
+      // Total
+      h += '<div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:8px;padding-top:6px;">';
+      h += '<div style="display:flex;justify-content:space-between;font-weight:700;font-size:13px;"><span style="color:#ef4444;">TOTAL TAX DUE</span><span style="color:#ef4444;">\u00A3' + Math.round(tax).toLocaleString() + '</span></div>';
+      h += '<div style="display:flex;justify-content:space-between;font-weight:600;"><span style="color:#22c55e;">Net after tax</span><span style="color:#22c55e;">\u00A3' + Math.round(rev - tax).toLocaleString() + '</span></div>';
+      h += '<div style="display:flex;justify-content:space-between;color:#8b8fa3;"><span>Effective tax rate</span><span>' + rate + '%</span></div>';
+      h += '</div>';
+
+      // Notes
+      h += '<div style="border-top:1px solid rgba(255,255,255,0.06);margin-top:8px;padding-top:6px;font-size:10px;color:#8b8fa3;line-height:1.6;">';
+      h += '<div>\u2022 Revenue = your take-home (after ~36% platform fees)</div>';
+      h += '<div>\u2022 AIA: 100% deduction on equipment in year of purchase (claimed once per item)</div>';
+      h += '<div>\u2022 Insurance payouts excluded (equipment replaced = no balancing charge)</div>';
+      h += '<div>\u2022 Use "No AIA" view if equipment already claimed in prior tax years</div>';
+      h += '<div>\u2022 Tax year: ' + data.taxYearStart + ' to ' + data.taxYearEnd + '</div>';
+      h += '<div>\u2022 ' + data.daysRemaining + ' days remaining in tax year</div>';
+      h += '</div>';
+
+      h += '</div>';
+      exp.innerHTML = h;
+    }
+
+    function refreshTax() {
+      var view = document.getElementById('taxView').value || 'multi';
+      var acctAmp = getAccountParam();
+      if (view === 'multi') {
+        if (_multiYearTaxData) { renderMultiYearTax(_multiYearTaxData); return; }
+        fetchJSON('/revenue/tax-multi-year' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(renderMultiYearTax).catch(function() {});
+      } else {
+        if (_taxData) { renderTax(_taxData); return; }
+        fetchJSON('/revenue/tax-summary' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(renderTax).catch(function() {});
+      }
     }
 
     function renderLostRevenueItems(data) {
@@ -4556,6 +4953,7 @@
         fetchJSON('/market-releases/insights').then(renderMarketReleases).catch(function() {}),
         fetchJSON('/revenue/ai-boost?period=' + (document.getElementById('aiBoostPeriod').value || 'month') + acctAmp).then(renderAiBoost).catch(function() {}),
         fetchJSON('/revenue/monthly?months=12' + acctAmp).then(renderBestWorst).catch(function() {}),
+        fetchJSON('/revenue/tax-multi-year' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(renderMultiYearTax).catch(function() {}),
         loadReturnHub(),
         loadSellReco(),
       ]).then(function(results) {
@@ -4569,7 +4967,7 @@
         document.getElementById('lastRefreshed').textContent = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
         clearInterval(refreshTimer);
-        refreshTimer = setInterval(refreshAll, 30000);
+        refreshTimer = setInterval(refreshAll, 30000); // 30s — paused when tab hidden
       });
 
       loadCharts();
@@ -4582,7 +4980,7 @@
       var acctAmp = getAccountParam();
       fetchJSON('/activity/recent?limit=50' + acctAmp).then(renderActivity).catch(function() {});
     }
-    activityPollTimer = setInterval(pollActivity, 10000);
+    activityPollTimer = setInterval(pollActivity, 10000); // 10s — paused when tab hidden
 
     // Initial load
     refreshAll();

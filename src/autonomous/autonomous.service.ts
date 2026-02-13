@@ -1820,9 +1820,9 @@ export class AutonomousService {
         // Retrieve conversation history — 8 recent messages + facts summary from older ones
         const conversationHistory = await this.memoryService.getConversationHistory(chatId, 8);
 
-        // ALWAYS build/refresh conversation summary BEFORE AI call — ensures context exists even on first message
+        // Build conversation summary if missing (use cache if available — avoids redundant Haiku call per message)
         try {
-          await this.memoryService.buildConversationSummary(rental.id, chatId, true);
+          await this.memoryService.buildConversationSummary(rental.id, chatId, false);
         } catch {
           // Non-critical — cached summary will be used as fallback
         }
@@ -2452,24 +2452,12 @@ export class AutonomousService {
           (rentalStageContext ? `\n${rentalStageContext}\n` : '') +
           `${discountContext}` +
           `${sameDayInstruction}` +
-          // --- OPERATIONAL CONTEXT (message-specific guidelines, not repeated from system prompt) ---
-          `\nINVENTORY REFERENCE: ${getInventoryItemNames().join(', ')}.\n` +
-          `VOICE: ${accountName === 'leo' ? 'Use "I" and "my" naturally — you\'re Leo, an individual renter.' : 'Use "our" and "the gear" — you represent the business, not personal ownership.'}\n\n` +
-          // Situational guidelines (only what's needed beyond the system prompt and authority framework)
-          `HOW TO RESPOND:\n` +
-          `- Lead with the answer. Short paragraphs. Plain text, no markdown.\n` +
-          `${['inquiry', 'interest'].includes(currentStage) ? '- If renter hasn\'t said what the shoot is for, ask casually. This drives gear recommendations.\n' : ''}` +
-          `- If renter asks about items outside this booking, answer helpfully first — don't gatekeep.\n` +
-          `- When quoting items, mention included accessories (batteries, cards, plates, cables).\n` +
-          `- V-mount batteries: always mention BOTH 95mAh and 150mAh options with different price points. Rentals include plates, adapters, cables.\n` +
-          `- BMPCC 6K Pro/G2: comes with 5x LP-E6NH batteries (always say "5x LP-E6NH", never just "batteries").\n` +
-          `- If live availability data is provided, use it — don't guess stock levels.\n` +
-          `- When suggesting bundles, check if a larger bundle includes what they want at better value.\n` +
-          `- Returning renters: skip generic welcome, say "Welcome back!" and get to business.\n` +
-          `- Catalog prices are estimates — mention exact pricing confirms when they book.\n` +
-          `- Delivery estimates: accurate within ~15%, actual price confirmed by courier.\n` +
-          `- If Daniel is away: suggest nearest available time, offer free next-morning return for scheduling constraints.\n` +
-          `Start your response with the exact reply text (no preamble).`;
+          // --- OPERATIONAL CONTEXT (minimal, message-specific) ---
+          `\nVOICE: ${accountName === 'leo' ? 'Use "I" and "my" — you\'re Leo, an individual.' : 'Use "our" and "the gear" — you represent the business.'}\n` +
+          // Only include inventory list when renter is asking about items or in early stages
+          `${listingInventoryContext || messageMismatchContext || hasPricingIntent || ['inquiry', 'interest', 'qualified'].includes(currentStage) ? `INVENTORY: ${getInventoryItemNames().join(', ')}.\n` : ''}` +
+          `${['inquiry', 'interest'].includes(currentStage) ? 'If renter hasn\'t said what the shoot is for, ask casually.\n' : ''}` +
+          `Lead with the answer. Short paragraphs. Plain text, no markdown. No preamble.`;
 
         // URGENCY CONTEXT: How soon does the rental start?
         let urgencyContext = '';
@@ -2612,6 +2600,8 @@ export class AutonomousService {
           rentalDates: { start: rental.start_date, end: rental.end_date },
           // Context-aware token budget: simple acks get less, complex queries get more
           maxTokens: contextLevel === 'minimal' ? 250 : contextLevel === 'comprehensive' ? 800 : undefined,
+          // Stage-gate: prompt-manager skips irrelevant DB components for later funnel stages
+          conversationStage: currentStage,
         });
 
         // VALIDATION: Check response before sending

@@ -27,16 +27,11 @@ export class CompletedScanService {
   ) {}
 
   /**
-   * Hourly cron: Sweep completed and obsolete rentals for unanswered messages.
-   * Skip quiet hours (2am-7am).
+   * Sweep completed and obsolete rentals for unanswered messages.
+   * Runs 3x/day at 8am, 2pm, 8pm (was hourly — reduced to save API calls).
    */
-  @Cron('0 * * * *')
+  @Cron('0 8,14,20 * * *')
   async sweepCompletedRentals(): Promise<void> {
-    // Skip quiet hours
-    const hour = new Date().getHours();
-    if (hour >= 2 && hour < 7) {
-      return;
-    }
 
     this.logger.log('Starting completed rental sweep...');
 
