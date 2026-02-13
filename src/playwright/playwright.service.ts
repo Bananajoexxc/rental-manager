@@ -541,14 +541,14 @@ export class PlaywrightService implements OnModuleDestroy {
    * Handles: login, modal dismissal, star rating popup (closes without reviewing).
    * Gated by READ_ONLY_MODE + RETURN_ENABLED_RENTALS and PLAYWRIGHT_ENABLED.
    */
-  async markAsReturned(orderId: string, account: HyggloAccount): Promise<{
+  async markAsReturned(orderId: string, account: HyggloAccount, forceReturn = false): Promise<{
     success: boolean;
     error?: string;
   }> {
     if (!this.isEnabled) {
       return { success: false, error: 'Playwright is disabled' };
     }
-    if (this.isReadOnly && !this.isReturnEnabledRental(orderId)) {
+    if (this.isReadOnly && !forceReturn && !this.isReturnEnabledRental(orderId)) {
       this.logger.warn(`BLOCKED [READ_ONLY_MODE] markAsReturned for order ${orderId}`);
       return { success: false, error: 'Read-only mode is active' };
     }
@@ -763,14 +763,14 @@ export class PlaywrightService implements OnModuleDestroy {
    * Leave a 5-star review on a completed rental order.
    * Gated by READ_ONLY_MODE and PLAYWRIGHT_ENABLED.
    */
-  async leaveReview(orderId: string, account: HyggloAccount, stars: number = 5): Promise<{
+  async leaveReview(orderId: string, account: HyggloAccount, stars: number = 5, forceReturn = false): Promise<{
     success: boolean;
     error?: string;
   }> {
     if (!this.isEnabled) {
       return { success: false, error: 'Playwright is disabled' };
     }
-    if (this.isReadOnly) {
+    if (this.isReadOnly && !forceReturn) {
       this.logger.warn(`BLOCKED [READ_ONLY_MODE] leaveReview for order ${orderId}`);
       return { success: false, error: 'Read-only mode is active' };
     }

@@ -783,6 +783,7 @@ export class AppService {
     reason?: string;
     issues?: string[];
     skipFollowUp?: boolean;
+    dashboardApproved?: boolean;
   }) {
     const rental = await this.prisma.rental.findUnique({
       where: { id: rentalId },
@@ -852,7 +853,7 @@ export class AppService {
     } else if (!body.skipFollowUp) {
       // Good outcome WITH follow-up — leave review + send thank you
       try {
-        const reviewResult = await this.playwrightService.leaveReview(rental.listing_id, account, 5);
+        const reviewResult = await this.playwrightService.leaveReview(rental.listing_id, account, 5, !!body.dashboardApproved);
         reviewLeft = reviewResult.success;
         if (!reviewResult.success) {
           this.logger.warn(`Review not left for ${rental.listing_id}: ${reviewResult.error}`);
@@ -867,7 +868,7 @@ export class AppService {
         : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production. As a thank you, here's 15% off your next rental — just use code db15off when booking. Looking forward to working with you again!` + reviewRequest;
 
       try {
-        thankYouSent = await this.hyggloService.sendMessage(rental.listing_id, thankYouText);
+        thankYouSent = await this.hyggloService.sendMessage(rental.listing_id, thankYouText, !!body.dashboardApproved);
         if (thankYouSent) {
           this.logger.log(`Auto-sent thank you + review request for rental ${rentalId}`);
         }
@@ -879,32 +880,30 @@ export class AppService {
       this.logger.log(`No follow-up for rental ${rentalId} (${renterName}) — skipped by owner`);
     }
 
-    // Mark as returned on Hygglo — runs async (don't block HTTP response)
+    // Mark as returned on Hygglo — awaited so dashboard gets real result
     if (rental.status !== 'completed') {
       const listingId = rental.listing_id;
-      const rid = rentalId;
-      // Fire-and-forget: try API first, then Playwright fallback
-      (async () => {
-        try {
-          const apiResult = await this.hyggloService.markAsReturned(listingId, account);
-          if (apiResult.success) {
-            await this.prisma.rental.update({ where: { id: rid }, data: { status: 'completed' } });
-            this.logger.log(`Marked rental ${rid} as returned via Hygglo API + updated local status`);
-            return;
-          }
+      const forceReturn = !!body.dashboardApproved;
+      try {
+        const apiResult = await this.hyggloService.markAsReturned(listingId, account, forceReturn);
+        if (apiResult.success) {
+          await this.prisma.rental.update({ where: { id: rentalId }, data: { status: 'completed' } });
+          this.logger.log(`Marked rental ${rentalId} as returned via Hygglo API + updated local status`);
+          markedOnHygglo = true;
+        } else {
           this.logger.debug(`API markAsReturned failed, trying Playwright: ${apiResult.error}`);
-          const pwResult = await this.playwrightService.markAsReturned(listingId, account);
+          const pwResult = await this.playwrightService.markAsReturned(listingId, account, forceReturn);
           if (pwResult.success) {
-            await this.prisma.rental.update({ where: { id: rid }, data: { status: 'completed' } });
-            this.logger.log(`Marked rental ${rid} as returned via Playwright + updated local status`);
+            await this.prisma.rental.update({ where: { id: rentalId }, data: { status: 'completed' } });
+            this.logger.log(`Marked rental ${rentalId} as returned via Playwright + updated local status`);
+            markedOnHygglo = true;
           } else {
-            this.logger.warn(`Failed to mark rental ${rid} as returned on Hygglo: API=${apiResult.error}, Playwright=${pwResult.error}`);
+            this.logger.warn(`Failed to mark rental ${rentalId} as returned on Hygglo: API=${apiResult.error}, Playwright=${pwResult.error}`);
           }
-        } catch (err) {
-          this.logger.warn(`markAsReturned failed for rental ${rid}: ${err.message}`);
         }
-      })();
-      markedOnHygglo = false; // Will complete async
+      } catch (err) {
+        this.logger.warn(`markAsReturned failed for rental ${rentalId}: ${err.message}`);
+      }
     } else {
       markedOnHygglo = true; // Already completed
     }
@@ -963,7 +962,8 @@ export class AppService {
       ? `Hey! Thanks so much for renting with me, really appreciate it! Hope the gear worked out great for your project. If you'd like to rent again, use code db15off for 15% off your next booking. Cheers!` + reviewRequest
       : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production. As a thank you, here's 15% off your next rental — just use code db15off when booking. Looking forward to working with you again!` + reviewRequest;
 
-    const sent = await this.hyggloService.sendMessage(rental.listing_id, message);
+    // Dashboard-triggered — bypass read-only for this specific rental
+    const sent = await this.hyggloService.sendMessage(rental.listing_id, message, true);
 
     if (sent) {
       await this.prisma.return_processing.upsert({
@@ -979,6 +979,6 @@ export class AppService {
       });
     }
 
-    return { success: sent, message: sent ? 'Thank you sent' : 'Failed to send (check READ_ONLY_MODE)' };
+    return { success: sent, message: sent ? 'Thank you sent' : 'Failed to send' };
   }
 }

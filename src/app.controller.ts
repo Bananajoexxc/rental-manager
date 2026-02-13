@@ -376,6 +376,50 @@ export class AppController {
     return await this.revenueService.backfillBundleRevenueSnapshots();
   }
 
+  @Get('revenue/top-bundles')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Top bundles by revenue with period filtering (live query)' })
+  @ApiQuery({ name: 'period', required: false, type: String })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Top bundles with revenue data' })
+  async getTopBundlesLive(
+    @Query('period') period?: string,
+    @Query('account') account?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return await this.revenueService.getTopBundlesLive(
+      period || '6m',
+      account || undefined,
+      limit ? parseInt(limit, 10) : 15,
+    );
+  }
+
+  @Get('revenue/item-cycle')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Item Cycle Tracker — seasonal demand patterns by category (Jan-Dec)' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Seasonal demand curves per category' })
+  async getItemCycle(@Query('account') account?: string) {
+    return await this.revenueService.getItemCycleData(account || undefined);
+  }
+
+  @Get('revenue/item-cycle/refresh')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Manually refresh item cycle tracker cache' })
+  async refreshItemCycle() {
+    await this.revenueService.monthlyItemCycleRefresh();
+    return { status: 'ok', message: 'Item cycle cache refreshed for all accounts' };
+  }
+
+  @Get('revenue/fix-misattributed')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Fix misattributed old items in parsed_items and bookings' })
+  @ApiResponse({ status: 200, description: 'Fix results' })
+  async fixMisattributedItems() {
+    return await this.revenueService.fixMisattributedItems();
+  }
+
   // --- Calendar ---
 
   @Get('calendar/bookings')
@@ -1490,7 +1534,7 @@ export class AppController {
   @ApiResponse({ status: 200, description: 'Return processed' })
   async processReturn(
     @Param('id') id: string,
-    @Body() body: { outcome: 'good' | 'issues'; blacklist?: boolean; reason?: string },
+    @Body() body: { outcome: 'good' | 'issues'; blacklist?: boolean; reason?: string; issues?: string[]; skipFollowUp?: boolean; dashboardApproved?: boolean },
   ) {
     return await this.appService.processReturn(id, body);
   }

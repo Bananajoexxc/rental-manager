@@ -163,16 +163,35 @@ export function findBestMatch(input: string, inventory: string[]): string | null
         const normItem = normalizeItemName(item);
         return keywords.some(kw => normItem.includes(kw));
       });
-      if (candidates.length === 1) {
-        return candidates[0]; // unambiguous category match
+      // Before accepting category match, check for variant/model conflicts
+      const VARIANT_WORDS_CAT = ['classic', 'pro', 'plus', 'max', 'lite', 'standard', 'ultra'];
+      const normTokens = normalized.split(' ');
+      const inputVariantsCat = normTokens.filter(t => VARIANT_WORDS_CAT.includes(t));
+      const filteredCandidates = candidates.filter(cand => {
+        const candNorm = normalizeItemName(cand);
+        const candTokens = candNorm.split(' ');
+        // Model number conflict
+        const candNums = candTokens.filter(t => /^\d{1,4}$/.test(t));
+        const inNums = normTokens.filter(t => /^\d{1,4}$/.test(t));
+        if (inNums.length > 0 && candNums.length > 0 && !inNums.some(n => candNums.includes(n))) return false;
+        // Variant word conflict (classic ≠ pro)
+        const candVars = candTokens.filter(t => VARIANT_WORDS_CAT.includes(t));
+        if (inputVariantsCat.length > 0 && candVars.length > 0) {
+          const common = normTokens.filter(t => candTokens.includes(t) && !VARIANT_WORDS_CAT.includes(t) && t.length >= 2);
+          if (common.length >= 2 && !inputVariantsCat.some(v => candVars.includes(v))) return false;
+        }
+        return true;
+      });
+      if (filteredCandidates.length === 1) {
+        return filteredCandidates[0]; // unambiguous category match after conflict filtering
       }
-      if (candidates.length >= 2) {
+      if (filteredCandidates.length >= 2) {
         // Multiple category candidates — score them against input to pick the best.
         // Without this, long Hygglo titles like "Manfrotto 190X Tripod + Fluid Video Head"
         // fail generic token scoring (1/18 coverage) even though category is clearly "tripod".
         let bestCatScore = 0;
         let bestCatItem: string | null = null;
-        for (const cand of candidates) {
+        for (const cand of filteredCandidates) {
           const normCand = normalizeItemName(cand);
           const candTokens = normCand.split(' ');
           let score = 0;
@@ -254,6 +273,49 @@ export function findBestMatch(input: string, inventory: string[]): string | null
     if (inputMmTokens.length > 0 && itemMmTokens.length > 0) {
       const hasFocalOverlap = inputMmTokens.some(imt => itemMmTokens.includes(imt));
       if (!hasFocalOverlap) continue; // Different focal lengths = different product
+    }
+
+    // Model number conflict check: standalone numeric tokens (1-4 digits) that differ
+    // between input and candidate indicate different product versions.
+    // Prevents "DJI Mini 3 Pro" matching "DJI Mini 4 Pro", "GoPro 10" matching "GoPro 12".
+    const modelNumPattern = /^\d{1,4}$/;
+    const inputModelNums = inputTokens.filter(t => modelNumPattern.test(t) && !GENERIC_TOKENS.has(t));
+    const itemModelNums = itemTokens.filter(t => modelNumPattern.test(t) && !GENERIC_TOKENS.has(t));
+    if (inputModelNums.length > 0 && itemModelNums.length > 0) {
+      const hasNumOverlap = inputModelNums.some(n => itemModelNums.includes(n));
+      if (!hasNumOverlap) continue; // Different model numbers = different product
+    }
+
+    // Product variant conflict: "classic" vs "pro" are different products
+    // Prevents "Mavic 3 Classic" matching "DJI Mavic 3 Pro"
+    const VARIANT_WORDS = ['classic', 'pro', 'plus', 'max', 'lite', 'mini', 'standard', 'ultra'];
+    const inputVariants = inputTokens.filter(t => VARIANT_WORDS.includes(t));
+    const itemVariants = itemTokens.filter(t => VARIANT_WORDS.includes(t));
+    if (inputVariants.length > 0 && itemVariants.length > 0) {
+      // If both have variant words and they differ, check if they share a product base (≥2 common tokens)
+      const commonTokens = inputTokens.filter(t => itemTokens.includes(t) && !VARIANT_WORDS.includes(t) && t.length >= 2);
+      if (commonTokens.length >= 2 && !inputVariants.some(v => itemVariants.includes(v))) {
+        continue; // Same product family but different variant = different product
+      }
+    }
+
+    // Camera model suffix conflict: a7s ≠ a7, a7r ≠ a7, a7c ≠ a7
+    // Extract model designator (s/r/c or empty) and compare, ignoring generation (i/ii/iii/iv/v).
+    // "a7siii" and "a7s" both have designator "s"; "a7iii" and "a7" both have designator "".
+    const getA7Designator = (tokens: string[]): string | null => {
+      for (const t of tokens) {
+        const variants = getTokenVariants(t);
+        for (const v of variants) {
+          const m = v.match(/^a7([src]?)/);
+          if (m) return m[1]; // "" for base a7, "s" for a7s, "r" for a7r, "c" for a7c
+        }
+      }
+      return null;
+    };
+    const inputA7Des = getA7Designator(inputTokens);
+    const itemA7Des = getA7Designator(itemTokens);
+    if (inputA7Des !== null && itemA7Des !== null && inputA7Des !== itemA7Des) {
+      continue; // a7s ≠ a7 = different camera
     }
 
     // Use coverage of the INVENTORY item (shorter side) as primary metric.

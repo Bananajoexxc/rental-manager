@@ -1086,9 +1086,9 @@ export class HyggloService implements OnModuleInit {
    * Mark a rental as returned via the Hygglo API.
    * Tries known PATCH actions. Gated by RETURN_ENABLED_RENTALS in READ_ONLY_MODE.
    */
-  async markAsReturned(rentalId: string, accountName?: string): Promise<{ success: boolean; error?: string }> {
+  async markAsReturned(rentalId: string, accountName?: string, forceReturn = false): Promise<{ success: boolean; error?: string }> {
     const readOnly = process.env.READ_ONLY_MODE === 'true';
-    const returnEnabled = (process.env.RETURN_ENABLED_RENTALS || '').split(',').map(s => s.trim()).includes(rentalId);
+    const returnEnabled = forceReturn || (process.env.RETURN_ENABLED_RENTALS || '').split(',').map(s => s.trim()).includes(rentalId);
 
     if (readOnly && !returnEnabled) {
       this.logger.warn(`BLOCKED [READ_ONLY_MODE] markAsReturned on rental ${rentalId}`);
@@ -1138,9 +1138,9 @@ export class HyggloService implements OnModuleInit {
     return { success: false, error: 'No API action succeeded' };
   }
 
-  async sendMessage(rentalId: string, message: string): Promise<boolean> {
+  async sendMessage(rentalId: string, message: string, forceReturn = false): Promise<boolean> {
     const readOnly = process.env.READ_ONLY_MODE === 'true';
-    const writeEnabled = this.isWriteEnabledRental(rentalId);
+    const writeEnabled = forceReturn || this.isWriteEnabledRental(rentalId);
 
     if (readOnly && !writeEnabled) {
       this.logger.warn(`BLOCKED [READ_ONLY_MODE] sendMessage on rental ${rentalId}: "${message.substring(0, 80)}..."`);

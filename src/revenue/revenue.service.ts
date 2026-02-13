@@ -81,6 +81,13 @@ export class RevenueService {
     const fStopPattern = /^f\d/;
     const inputFStops = inputTokens.filter(t => fStopPattern.test(t));
 
+    // Model number tokens from input (standalone digits like "3", "4", "12")
+    const modelNumPattern = /^\d{1,4}$/;
+    const inputModelNums = inputTokens.filter(t => modelNumPattern.test(t));
+    // Camera model suffix detection (a7s ≠ a7, a7r ≠ a7c)
+    const a7Pattern = /^a7([srciv]*)$/;
+    const inputA7 = inputTokens.filter(t => a7Pattern.test(t));
+
     for (const invName of inventoryNames) {
       const invLower = invName.toLowerCase().replace(/[-]/g, ' ').replace(/\s+/g, ' ').trim();
       const invTokens = invLower.split(' ');
@@ -89,6 +96,27 @@ export class RevenueService {
       if (inputFStops.length > 0) {
         const invFStops = invTokens.filter(t => fStopPattern.test(t));
         if (invFStops.length > 0 && !inputFStops.some(f => invFStops.includes(f))) continue;
+      }
+
+      // Model number conflict: standalone digits that differ (Mini 3 ≠ Mini 4, GoPro 10 ≠ 12)
+      const invModelNums = invTokens.filter(t => modelNumPattern.test(t));
+      if (inputModelNums.length > 0 && invModelNums.length > 0) {
+        if (!inputModelNums.some(n => invModelNums.includes(n))) continue;
+      }
+
+      // Camera model suffix conflict (a7s ≠ a7, a7r ≠ a7)
+      const invA7 = invTokens.filter(t => a7Pattern.test(t));
+      if (inputA7.length > 0 && invA7.length > 0) {
+        if (inputA7[0] !== invA7[0]) continue;
+      }
+
+      // Product variant conflict (classic ≠ pro, lite ≠ max)
+      const VARIANT_WORDS = ['classic', 'pro', 'plus', 'max', 'lite', 'standard', 'ultra'];
+      const inputVars = inputTokens.filter(t => VARIANT_WORDS.includes(t));
+      const invVars = invTokens.filter(t => VARIANT_WORDS.includes(t));
+      if (inputVars.length > 0 && invVars.length > 0) {
+        const common = inputTokens.filter(t => invTokens.includes(t) && !VARIANT_WORDS.includes(t) && t.length >= 2);
+        if (common.length >= 2 && !inputVars.some(v => invVars.includes(v))) continue;
       }
 
       // Count how many input tokens appear in inventory name
@@ -1883,6 +1911,39 @@ export class RevenueService {
   }
 
   /**
+   * Monthly cron: refresh item cycle tracker cache.
+   * Runs at 6:00am on the 1st (after bundle snapshots at 5:45).
+   */
+  @Cron('0 0 6 1 * *')
+  async monthlyItemCycleRefresh(): Promise<void> {
+    this.logger.log('=== MONTHLY ITEM CYCLE CACHE REFRESH: Starting ===');
+    try {
+      for (const account of [undefined, 'dbcinema', 'leo']) {
+        const data = await this.computeItemCycleData(account);
+        const cacheKey = `item_cycle_${account || 'all'}`;
+
+        // Delete old cache entries for this key
+        await this.prisma.ai_decision.deleteMany({
+          where: { decision_type: 'item_cycle_cache', output_summary: cacheKey },
+        });
+
+        // Write fresh cache
+        await this.prisma.ai_decision.create({
+          data: {
+            decision_type: 'item_cycle_cache',
+            input_summary: JSON.stringify(data),
+            output_summary: cacheKey,
+          },
+        });
+
+        this.logger.log(`Item cycle cache refreshed for ${account || 'all'}: ${data.categories.length} categories, ${data.yearsAnalyzed} years`);
+      }
+    } catch (err) {
+      this.logger.error(`Monthly item cycle refresh failed: ${err.message}`);
+    }
+  }
+
+  /**
    * Generate a human-readable label for a bundle from its item names.
    */
   private generateBundleLabel(items: string[]): string {
@@ -2068,7 +2129,7 @@ export class RevenueService {
    */
   async backfillBundleRevenueSnapshots(): Promise<{ monthsProcessed: number; bundlesTotal: number }> {
     const earliest = await this.prisma.rental.findFirst({
-      where: { rental_price: { gt: 0 }, parsed_items: { not: null } },
+      where: { rental_price: { gt: 0 }, parsed_items: { not: Prisma.JsonNull } },
       orderBy: { start_date: 'asc' },
       select: { start_date: true },
     });
@@ -2121,6 +2182,314 @@ export class RevenueService {
    * Flexible period range for item analytics.
    * Supports: 'week', 'month', '3m', '6m', '12m', 'all', or specific month 'YYYY-MM'.
    */
+  /**
+   * Fix misattributed parsed_items and bookings where old/retired items were
+   * incorrectly mapped to current inventory items by the AI parser.
+   * E.g., "DJI Mini 3 Pro" → was stored as "DJI Mini 4 Pro"
+   */
+  async fixMisattributedItems(): Promise<{
+    parsedItemsFixed: number;
+    bookingsFixed: number;
+    details: { title: string; from: string; to: string }[];
+  }> {
+    // Known misattributions: title pattern → { wrong parsed name → correct name }
+    const MISATTRIBUTION_RULES: { titlePattern: RegExp; wrongName: string; correctName: string }[] = [
+      { titlePattern: /mini 3/i, wrongName: 'DJI Mini 4 Pro', correctName: 'DJI Mini 3 Pro' },
+      { titlePattern: /mavic 3 classic/i, wrongName: 'DJI Mavic 3 Pro', correctName: 'DJI Mavic 3 Classic' },
+      { titlePattern: /a7s/i, wrongName: 'Sony A7 III', correctName: 'Sony A7S III' },
+      { titlePattern: /a7r/i, wrongName: 'Sony A7 III', correctName: 'Sony A7R III' },
+      { titlePattern: /a7c/i, wrongName: 'Sony A7 III', correctName: 'Sony A7C' },
+    ];
+
+    let parsedItemsFixed = 0;
+    let bookingsFixed = 0;
+    const details: { title: string; from: string; to: string }[] = [];
+
+    for (const rule of MISATTRIBUTION_RULES) {
+      // Find rentals matching the title pattern
+      const rentals = await this.prisma.rental.findMany({
+        where: { parsed_items: { not: Prisma.JsonNull } },
+        select: { id: true, title: true, parsed_items: true },
+      });
+
+      const matching = rentals.filter(r => rule.titlePattern.test(r.title));
+
+      for (const rental of matching) {
+        const items = rental.parsed_items as { item: string; qty: number }[];
+        // Skip FX3 listings that mention a7s in SEO title
+        if (rule.titlePattern.source === 'a7s' && /\bfx\s*3\b/i.test(rental.title) && !rental.title.toLowerCase().startsWith('sony a7s')) {
+          continue;
+        }
+
+        let changed = false;
+        const updatedItems = items.map(item => {
+          if (item.item === rule.wrongName) {
+            changed = true;
+            details.push({ title: rental.title.substring(0, 60), from: rule.wrongName, to: rule.correctName });
+            return { ...item, item: rule.correctName };
+          }
+          return item;
+        });
+
+        if (changed) {
+          const jsonValue = JSON.stringify(updatedItems);
+          await this.prisma.$executeRaw`
+            UPDATE rental SET parsed_items = ${jsonValue}::jsonb, updated_at = NOW()
+            WHERE id = ${rental.id}
+          `;
+          parsedItemsFixed++;
+
+          // Also fix any bookings created from this rental
+          const updated = await this.prisma.booking.updateMany({
+            where: { rental_id: rental.id, item_name: rule.wrongName },
+            data: { item_name: rule.correctName },
+          });
+          bookingsFixed += updated.count;
+        }
+      }
+    }
+
+    this.logger.log(`Misattribution fix: ${parsedItemsFixed} rentals, ${bookingsFixed} bookings corrected`);
+    return { parsedItemsFixed, bookingsFixed, details };
+  }
+
+  /**
+   * Get top bundles with period filtering (live query from rental data, not snapshots).
+   * For dashboard tile display.
+   */
+  async getTopBundlesLive(
+    period: string = '6m',
+    account?: string,
+    limit: number = 15,
+  ): Promise<{ bundles: any[]; totalBundleRevenue: number }> {
+    const rentals = await this.getRentalsWithRevenue(account);
+    const { start, end } = this.getFlexiblePeriodRange(period);
+
+    const periodFiltered = rentals.filter(r => {
+      if (start && r._effectiveDate < start) return false;
+      if (end && r._effectiveDate >= end) return false;
+      return true;
+    });
+
+    // Only include multi-item rentals (bundles)
+    const bundles = periodFiltered.filter(r => {
+      const items = r.parsed_items as any[];
+      return items && items.length >= 2;
+    });
+
+    // Aggregate by sorted item combination
+    const byBundle: Record<string, {
+      label: string;
+      items: string[];
+      revenue: number;
+      count: number;
+      days: number;
+    }> = {};
+
+    for (const r of bundles) {
+      const items = (r.parsed_items as { item: string; qty: number }[])
+        .map(p => this.normalizeItemName(p.item) || p.item)
+        .sort();
+      const key = items.join(' + ');
+      if (!byBundle[key]) {
+        byBundle[key] = {
+          label: items.join(' + '),
+          items,
+          revenue: 0,
+          count: 0,
+          days: 0,
+        };
+      }
+      byBundle[key].revenue += r.rental_price || 0;
+      byBundle[key].count += 1;
+      if (r.start_date && r.end_date) {
+        byBundle[key].days += Math.max(1, Math.round((r.end_date.getTime() - r.start_date.getTime()) / 86400000) + 1);
+      }
+    }
+
+    const sorted = Object.values(byBundle)
+      .map(b => ({
+        ...b,
+        revenue: Math.round(b.revenue * 100) / 100,
+        avgPerRental: b.count > 0 ? Math.round((b.revenue / b.count) * 100) / 100 : 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, limit);
+
+    const totalBundleRevenue = Math.round(Object.values(byBundle).reduce((s, b) => s + b.revenue, 0) * 100) / 100;
+
+    return { bundles: sorted, totalBundleRevenue };
+  }
+
+  /**
+   * Item Cycle Tracker — seasonal demand patterns by equipment category.
+   * Averages rental counts per month (Jan-Dec) across all years, normalized 0-1.
+   * Returns smooth seasonal curves for each category.
+   */
+  async getItemCycleData(account?: string): Promise<{
+    categories: {
+      name: string;
+      color: string;
+      data: number[]; // 12 values (Jan-Dec), normalized 0-1
+      rawCounts: number[]; // 12 raw average counts
+      totalRentals: number;
+    }[];
+    monthLabels: string[];
+    yearsAnalyzed: number;
+  }> {
+    // Try cache first (refreshed monthly by cron)
+    const cacheKey = `item_cycle_${account || 'all'}`;
+    const cached = await this.prisma.ai_decision.findFirst({
+      where: { decision_type: 'item_cycle_cache', output_summary: cacheKey },
+      orderBy: { created_at: 'desc' },
+    });
+    if (cached?.input_summary) {
+      try {
+        const parsed = JSON.parse(cached.input_summary);
+        // Cache valid for 35 days
+        const age = Date.now() - new Date(cached.created_at).getTime();
+        if (age < 35 * 24 * 60 * 60 * 1000) return parsed;
+      } catch {}
+    }
+
+    return this.computeItemCycleData(account);
+  }
+
+  async computeItemCycleData(account?: string): Promise<{
+    categories: {
+      name: string;
+      color: string;
+      data: number[];
+      rawCounts: number[];
+      totalRentals: number;
+    }[];
+    monthLabels: string[];
+    yearsAnalyzed: number;
+  }> {
+    const rentals = await this.getRentalsWithRevenue(account);
+
+    // Category definitions with colors
+    const CATEGORIES: { name: string; color: string; match: (item: string) => boolean }[] = [
+      {
+        name: 'Cameras',
+        color: '#3b82f6',
+        match: (item) => /\b(fx3|a7|bmpcc|x100|camera)\b/i.test(item) && !/action/i.test(item),
+      },
+      {
+        name: 'Lenses',
+        color: '#8b5cf6',
+        match: (item) => /\b(gm|f2\.?8|f4|mm|lens|anamorphic|blazar|great joy|vespid|fisheye)\b/i.test(item),
+      },
+      {
+        name: 'Drones',
+        color: '#06b6d4',
+        match: (item) => /\b(mavic|mini [34]|drone)\b/i.test(item),
+      },
+      {
+        name: 'Lighting',
+        color: '#f59e0b',
+        match: (item) => /\b(nanlite|forza|pavotube|led|light|softbox|ambitful|reflector|flash)\b/i.test(item),
+      },
+      {
+        name: 'Audio',
+        color: '#ef4444',
+        match: (item) => /\b(rode|mic|wireless|sennheiser|boom|audio|jbl wireless)\b/i.test(item),
+      },
+      {
+        name: 'Gimbals & Support',
+        color: '#22c55e',
+        match: (item) => /\b(gimbal|rs3|tripod|sirui|slider|follow focus|shoulder|monopod|c.stand)\b/i.test(item),
+      },
+      {
+        name: 'Action & Adventure',
+        color: '#f97316',
+        match: (item) => /\b(gopro|osmo action|suction|action pro)\b/i.test(item),
+      },
+      {
+        name: 'DJ & Events',
+        color: '#ec4899',
+        match: (item) => /\b(dj|pioneer|rx3|jbl club|speaker|smoke|fogger|hazer|party)\b/i.test(item),
+      },
+      {
+        name: 'Monitors & TX',
+        color: '#14b8a6',
+        match: (item) => /\b(atomos|ninja|hollyland|monitor|transmitter|mars|pyro)\b/i.test(item),
+      },
+      {
+        name: 'Power',
+        color: '#a3a3a3',
+        match: (item) => /\b(v.mount|battery|anker|power station|npf)\b/i.test(item),
+      },
+    ];
+
+    // Filter to last 2 years for more accurate/current seasonal patterns
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+
+    // Count rentals per category per month across last 2 years
+    const yearSet = new Set<number>();
+    const categoryCounts: Record<string, number[]> = {};
+    for (const cat of CATEGORIES) {
+      categoryCounts[cat.name] = new Array(12).fill(0);
+    }
+
+    for (const r of rentals) {
+      if (!r.start_date || !r.parsed_items) continue;
+      if (r.start_date < twoYearsAgo) continue; // Skip older data
+      const monthIdx = r.start_date.getMonth(); // 0-11
+      yearSet.add(r.start_date.getFullYear());
+
+      const items = r.parsed_items as { item: string; qty: number }[];
+      const matchedCategories = new Set<string>();
+
+      for (const item of items) {
+        for (const cat of CATEGORIES) {
+          if (cat.match(item.item)) {
+            matchedCategories.add(cat.name);
+          }
+        }
+      }
+
+      // Also try matching against the listing title for broader coverage
+      for (const cat of CATEGORIES) {
+        if (cat.match(r.title)) {
+          matchedCategories.add(cat.name);
+        }
+      }
+
+      for (const catName of matchedCategories) {
+        categoryCounts[catName][monthIdx]++;
+      }
+    }
+
+    const yearsAnalyzed = Math.max(yearSet.size, 1);
+
+    // Build result: average per month, then normalize 0-1
+    const categories = CATEGORIES.map(cat => {
+      const rawCounts = categoryCounts[cat.name].map(c => Math.round((c / yearsAnalyzed) * 100) / 100);
+      const maxCount = Math.max(...rawCounts, 0.01); // avoid division by zero
+      const minCount = Math.min(...rawCounts);
+      const range = maxCount - minCount || 1;
+
+      // Normalize to 0-1 range
+      const normalized = rawCounts.map(c => Math.round(((c - minCount) / range) * 100) / 100);
+
+      return {
+        name: cat.name,
+        color: cat.color,
+        data: normalized,
+        rawCounts,
+        totalRentals: categoryCounts[cat.name].reduce((s, c) => s + c, 0),
+      };
+    }).filter(cat => cat.totalRentals > 0); // Only show categories with actual data
+
+    return {
+      categories,
+      monthLabels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+      yearsAnalyzed,
+    };
+  }
+
   private getFlexiblePeriodRange(period: string): { start: Date | null; end: Date | null } {
     if (period === 'all') return { start: null, end: null };
 
