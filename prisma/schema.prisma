@@ -694,6 +694,75 @@ model item_match_cache {
   @@index([inventory_hash])
 }
 
+// === Monthly Funnel Snapshot Log ===
+
+model funnel_snapshot {
+  id               String   @id @default(uuid())
+  period_start     DateTime // 1st of month
+  period_end       DateTime // 1st of next month
+  account          String?  // null = all accounts, 'dbcinema', 'leo'
+
+  // Stage counts
+  total            Int
+  inquiry          Int
+  interested       Int
+  ready_to_book    Int
+  booked           Int
+  confirmed        Int
+  completed        Int
+  dead             Int
+  pending          Int      // verification pending
+
+  // Derived rates
+  conversion_rate  Float    // (confirmed + completed) / total
+  engagement_rate  Float    // (total - inquiry) / total
+  booking_rate     Float    // (booked+pending+confirmed+completed) / engaged
+  drop_off_rate    Float    // dead / total
+
+  // Revenue context
+  revenue          Float    // owner earnings for this period
+  rental_count     Int      // distinct rental visits
+
+  // AI context (from latest weekly evaluation at time of snapshot)
+  ai_boost_rate    Float?
+  ai_response_coverage Float?
+
+  created_at       DateTime @default(now())
+
+  @@unique([period_start, account])
+  @@index([period_start])
+}
+
+// === Per-Item Monthly Earnings Snapshot ===
+
+model item_earnings_snapshot {
+  id              String   @id @default(uuid())
+  period_start    DateTime // 1st of month
+  period_end      DateTime // 1st of next month
+  item_name       String   // clean MASTER_INVENTORY name or retired item name
+  account         String?  // null = all accounts, 'dbcinema', 'leo'
+
+  revenue         Float    // owner earnings for this item in this period
+  rental_count    Int      // number of completed bookings
+  avg_per_rental  Float    // average revenue per rental
+  days_rented     Int      // total rental days in this period
+
+  // Lifecycle context
+  is_current      Boolean  // true = in current MASTER_INVENTORY, false = retired/sold
+  first_rental    DateTime? // earliest booking start_date ever
+  last_rental     DateTime? // most recent booking end_date
+
+  // Cumulative (all-time up to this period)
+  cumulative_revenue    Float
+  cumulative_rentals    Int
+
+  created_at      DateTime @default(now())
+
+  @@unique([period_start, item_name, account])
+  @@index([period_start])
+  @@index([item_name])
+}
+
 // === eBay Price Cache (Sell Recommender) ===
 
 model ebay_price_cache {

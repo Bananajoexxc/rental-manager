@@ -639,6 +639,7 @@ export class RevenueService {
 
     // Distribute revenue proportionally for each rental using parsed_items
     const byItem: Record<string, { profit: number; revenue: number; count: number }> = {};
+    const byRetired: Record<string, { profit: number; revenue: number; count: number }> = {};
     // Revenue from rentals with no parsed_items goes straight to otherRevenue
     let otherRevenue = noParsedItems.reduce((sum, r) => sum + (r.rental_price || 0), 0);
     for (const r of filtered) {
@@ -646,9 +647,12 @@ export class RevenueService {
         .map(p => ({ item_name: this.normalizeItemName(p.item) || p.item, qty: p.qty || 1 }));
       const attributed = this.distributeRevenueProportionally(items, r.rental_price || 0);
       for (const a of attributed) {
-        // Only include items that exist in MASTER_INVENTORY
         if (!MASTER_INVENTORY[a.item_name]) {
-          otherRevenue += a.attributedRevenue;
+          // Track retired/old items separately from truly unmatched revenue
+          if (!byRetired[a.item_name]) byRetired[a.item_name] = { profit: 0, revenue: 0, count: 0 };
+          byRetired[a.item_name].profit += a.attributedRevenue;
+          byRetired[a.item_name].revenue += a.attributedRevenue;
+          byRetired[a.item_name].count += a.qty;
           continue;
         }
         if (!byItem[a.item_name]) byItem[a.item_name] = { profit: 0, revenue: 0, count: 0 };
@@ -669,12 +673,23 @@ export class RevenueService {
       .sort((a, b) => b.profit - a.profit)
       .slice(0, limit);
 
-    // Ensure displayed items + otherRevenue = total period revenue (no revenue lost)
+    const retiredItems = Object.entries(byRetired)
+      .map(([item, data]) => ({
+        item,
+        profit: Math.round(data.profit * 100) / 100,
+        revenue: Math.round(data.revenue * 100) / 100,
+        count: data.count,
+        avgPerRental: data.count > 0 ? Math.round((data.profit / data.count) * 100) / 100 : 0,
+      }))
+      .sort((a, b) => b.profit - a.profit);
+
+    // Ensure displayed items + retiredItems + otherRevenue = total period revenue (no revenue lost)
     const totalPeriodRevenue = periodFiltered.reduce((sum, r) => sum + (r.rental_price || 0), 0);
     const displayedTotal = items.reduce((sum, i) => sum + i.profit, 0);
-    otherRevenue = totalPeriodRevenue - displayedTotal;
+    const retiredTotal = retiredItems.reduce((sum, i) => sum + i.profit, 0);
+    otherRevenue = totalPeriodRevenue - displayedTotal - retiredTotal;
 
-    return { items, otherRevenue: Math.round(otherRevenue * 100) / 100, totalRevenue: Math.round(totalPeriodRevenue * 100) / 100 } as any;
+    return { items, retiredItems, otherRevenue: Math.round(otherRevenue * 100) / 100, totalRevenue: Math.round(totalPeriodRevenue * 100) / 100 } as any;
   }
 
   /**
@@ -1212,12 +1227,24 @@ export class RevenueService {
     const progressionRate = totalStates > 0 ? progressedPastInquiry / totalStates : 0;
     const followUpRate = Math.min(followUpEngagement * progressionRate * 0.40, 0.12); // cap at 12%
 
-    // 4. CONVERSION FUNNEL — actual conversion rate vs pre-AI baseline
+    // 4. CONVERSION FUNNEL — actual conversion rate vs funnel snapshot baseline (or pre-AI fallback)
     const confirmedStages = await this.prisma.follow_up_state.count({
       where: { conversation_stage: { in: ['confirmed', 'completed', 'booked'] } },
     });
     const actualConversion = totalStates > 0 ? confirmedStages / totalStates : baselines.conversionRate;
-    const conversionLift = Math.max(0, (actualConversion - baselines.conversionRate) / baselines.conversionRate);
+    // Prefer real funnel snapshot data over pre-AI estimate
+    // Use earliest snapshot with actual conversation data (total > 0)
+    const earliestSnapshot = await this.prisma.funnel_snapshot.findFirst({
+      where: { account: null, total: { gt: 0 } },
+      orderBy: { period_start: 'asc' },
+    });
+    const baselineConversion = earliestSnapshot
+      ? earliestSnapshot.conversion_rate
+      : baselines.conversionRate;
+    const conversionBaselineSource = earliestSnapshot
+      ? `funnel log ${earliestSnapshot.period_start.toISOString().substring(0, 7)}`
+      : 'data-derived';
+    const conversionLift = Math.max(0, (actualConversion - baselineConversion) / Math.max(baselineConversion, 0.01));
     const conversionRate = Math.min(conversionLift * 0.10, 0.08); // cap at 8%
 
     // 5. QUALITY SCORE — from response_quality table
@@ -1239,7 +1266,7 @@ export class RevenueService {
         { name: 'Response Speed', rate: Math.round(speedRate * 100) / 100, measured: Math.round(aiResponseCoverage * 100) / 100, baseline: baselines.responseCoverage, description: `${Math.round(aiResponseCoverage * 100)}% coverage vs ${Math.round(baselines.responseCoverage * 100)}% pre-AI (data-derived)` },
         { name: '24/7 Availability', rate: Math.round(availabilityRate * 100) / 100, measured: Math.round(offHoursRate * 100) / 100, baseline: baselines.offHoursHandling, description: `${Math.round(offHoursRate * 100)}% off-hours responses` },
         { name: 'Auto Follow-ups', rate: Math.round(followUpRate * 100) / 100, measured: Math.round(followUpEngagement * 100) / 100, baseline: baselines.followUpRate, description: `${Math.round(followUpEngagement * 100)}% conversations got follow-ups, ${Math.round(progressionRate * 100)}% progressed` },
-        { name: 'Conversion Lift', rate: Math.round(conversionRate * 100) / 100, measured: Math.round(actualConversion * 100) / 100, baseline: baselines.conversionRate, description: `${Math.round(actualConversion * 100)}% conversion vs ${Math.round(baselines.conversionRate * 100)}% pre-AI (data-derived)` },
+        { name: 'Conversion Lift', rate: Math.round(conversionRate * 100) / 100, measured: Math.round(actualConversion * 100) / 100, baseline: baselineConversion, description: `${Math.round(actualConversion * 100)}% conversion vs ${Math.round(baselineConversion * 100)}% month-1 (${conversionBaselineSource})` },
         { name: 'Quality Premium', rate: Math.round(qualityRate * 100) / 100, measured: Math.round(aiQuality * 100) / 100, baseline: baselines.qualityScore, description: `${Math.round(aiQuality * 100)}% quality vs ${Math.round(baselines.qualityScore * 100)}% pre-AI (data-derived)` },
       ],
       evaluatedAt: new Date().toISOString(),
@@ -1335,6 +1362,500 @@ export class RevenueService {
       period,
       factors,
     };
+  }
+
+  /**
+   * Complete per-item earnings from the BOOKING table (clean MASTER_INVENTORY names).
+   * Only counts COMPLETED bookings (end_date < today) — upcoming/ongoing excluded.
+   * Returns EVERY inventory item including £0 earners, plus retired/old items not in current inventory.
+   */
+  async getAllItemEarnings(): Promise<{
+    currentItems: { item: string; totalRevenue: number; rentalCount: number; lastRented: string | null }[];
+    retiredItems: { item: string; totalRevenue: number; rentalCount: number; firstRented: string | null; lastRented: string | null }[];
+  }> {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    // Only count bookings where rental period has ended (completed revenue only)
+    const rows = await this.prisma.booking.groupBy({
+      by: ['item_name'],
+      where: {
+        status: { in: ['confirmed', 'completed'] },
+        revenue: { not: null, gt: 0 },
+        end_date: { lt: now },
+      },
+      _sum: { revenue: true },
+      _count: { id: true },
+      _max: { start_date: true },
+      _min: { start_date: true },
+    });
+
+    const earningsMap = new Map<string, { totalRevenue: number; rentalCount: number; firstRented: string | null; lastRented: string | null }>();
+    for (const r of rows) {
+      earningsMap.set(r.item_name, {
+        totalRevenue: Math.round((r._sum.revenue || 0) * 100) / 100,
+        rentalCount: r._count.id,
+        firstRented: r._min.start_date ? r._min.start_date.toISOString().split('T')[0] : null,
+        lastRented: r._max.start_date ? r._max.start_date.toISOString().split('T')[0] : null,
+      });
+    }
+
+    // Current inventory items (every MASTER_INVENTORY item, including £0 earners)
+    const allItems = getInventoryItemNames();
+    const inventorySet = new Set(allItems);
+    const currentItems = allItems.map(item => ({
+      item,
+      totalRevenue: earningsMap.get(item)?.totalRevenue || 0,
+      rentalCount: earningsMap.get(item)?.rentalCount || 0,
+      lastRented: earningsMap.get(item)?.lastRented || null,
+    })).sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+    // Retired/old items: items in bookings but NOT in current MASTER_INVENTORY
+    const retiredItems: { item: string; totalRevenue: number; rentalCount: number; firstRented: string | null; lastRented: string | null }[] = [];
+    for (const [itemName, data] of earningsMap) {
+      if (!inventorySet.has(itemName)) {
+        retiredItems.push({ item: itemName, ...data });
+      }
+    }
+    retiredItems.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+    return { currentItems, retiredItems };
+  }
+
+  // ==========================================
+  // Monthly Funnel Snapshot Log
+  // ==========================================
+
+  /**
+   * Monthly cron: snapshot the previous month's funnel metrics on the 1st at 5am.
+   * Runs after monthlyRevenueSync (4am) so revenue data is fresh.
+   */
+  @Cron('0 5 1 * *')
+  async monthlyFunnelSnapshot(): Promise<void> {
+    this.logger.log('=== MONTHLY FUNNEL SNAPSHOT: Starting ===');
+    try {
+      const now = new Date();
+      const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const periodEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+      const results = await this.takeFunnelSnapshot(periodStart, periodEnd);
+      this.logger.log(`Funnel snapshot: ${results.length} rows saved for ${periodStart.toISOString().substring(0, 7)}`);
+    } catch (err) {
+      this.logger.error(`Monthly funnel snapshot failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Core snapshot logic: query funnel stage counts, revenue, and AI context for a period.
+   * Upserts 3 rows: all-accounts (account=null), dbcinema, leo.
+   */
+  async takeFunnelSnapshot(periodStart: Date, periodEnd: Date): Promise<any[]> {
+    const accountScopes: (string | null)[] = [null, 'dbcinema', 'leo'];
+    const results: any[] = [];
+
+    for (const account of accountScopes) {
+      // 1. Query stage counts from follow_up_state joined with rental
+      const whereRental: any = {
+        created_at: { lt: periodEnd },
+        OR: [
+          { end_date: { gte: periodStart } },
+          { status: 'pending', start_date: { lt: periodEnd } },
+        ],
+      };
+      if (account) whereRental.account = account;
+
+      const states = await this.prisma.follow_up_state.findMany({
+        where: {
+          rental: whereRental,
+        },
+        select: { conversation_stage: true },
+      });
+
+      // Map stages to counts
+      const stageCounts: Record<string, number> = {
+        inquiry: 0, interested: 0, ready_to_book: 0, booked: 0,
+        awaiting_verification: 0, confirmed: 0, completed: 0, dead: 0,
+      };
+      for (const s of states) {
+        const stage = s.conversation_stage || 'inquiry';
+        if (stageCounts[stage] !== undefined) {
+          stageCounts[stage]++;
+        } else {
+          stageCounts['inquiry']++; // unknown stages count as inquiry
+        }
+      }
+
+      const total = states.length;
+      const inquiry = stageCounts['inquiry'];
+      const interested = stageCounts['interested'];
+      const readyToBook = stageCounts['ready_to_book'];
+      const booked = stageCounts['booked'];
+      const pending = stageCounts['awaiting_verification'];
+      const confirmed = stageCounts['confirmed'];
+      const completed = stageCounts['completed'];
+      const dead = stageCounts['dead'];
+
+      // 2. Derived rates
+      const engaged = total - inquiry;
+      const conversionRate = total > 0 ? (confirmed + completed) / total : 0;
+      const engagementRate = total > 0 ? engaged / total : 0;
+      const bookingRate = engaged > 0 ? (booked + pending + confirmed + completed) / engaged : 0;
+      const dropOffRate = total > 0 ? dead / total : 0;
+
+      // 3. Revenue for the period from rental table
+      const rentalWhere: any = {
+        status: { in: ['completed', 'ongoing', 'upcoming'] },
+        rental_price: { not: null, gt: 0 },
+        start_date: { lt: periodEnd },
+        end_date: { gte: periodStart },
+      };
+      if (account) rentalWhere.account = account;
+
+      const rentals = await this.prisma.rental.findMany({
+        where: rentalWhere,
+        select: { rental_price: true, renter_info: true, start_date: true },
+      });
+
+      const revenue = rentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
+      const visitKeys = new Set<string>();
+      for (const r of rentals) {
+        const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        visitKeys.add(`${renterNorm}|${r.start_date?.toISOString().split('T')[0]}`);
+      }
+
+      // 4. Latest AI boost evaluation
+      const latestEval = await this.prisma.ai_decision.findFirst({
+        where: { decision_type: 'ai_boost_evaluation' },
+        orderBy: { created_at: 'desc' },
+      });
+      let aiBoostRate: number | null = null;
+      let aiResponseCov: number | null = null;
+      if (latestEval?.output_summary) {
+        try {
+          const evalData = JSON.parse(latestEval.output_summary);
+          aiBoostRate = evalData.boostRate ?? null;
+          const speedFactor = evalData.factors?.find((f: any) => f.name === 'Response Speed');
+          aiResponseCov = speedFactor?.measured ?? null;
+        } catch { /* ignore parse errors */ }
+      }
+
+      // 5. Upsert snapshot row (findFirst+update/create because null account breaks compound unique upsert)
+      const snapshotData = {
+        period_end: periodEnd,
+        total,
+        inquiry,
+        interested,
+        ready_to_book: readyToBook,
+        booked,
+        confirmed,
+        completed,
+        dead,
+        pending,
+        conversion_rate: Math.round(conversionRate * 10000) / 10000,
+        engagement_rate: Math.round(engagementRate * 10000) / 10000,
+        booking_rate: Math.round(bookingRate * 10000) / 10000,
+        drop_off_rate: Math.round(dropOffRate * 10000) / 10000,
+        revenue: Math.round(revenue * 100) / 100,
+        rental_count: visitKeys.size,
+        ai_boost_rate: aiBoostRate,
+        ai_response_coverage: aiResponseCov,
+      };
+
+      const existingSnapshot = await this.prisma.funnel_snapshot.findFirst({
+        where: { period_start: periodStart, account: account },
+      });
+
+      let row;
+      if (existingSnapshot) {
+        row = await this.prisma.funnel_snapshot.update({
+          where: { id: existingSnapshot.id },
+          data: snapshotData,
+        });
+      } else {
+        row = await this.prisma.funnel_snapshot.create({
+          data: {
+            period_start: periodStart,
+            account: account,
+            ...snapshotData,
+          },
+        });
+      }
+
+      results.push(row);
+    }
+
+    return results;
+  }
+
+  /**
+   * Get all funnel snapshots ordered by period, optionally filtered by account.
+   */
+  async getFunnelHistory(account?: string): Promise<any[]> {
+    const where: any = {};
+    if (account === undefined) {
+      where.account = null;
+    } else {
+      where.account = account;
+    }
+
+    return this.prisma.funnel_snapshot.findMany({
+      where,
+      orderBy: { period_start: 'asc' },
+    });
+  }
+
+  /**
+   * One-time backfill: generate funnel snapshots for all historical months.
+   * Iterates from earliest rental month to last month, skipping months that already have a snapshot.
+   */
+  async backfillFunnelSnapshots(): Promise<{ monthsProcessed: number; monthsSkipped: number; months: string[] }> {
+    const earliest = await this.prisma.rental.findFirst({
+      where: { start_date: { not: null } },
+      orderBy: { start_date: 'asc' },
+      select: { start_date: true },
+    });
+
+    if (!earliest?.start_date) {
+      return { monthsProcessed: 0, monthsSkipped: 0, months: [] };
+    }
+
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const cursor = new Date(earliest.start_date.getFullYear(), earliest.start_date.getMonth(), 1);
+
+    let monthsProcessed = 0;
+    let monthsSkipped = 0;
+    const months: string[] = [];
+
+    while (cursor < currentMonthStart) {
+      const periodStart = new Date(cursor);
+      const periodEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+
+      // Check if snapshot already exists for this month
+      const existing = await this.prisma.funnel_snapshot.findFirst({
+        where: { period_start: periodStart, account: null },
+      });
+
+      if (existing) {
+        monthsSkipped++;
+      } else {
+        await this.takeFunnelSnapshot(periodStart, periodEnd);
+        months.push(periodStart.toISOString().substring(0, 7));
+        monthsProcessed++;
+      }
+
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    this.logger.log(`Funnel backfill: ${monthsProcessed} months processed, ${monthsSkipped} skipped`);
+    return { monthsProcessed, monthsSkipped, months };
+  }
+
+  // ==========================================
+  // Per-Item Monthly Earnings Snapshots
+  // ==========================================
+
+  /**
+   * Monthly cron: snapshot per-item earnings for the previous month.
+   * Runs at 5:30am on the 1st (after funnel snapshot at 5am).
+   */
+  @Cron('0 30 5 1 * *')
+  async monthlyItemEarningsSnapshot(): Promise<void> {
+    this.logger.log('=== MONTHLY ITEM EARNINGS SNAPSHOT: Starting ===');
+    try {
+      const now = new Date();
+      const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const periodEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+      const count = await this.takeItemEarningsSnapshot(periodStart, periodEnd);
+      this.logger.log(`Item earnings snapshot: ${count} rows saved for ${periodStart.toISOString().substring(0, 7)}`);
+    } catch (err) {
+      this.logger.error(`Monthly item earnings snapshot failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Core logic: snapshot per-item earnings for a given period.
+   * Groups completed bookings by item_name, computes revenue, rental count, days rented.
+   * Tracks cumulative all-time stats and current/retired status.
+   */
+  async takeItemEarningsSnapshot(periodStart: Date, periodEnd: Date): Promise<number> {
+    const inventorySet = new Set(getInventoryItemNames());
+
+    // Get all completed bookings in this period (end_date within period = revenue recognized)
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: { in: ['confirmed', 'completed'] },
+        revenue: { not: null, gt: 0 },
+        end_date: { gte: periodStart, lt: periodEnd },
+      },
+      select: {
+        item_name: true,
+        revenue: true,
+        start_date: true,
+        end_date: true,
+        account: true,
+      },
+    });
+
+    // Group by item_name + account
+    const groups = new Map<string, {
+      revenue: number;
+      count: number;
+      days: number;
+      accounts: Set<string>;
+    }>();
+
+    for (const b of bookings) {
+      const key = b.item_name;
+      if (!groups.has(key)) {
+        groups.set(key, { revenue: 0, count: 0, days: 0, accounts: new Set() });
+      }
+      const g = groups.get(key)!;
+      g.revenue += b.revenue || 0;
+      g.count += 1;
+      if (b.start_date && b.end_date) {
+        g.days += Math.max(1, Math.round((b.end_date.getTime() - b.start_date.getTime()) / 86400000) + 1);
+      }
+      if (b.account) g.accounts.add(b.account);
+    }
+
+    // Get cumulative all-time stats per item (up to and including this period)
+    const cumulativeRows = await this.prisma.booking.groupBy({
+      by: ['item_name'],
+      where: {
+        status: { in: ['confirmed', 'completed'] },
+        revenue: { not: null, gt: 0 },
+        end_date: { lt: periodEnd },
+      },
+      _sum: { revenue: true },
+      _count: { id: true },
+      _min: { start_date: true },
+      _max: { end_date: true },
+    });
+
+    const cumulativeMap = new Map<string, {
+      revenue: number;
+      count: number;
+      firstRental: Date | null;
+      lastRental: Date | null;
+    }>();
+    for (const r of cumulativeRows) {
+      cumulativeMap.set(r.item_name, {
+        revenue: r._sum.revenue || 0,
+        count: r._count.id,
+        firstRental: r._min.start_date,
+        lastRental: r._max.end_date,
+      });
+    }
+
+    // Collect all item names (from this period + cumulative)
+    const allItemNames = new Set([...groups.keys(), ...cumulativeMap.keys()]);
+
+    let savedCount = 0;
+
+    for (const itemName of allItemNames) {
+      const periodData = groups.get(itemName);
+      const cumData = cumulativeMap.get(itemName);
+      const isCurrent = inventorySet.has(itemName);
+
+      const revenue = periodData ? Math.round(periodData.revenue * 100) / 100 : 0;
+      const rentalCount = periodData?.count || 0;
+      const avgPerRental = rentalCount > 0 ? Math.round((revenue / rentalCount) * 100) / 100 : 0;
+      const daysRented = periodData?.days || 0;
+
+      // Only save if there's either period activity or cumulative history
+      if (revenue === 0 && (!cumData || cumData.revenue === 0)) continue;
+
+      const data = {
+        period_start: periodStart,
+        period_end: periodEnd,
+        item_name: itemName,
+        account: null as string | null,
+        revenue,
+        rental_count: rentalCount,
+        avg_per_rental: avgPerRental,
+        days_rented: daysRented,
+        is_current: isCurrent,
+        first_rental: cumData?.firstRental || null,
+        last_rental: cumData?.lastRental || null,
+        cumulative_revenue: Math.round((cumData?.revenue || 0) * 100) / 100,
+        cumulative_rentals: cumData?.count || 0,
+      };
+
+      // Upsert (findFirst + create/update for nullable account)
+      const existing = await this.prisma.item_earnings_snapshot.findFirst({
+        where: { period_start: periodStart, item_name: itemName, account: null },
+      });
+
+      if (existing) {
+        await this.prisma.item_earnings_snapshot.update({
+          where: { id: existing.id },
+          data,
+        });
+      } else {
+        await this.prisma.item_earnings_snapshot.create({ data });
+      }
+      savedCount++;
+    }
+
+    return savedCount;
+  }
+
+  /**
+   * Get item earnings history — monthly snapshots for a specific item or all items.
+   */
+  async getItemEarningsHistory(itemName?: string, account?: string): Promise<any[]> {
+    const where: any = {};
+    if (itemName) where.item_name = itemName;
+    if (account) where.account = account;
+    else where.account = null;
+
+    return this.prisma.item_earnings_snapshot.findMany({
+      where,
+      orderBy: [{ item_name: 'asc' }, { period_start: 'asc' }],
+    });
+  }
+
+  /**
+   * Backfill item earnings snapshots from earliest booking month to last completed month.
+   */
+  async backfillItemEarningsSnapshots(): Promise<{ monthsProcessed: number; itemsTotal: number }> {
+    const earliest = await this.prisma.booking.findFirst({
+      where: { status: { in: ['confirmed', 'completed'] }, revenue: { gt: 0 } },
+      orderBy: { start_date: 'asc' },
+      select: { start_date: true },
+    });
+
+    if (!earliest?.start_date) {
+      return { monthsProcessed: 0, itemsTotal: 0 };
+    }
+
+    const now = new Date();
+    const cursor = new Date(earliest.start_date.getFullYear(), earliest.start_date.getMonth(), 1);
+    const lastMonth = new Date(now.getFullYear(), now.getMonth(), 1); // up to but not including current month
+
+    let monthsProcessed = 0;
+    let itemsTotal = 0;
+
+    while (cursor < lastMonth) {
+      const periodStart = new Date(cursor);
+      const periodEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+
+      // Skip if already exists
+      const existing = await this.prisma.item_earnings_snapshot.findFirst({
+        where: { period_start: periodStart, account: null },
+      });
+
+      if (!existing) {
+        const count = await this.takeItemEarningsSnapshot(periodStart, periodEnd);
+        itemsTotal += count;
+        monthsProcessed++;
+      }
+
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    this.logger.log(`Item earnings backfill: ${monthsProcessed} months, ${itemsTotal} item-rows`);
+    return { monthsProcessed, itemsTotal };
   }
 
   private getPeriodStart(period: 'week' | 'month' | 'all'): Date | null {

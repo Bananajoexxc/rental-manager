@@ -16,6 +16,7 @@ import { RevenueService } from './revenue/revenue.service';
 import { TitleParserService } from './revenue/title-parser.service';
 import { HyggloService } from './hygglo/hygglo.service';
 import { ACCESSORY_ITEMS, isAccessoryItem } from './utils/item-matcher';
+import { PRICING_CATALOG } from './data/pricing-catalog';
 import { LostRevenueService } from './lost-revenue/lost-revenue.service';
 import { AutonomousService } from './autonomous/autonomous.service';
 import { CompetitorIntelService } from './competitor-intel/competitor-intel.service';
@@ -283,6 +284,64 @@ export class AppController {
     return await this.revenueService.evaluateAiPerformance();
   }
 
+  @Get('revenue/funnel-history')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Monthly funnel snapshot trend log' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Funnel snapshots with conversion rates per month' })
+  async getFunnelHistory(@Query('account') account?: string) {
+    return await this.revenueService.getFunnelHistory(account || undefined);
+  }
+
+  @Get('revenue/funnel-snapshot')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Manually trigger funnel snapshot for current month' })
+  @ApiResponse({ status: 200, description: 'Snapshot results' })
+  async triggerFunnelSnapshot() {
+    const now = new Date();
+    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return await this.revenueService.takeFunnelSnapshot(periodStart, periodEnd);
+  }
+
+  @Get('revenue/funnel-backfill')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Backfill funnel snapshots for all historical months' })
+  @ApiResponse({ status: 200, description: 'Backfill results' })
+  async backfillFunnelSnapshots() {
+    return await this.revenueService.backfillFunnelSnapshots();
+  }
+
+  @Get('revenue/item-earnings-history')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Get per-item monthly earnings history' })
+  @ApiQuery({ name: 'item', required: false, description: 'Filter by item name' })
+  @ApiQuery({ name: 'account', required: false, description: 'Filter by account' })
+  @ApiResponse({ status: 200, description: 'Item earnings snapshots' })
+  async getItemEarningsHistory(@Query('item') item?: string, @Query('account') account?: string) {
+    return await this.revenueService.getItemEarningsHistory(item || undefined, account || undefined);
+  }
+
+  @Get('revenue/item-earnings-snapshot')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Manually trigger item earnings snapshot for current month' })
+  @ApiResponse({ status: 200, description: 'Items snapshotted' })
+  async triggerItemEarningsSnapshot() {
+    const now = new Date();
+    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const count = await this.revenueService.takeItemEarningsSnapshot(periodStart, periodEnd);
+    return { monthsProcessed: 1, itemsSnapshotted: count, period: periodStart.toISOString().substring(0, 7) };
+  }
+
+  @Get('revenue/item-earnings-backfill')
+  @ApiTags('Revenue')
+  @ApiOperation({ summary: 'Backfill item earnings snapshots for all historical months' })
+  @ApiResponse({ status: 200, description: 'Backfill results' })
+  async backfillItemEarningsSnapshots() {
+    return await this.revenueService.backfillItemEarningsSnapshots();
+  }
+
   @Get('revenue/ai-boost/calibrate')
   @ApiTags('Revenue')
   @ApiOperation({ summary: 'Recalculate AI boost baselines from real data (conversion rate, quality score, response coverage)' })
@@ -410,6 +469,42 @@ export class AppController {
           additionalParts.push('\nUse this data to recommend inventory purchases and advise on business strategy. Confidence: high=strong demand, medium=decent, low=weak.');
         }
       } catch { /* revenue intelligence optional */ }
+
+      // Actual revenue/earnings data — complete per-item lifetime earnings (completed bookings only)
+      try {
+        const [revSummary, allItemEarnings] = await Promise.all([
+          this.revenueService.getFormattedRevenue('month'),
+          this.revenueService.getAllItemEarnings(),
+        ]);
+        if (revSummary) {
+          additionalParts.push(`\n\nCURRENT REVENUE:\n${revSummary}`);
+        }
+        if (allItemEarnings.currentItems.length > 0) {
+          const lines = allItemEarnings.currentItems.map(i =>
+            `- ${i.item}: £${i.totalRevenue} (${i.rentalCount} rentals${i.lastRented ? ', last: ' + i.lastRented : ''})`
+          );
+          additionalParts.push(`\n\nITEM EARNINGS (all time, completed rentals only):\n${lines.join('\n')}`);
+        }
+        if (allItemEarnings.retiredItems.length > 0) {
+          const retiredLines = allItemEarnings.retiredItems.map(i =>
+            `- ${i.item}: £${i.totalRevenue} (${i.rentalCount} rentals, ${i.firstRented} to ${i.lastRented})`
+          );
+          additionalParts.push(`\n\nRETIRED/SOLD ITEMS (no longer in inventory, historical earnings):\n${retiredLines.join('\n')}`);
+        }
+      } catch { /* revenue data optional */ }
+
+      // Bundle pricing reference (bundles are distinct listings with different prices from individual items)
+      try {
+        const bundleLines: string[] = [];
+        for (const entry of PRICING_CATALOG) {
+          if (entry.is_bundle && entry.bundle_items) {
+            bundleLines.push(`- ${entry.item_name}: £${entry.daily_price_min}-${entry.daily_price_max}/day (contains: ${entry.bundle_items.join(', ')})`);
+          }
+        }
+        if (bundleLines.length > 0) {
+          additionalParts.push(`\n\nBUNDLE PRICING (listed bundle rates, different from individual item prices):\n${bundleLines.join('\n')}`);
+        }
+      } catch { /* bundle pricing optional */ }
 
       // Competitor intelligence: competitor catalog, pricing, reviews, market gaps
       try {
