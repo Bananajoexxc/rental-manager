@@ -269,7 +269,7 @@ export class FollowUpService {
       }
 
       if (hasPricingObjection) {
-        followUpMessage = `Hey, just wanted to let you know — if you've seen the ${itemName} listed anywhere for less, happy to price match for you. Just send me a link or screenshot and I'll sort it out!`;
+        followUpMessage = `Hey, just wanted to let you know — if you've seen the ${itemName} listed for less anywhere in central London (Zone 1-2), I can actually beat that price by 5%. Just send me a screenshot of the listing showing the item, price, and location and I'll sort it out!`;
         this.logger.log(`Price match offer sent for ${rental?.title} (pricing objection detected in conversation)`);
       } else {
         followUpMessage = `Just checking in - let me know if you had any other questions about the ${itemName}!`;
@@ -757,6 +757,42 @@ export class FollowUpService {
 
         this.logger.log(`First-time discount for ${rental.title}: £${originalPrice} → £${discountedPrice} (renter saves ~£${RENTER_DISCOUNT})`);
         return { applied: true, reason: 'First-time rental discount', percentage: ftPercentage };
+      }
+    }
+
+    // Check for AI-verified price match (takes priority over automatic eligibility)
+    const priceMatchDecision = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        decision_type: 'price_match',
+      },
+    });
+
+    if (priceMatchDecision) {
+      const originalPrice = rental.rental_price || 0;
+      // Extract target owner earnings from the ai_decision record
+      const earningsMatch = priceMatchDecision.input_summary?.match(/→ £(\d+(?:\.\d+)?)/);
+      const pmPercentageMatch = priceMatchDecision.input_summary?.match(/\((\d+(?:\.\d+)?)% off\)/);
+
+      const pmPercentage = pmPercentageMatch ? parseFloat(pmPercentageMatch[1]) : 0;
+
+      if (pmPercentage > 0 && pmPercentage <= 40) { // safety cap
+        const targetEarnings = earningsMatch ? parseFloat(earningsMatch[1]) : Math.round(originalPrice * (1 - pmPercentage / 100));
+
+        await this.prisma.ai_decision.create({
+          data: {
+            rental_id: rental.id,
+            decision_type: 'analyze',
+            input_summary: `discount_applied: Price match (${pmPercentage}% off £${originalPrice} = £${targetEarnings})`,
+            output_summary: `Price match discount applied. Original: £${originalPrice}, Discounted: £${targetEarnings}`,
+            confidence: 1.0,
+            action_taken: `Price match discount: ${pmPercentage}% off earnings`,
+            notified: true,
+          },
+        });
+
+        this.logger.log(`Price match discount for ${rental.title}: £${originalPrice} → £${targetEarnings} (${pmPercentage}% off)`);
+        return { applied: true, reason: 'Price match (beat competitor by 5%)', percentage: pmPercentage };
       }
     }
 

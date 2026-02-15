@@ -35,6 +35,7 @@ export interface HyggloMessage {
   content: string;
   timestamp: string;
   isNew: boolean;
+  imageUrls?: string[];
 }
 
 @Injectable()
@@ -1151,6 +1152,59 @@ export class AutonomousService {
             }
           }
         }
+
+        // 7c. Check for price match verification flag
+        const priceMatchMemory = response.memories.find(m => m.toUpperCase().includes('PRICE_MATCH_VERIFIED'));
+        if (priceMatchMemory) {
+          try {
+            // Parse competitor price from memory tag: PRICE_MATCH_VERIFIED:competitor_price=NUMBER,our_new_renter_price=NUMBER
+            const competitorMatch = priceMatchMemory.match(/competitor_price\s*=\s*(\d+(?:\.\d+)?)/i);
+            const newPriceMatch = priceMatchMemory.match(/our_new_renter_price\s*=\s*(\d+(?:\.\d+)?)/i);
+
+            if (competitorMatch) {
+              const competitorPrice = parseFloat(competitorMatch[1]);
+              const targetRenterPrice = newPriceMatch ? parseFloat(newPriceMatch[1]) : Math.round(competitorPrice * 0.95);
+              const PLATFORM_RETENTION = 0.64;
+              const targetOwnerEarnings = Math.round(targetRenterPrice * PLATFORM_RETENTION);
+              const currentOwnerEarnings = rental.rental_price || 0;
+
+              if (currentOwnerEarnings > 0 && targetOwnerEarnings < currentOwnerEarnings) {
+                const discountPercentage = Math.round(((currentOwnerEarnings - targetOwnerEarnings) / currentOwnerEarnings) * 10000) / 100;
+
+                // Safety: don't allow more than 40% off
+                if (discountPercentage > 0 && discountPercentage <= 40) {
+                  const alreadyFlagged = await this.prisma.ai_decision.findFirst({
+                    where: { rental_id: rental.id, decision_type: 'price_match' },
+                  });
+
+                  if (!alreadyFlagged) {
+                    await this.prisma.ai_decision.create({
+                      data: {
+                        rental_id: rental.id,
+                        decision_type: 'price_match',
+                        input_summary: `price_match_flagged: competitor £${competitorPrice}, our new renter price £${targetRenterPrice}, owner earnings £${currentOwnerEarnings} → £${targetOwnerEarnings} (${discountPercentage}% off)`,
+                        output_summary: `Price match verified. Beat competitor by 5%. Renter price: £${targetRenterPrice}`,
+                        confidence: 1.0,
+                        action_taken: `Price match flagged. Competitor: £${competitorPrice}, Target: £${targetRenterPrice}, Discount: ${discountPercentage}%`,
+                        notified: true,
+                      },
+                    });
+
+                    await this.followUpService.updateAcceptanceReadiness(rental.id, {
+                      discount_eligible: true,
+                    });
+
+                    this.logger.log(`PRICE MATCH flagged for ${rental.title}: competitor £${competitorPrice}, our target £${targetRenterPrice} (${discountPercentage}% off earnings)`);
+                  }
+                } else {
+                  this.logger.warn(`Price match discount too large for ${rental.title}: ${discountPercentage}% — skipped (safety cap 40%)`);
+                }
+              }
+            }
+          } catch (pmErr) {
+            this.logger.debug(`Price match parsing failed: ${pmErr.message}`);
+          }
+        }
       }
 
       // 8. Check item availability and update acceptance readiness
@@ -1689,12 +1743,14 @@ export class AutonomousService {
         // Multiple messages from the same rental — combine into one
         // Sort by timestamp ascending and concatenate
         rentalMsgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const allImageUrls = rentalMsgs.flatMap(m => m.imageUrls || []);
         const combined: HyggloMessage = {
           rentalId,
           sender: rentalMsgs[rentalMsgs.length - 1].sender, // Use latest sender
           content: rentalMsgs.map(m => m.content).join('\n'),
           timestamp: rentalMsgs[rentalMsgs.length - 1].timestamp,
           isNew: true,
+          ...(allImageUrls.length > 0 ? { imageUrls: allImageUrls } : {}),
         };
         this.logger.log(`Batched ${rentalMsgs.length} messages for rental ${rentalId} into one conversation turn`);
         tasks.push(this.processMessage(combined));
@@ -2755,9 +2811,11 @@ export class AutonomousService {
           additionalContext: [inventoryContext, scheduleContext, vacationContext, blacklistContext, couponContext, deliveryQuoteContext, conversationSummary, urgencyContext, welcomeBackContext, ['booking_sent', 'awaiting_verification', 'confirmed', 'dead'].includes(currentStage) ? '' : lowValueInstruction].filter(Boolean).join('\n'),
           rentalDates: { start: rental.start_date, end: rental.end_date },
           // Context-aware token budget: simple acks get less, complex queries get more
-          maxTokens: contextLevel === 'minimal' ? 250 : contextLevel === 'comprehensive' ? 800 : undefined,
+          maxTokens: contextLevel === 'minimal' ? 250 : (contextLevel === 'comprehensive' || (msg.imageUrls && msg.imageUrls.length > 0)) ? 800 : undefined,
           // Stage-gate: prompt-manager skips irrelevant DB components for later funnel stages
           conversationStage: currentStage,
+          // Pass image URLs for multimodal analysis (price match screenshots, etc.)
+          imageUrls: msg.imageUrls,
         });
 
         // VALIDATION: Check response before sending

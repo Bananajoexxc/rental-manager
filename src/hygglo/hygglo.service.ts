@@ -1006,7 +1006,7 @@ export class HyggloService implements OnModuleInit {
 
   // --- Messaging ---
 
-  async readMessages(orderId: string): Promise<{ sender: string; content: string; timestamp: string }[]> {
+  async readMessages(orderId: string): Promise<{ sender: string; content: string; timestamp: string; imageUrls?: string[] }[]> {
     // Fetch order detail which contains activities (chat messages)
     // Try all accounts and prefer the owner perspective for correct sender labeling
     let fallbackResult: { detail: any; account: string } | null = null;
@@ -1050,12 +1050,12 @@ export class HyggloService implements OnModuleInit {
     return [];
   }
 
-  private extractChatMessages(detail: any, accountName: string, isOwnerPerspective: boolean): { sender: string; content: string; timestamp: string }[] {
+  private extractChatMessages(detail: any, accountName: string, isOwnerPerspective: boolean): { sender: string; content: string; timestamp: string; imageUrls?: string[] }[] {
     const activities: any[] = detail.activities || [];
     const otherPartName = detail.users?.otherPart?.name || detail.labels?.otherPart || 'Renter';
 
     const chatMessages = activities
-      .filter((a: any) => a.chatMessage?.text?.content)
+      .filter((a: any) => a.chatMessage?.text?.content || a.chatMessage?.images?.length > 0 || a.chatMessage?.attachments?.length > 0)
       .map((a: any) => {
         // Always label from the OWNER's perspective:
         // "Owner" = the listing owner, renterName = the person renting
@@ -1073,7 +1073,22 @@ export class HyggloService implements OnModuleInit {
           if (parsed) timestamp = parsed.toISOString();
         }
 
-        return { sender, content: a.chatMessage.text.content, timestamp };
+        // Extract image URLs from multiple possible Hygglo API fields
+        const imageUrls: string[] = [];
+        const imgs = a.chatMessage?.images || a.chatMessage?.attachments || a.chatMessage?.media || a.chatMessage?.files || [];
+        for (const img of imgs) {
+          const url = typeof img === 'string' ? img : (img?.url || img?.src || img?.href || img?.imageUrl || '');
+          if (url) imageUrls.push(url);
+        }
+        // Also check for single image field
+        if (a.chatMessage?.image) {
+          const singleUrl = typeof a.chatMessage.image === 'string' ? a.chatMessage.image : (a.chatMessage.image?.url || '');
+          if (singleUrl) imageUrls.push(singleUrl);
+        }
+
+        const content = a.chatMessage?.text?.content || (imageUrls.length > 0 ? '[Image sent]' : '');
+
+        return { sender, content, timestamp, ...(imageUrls.length > 0 ? { imageUrls } : {}) };
       });
 
     if (chatMessages.length > 0) {
@@ -1198,8 +1213,8 @@ export class HyggloService implements OnModuleInit {
     return false;
   }
 
-  async checkNewMessages(): Promise<{ rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean }[]> {
-    const allNewMessages: { rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean }[] = [];
+  async checkNewMessages(): Promise<{ rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean; imageUrls?: string[] }[]> {
+    const allNewMessages: { rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean; imageUrls?: string[] }[] = [];
 
     // Get all ongoing and upcoming orders to check for messages
     try {
@@ -1251,6 +1266,7 @@ export class HyggloService implements OnModuleInit {
                 content: msg.content,
                 timestamp: msg.timestamp,
                 isNew: true,
+                ...(msg.imageUrls && msg.imageUrls.length > 0 ? { imageUrls: msg.imageUrls } : {}),
               });
             }
           }

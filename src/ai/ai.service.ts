@@ -23,6 +23,8 @@ export interface AiContext {
   rentalDates?: { start?: Date; end?: Date };
   /** Current funnel stage — used to gate prompt components (saves input tokens) */
   conversationStage?: string;
+  /** Image URLs attached to the current renter message (for multimodal analysis) */
+  imageUrls?: string[];
 }
 
 @Injectable()
@@ -138,10 +140,20 @@ export class AiService {
       '- Handle first-time rental discounts — ONLY when the context above contains "FIRST-TIME RENTER" (the system verifies this from their Hygglo profile):\n' +
       '  → PROACTIVE (context says "PROACTIVE DISCOUNT"): Offer the £15 discount naturally in your response without them asking. Work it in casually. Add <memory>FIRST_TIME_DISCOUNT_ACCEPTED</memory> in your response.\n' +
       '  → REACTIVE (context says "FIRST-TIME RENTER" without "PROACTIVE"): Only offer if they ask about first-time discounts/vouchers. Say the voucher feature isn\'t working but you can manually knock £15 off. If they accept, confirm and add <memory>FIRST_TIME_DISCOUNT_ACCEPTED</memory>.\n' +
-      '  → NO CONTEXT / under £120: If they ask about first-time discounts but there is no "FIRST-TIME RENTER" section in context, say "the first-time discount isn\'t available at the moment unfortunately". Keep it brief.\n\n' +
+      '  → NO CONTEXT / under £120: If they ask about first-time discounts but there is no "FIRST-TIME RENTER" section in context, say "the first-time discount isn\'t available at the moment unfortunately". Keep it brief.\n' +
+      '- PRICE MATCH: If a renter sends a screenshot or link showing the same item cheaper elsewhere, verify ALL of these:\n' +
+      '  1. SAME ITEM: The competitor listing must be for the SAME item(s) or equivalent bundle. Different models/brands don\'t count.\n' +
+      '  2. LOCATION: The competitor\'s rental location must be in London Zone 1 or Zone 2 (central London, inner boroughs like Camden, Islington, Hackney, Brixton, Peckham, Shoreditch, etc.). If the location is Zone 3+ or outside London, the price match does NOT apply.\n' +
+      '  3. PRICE: The competitor\'s price must be clearly visible in the screenshot/listing.\n' +
+      '  If ALL three criteria are met: Confirm the price match and tell them you\'ll beat the competitor by 5%. Say something like "nice find — I can beat that by 5%, so your price would be £X". Calculate: new_price = competitor_price × 0.95. Add <memory>PRICE_MATCH_VERIFIED:competitor_price=NUMBER,our_new_renter_price=NUMBER,item=ITEM_NAME</memory>.\n' +
+      '  If ANY criterion fails, decline naturally:\n' +
+      '  - Wrong item: "that\'s a different model so the price match wouldn\'t apply here"\n' +
+      '  - Outside Zone 1-2: "our price match only covers central London (Zone 1-2) rentals"\n' +
+      '  - Price not visible: "I can\'t quite make out the price — could you send a clearer screenshot?"\n' +
+      '  - No screenshot/proof: "if you send me a screenshot of the listing I can check if we can match it"\n\n' +
 
       'THINGS YOU MUST ESCALATE TO DANIEL (say "Let me check with Daniel and get back to you"):\n' +
-      '- ANY price negotiation, discount request (EXCEPT first-time rental discount handled above), or "too expensive" complaint\n' +
+      '- ANY price negotiation or "too expensive" complaint (EXCEPT first-time discount and price match handled above)\n' +
       '- ANY request for free items, compensation, or fee waiver\n' +
       '- Same-day rental approval\n' +
       '- Anything outside normal booking flow (refunds, complaints about service, policy exceptions)\n' +
@@ -371,8 +383,22 @@ export class AiService {
         }
       }
 
-      // Add current user message
-      messages.push({ role: 'user', content: userMessage });
+      // Add current user message (multimodal if images present)
+      if (context.imageUrls && context.imageUrls.length > 0) {
+        const contentBlocks: Anthropic.ContentBlockParam[] = [
+          { type: 'text', text: userMessage },
+        ];
+        for (const imageUrl of context.imageUrls) {
+          contentBlocks.push({
+            type: 'image',
+            source: { type: 'url', url: imageUrl },
+          } as any);
+        }
+        messages.push({ role: 'user', content: contentBlocks });
+        this.logger.log(`Multimodal message: ${context.imageUrls.length} image(s) attached`);
+      } else {
+        messages.push({ role: 'user', content: userMessage });
+      }
 
       this.logger.debug(`Calling Claude (${model}) with ${messages.length} messages`);
 
