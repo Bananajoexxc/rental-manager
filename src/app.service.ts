@@ -280,9 +280,11 @@ export class AppService {
     // === Pending verification rentals (display only — NOT in any earnings/count calculations) ===
     // "Pending" = owner accepted on Hygglo, but platform is verifying the renter.
     // Detected via order_step='VERIFIED' (the VERIFIED step is active, meaning awaiting docs/ID).
+    // Exclude rentals whose start_date has already passed — verification was aborted/expired.
     const pendingVerificationRentals = await this.prisma.rental.findMany({
       where: {
         order_step: 'VERIFIED',
+        start_date: { gte: todayStart },
         ...(account ? { account } : {}),
       },
       select: {
