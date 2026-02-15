@@ -7,6 +7,8 @@ import { isAccessoryItem, MASTER_INVENTORY, findBestMatch, getInventoryItemNames
 import { getOneDayPrice } from '../data/pricing-catalog';
 import { HISTORICAL_REVENUE, getHistoricalMonth, getHistoricalStart } from '../data/historical-revenue';
 import { getTotalEquipmentValue } from '../data/acquisition-costs';
+import { BUNDLE_DEFINITIONS } from '../data/bundle-suggestions';
+import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
 
 /** Rental table row used for revenue calculations (captures ALL Hygglo revenue, not just matched items) */
 interface RentalRevenueRow {
@@ -59,6 +61,7 @@ export class RevenueService {
   constructor(
     private prisma: PrismaService,
     private hyggloService: HyggloService,
+    private lostRevenueService: LostRevenueService,
   ) {}
 
   /**
@@ -1397,7 +1400,44 @@ export class RevenueService {
     // Higher quality → fewer lost deals from bad responses
     const qualityRate = Math.min(qualityLift * 0.05, 0.05); // cap at 5%
 
-    const boostRate = Math.round((speedRate + availabilityRate + followUpRate + conversionRate + qualityRate) * 100) / 100;
+    // 6. MISSED REVENUE RECOVERY — denied + expired revenue that AI instant service would capture
+    let missedRecoveryRate = 0;
+    let missedRevTotal = 0;
+    let missedRevCount = 0;
+    try {
+      const [denied, expired] = await Promise.all([
+        this.lostRevenueService.getDeniedRevenueSummary('3m'),
+        this.prisma.lost_revenue_record.aggregate({
+          where: {
+            denial_type: { in: ['owner_denied', 'expired'] },
+            lost_revenue: { gte: 25 },
+            start_date: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
+          },
+          _sum: { lost_revenue: true },
+          _count: true,
+        }),
+      ]);
+      missedRevTotal = (expired._sum.lost_revenue || 0);
+      missedRevCount = expired._count || 0;
+      // What fraction of actual revenue do missed opportunities represent?
+      // AI would capture ~60% of these (some renters wouldn't convert regardless)
+      const monthlyActual = await this.prisma.rental.aggregate({
+        where: {
+          status: { in: ['completed', 'ongoing', 'upcoming'] },
+          rental_price: { gt: 0 },
+          start_date: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
+        },
+        _sum: { rental_price: true },
+      });
+      const actualRev3m = monthlyActual._sum.rental_price || 1;
+      const recoveryRatio = missedRevTotal / actualRev3m;
+      // AI would recover ~60% of missed revenue, capped at 15% boost contribution
+      missedRecoveryRate = Math.min(recoveryRatio * 0.60, 0.15);
+    } catch (err) {
+      this.logger.debug(`Missed revenue recovery calc failed: ${err.message}`);
+    }
+
+    const boostRate = Math.round((speedRate + availabilityRate + followUpRate + conversionRate + qualityRate + missedRecoveryRate) * 100) / 100;
     const dataPoints = messageDecisions + totalStates;
 
     return {
@@ -1408,6 +1448,7 @@ export class RevenueService {
         { name: 'Auto Follow-ups', rate: Math.round(followUpRate * 100) / 100, measured: Math.round(followUpEngagement * 100) / 100, baseline: baselines.followUpRate, description: `${Math.round(followUpEngagement * 100)}% conversations got follow-ups, ${Math.round(progressionRate * 100)}% progressed` },
         { name: 'Conversion Lift', rate: Math.round(conversionRate * 100) / 100, measured: Math.round(actualConversion * 100) / 100, baseline: baselineConversion, description: `${Math.round(actualConversion * 100)}% conversion vs ${Math.round(baselineConversion * 100)}% month-1 (${conversionBaselineSource})` },
         { name: 'Quality Premium', rate: Math.round(qualityRate * 100) / 100, measured: Math.round(aiQuality * 100) / 100, baseline: baselines.qualityScore, description: `${Math.round(aiQuality * 100)}% quality vs ${Math.round(baselines.qualityScore * 100)}% pre-AI (data-derived)` },
+        { name: 'Missed Revenue Recovery', rate: Math.round(missedRecoveryRate * 100) / 100, measured: Math.round(missedRevTotal), baseline: 0, description: `£${Math.round(missedRevTotal)} from ${missedRevCount} denied/expired requests (3mo) — AI instant response would recover ~60%` },
       ],
       evaluatedAt: new Date().toISOString(),
       dataPoints,
@@ -1415,7 +1456,7 @@ export class RevenueService {
   }
 
   /** Store evaluation result in ai_decision table for persistence. */
-  private async storeBoostEvaluation(evaluation: Awaited<ReturnType<typeof this.evaluateAiPerformance>>): Promise<void> {
+  async storeBoostEvaluation(evaluation: Awaited<ReturnType<typeof this.evaluateAiPerformance>>): Promise<void> {
     await this.prisma.ai_decision.create({
       data: {
         decision_type: 'ai_boost_evaluation',
@@ -2003,6 +2044,56 @@ export class RevenueService {
   // ==========================================
 
   /**
+   * Match a rental's parsed items to a REAL listed bundle from BUNDLE_DEFINITIONS.
+   * Returns the bundle_name of the best (largest) matching bundle, or null.
+   * A bundle matches if ALL of its items are present in the rental's items (multiset).
+   */
+  private matchRentalToBundle(parsedItems: { item: string; qty: number }[]): string | null {
+    // Expand rental items by quantity, normalize names
+    const rentalItems: string[] = [];
+    for (const p of parsedItems) {
+      const normalized = this.normalizeItemName(p.item) || p.item;
+      for (let i = 0; i < (p.qty || 1); i++) {
+        rentalItems.push(normalized);
+      }
+    }
+
+    // Build frequency map for rental items
+    const rentalFreq = new Map<string, number>();
+    for (const item of rentalItems) {
+      rentalFreq.set(item, (rentalFreq.get(item) || 0) + 1);
+    }
+
+    let bestMatch: string | null = null;
+    let bestMatchSize = 0;
+
+    for (const bundle of BUNDLE_DEFINITIONS) {
+      // Build frequency map for bundle items
+      const bundleFreq = new Map<string, number>();
+      for (const item of bundle.items) {
+        bundleFreq.set(item, (bundleFreq.get(item) || 0) + 1);
+      }
+
+      // Check if ALL bundle items are present in rental items (with correct quantities)
+      let allPresent = true;
+      for (const [item, count] of bundleFreq.entries()) {
+        if ((rentalFreq.get(item) || 0) < count) {
+          allPresent = false;
+          break;
+        }
+      }
+
+      // Pick the largest matching bundle (most specific)
+      if (allPresent && bundle.items.length > bestMatchSize) {
+        bestMatch = bundle.bundle_name;
+        bestMatchSize = bundle.items.length;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  /**
    * Monthly cron: snapshot bundle revenue for the previous month.
    * Runs at 5:45am on the 1st (after item earnings at 5:30).
    */
@@ -2054,25 +2145,11 @@ export class RevenueService {
   }
 
   /**
-   * Generate a human-readable label for a bundle from its item names.
-   */
-  private generateBundleLabel(items: string[]): string {
-    // Filter out accessories/generic items for a clean label
-    const main = items.filter(i =>
-      !i.includes('card') && !i.includes('ND filter') && !i.includes('battery') &&
-      !i.includes('256GB') && !i.includes('512GB')
-    );
-    if (main.length === 0) return items.join(' + ');
-    if (main.length <= 3) return main.join(' + ');
-    return main.slice(0, 2).join(' + ') + ' +' + (main.length - 2) + ' more';
-  }
-
-  /**
    * Core logic: snapshot bundle/set revenue for a period.
-   * Groups completed rentals by their parsed item combination.
+   * Only counts rentals that match REAL listed bundles from BUNDLE_DEFINITIONS.
    */
   async takeBundleRevenueSnapshot(periodStart: Date, periodEnd: Date): Promise<number> {
-    // Get completed multi-item rentals in this period (end_date within period)
+    // Get rentals in this period (end_date within period)
     const rentals = await this.prisma.rental.findMany({
       where: {
         rental_price: { gt: 0 },
@@ -2080,7 +2157,6 @@ export class RevenueService {
         end_date: { gte: periodStart, lt: periodEnd },
       },
       select: {
-        title: true,
         parsed_items: true,
         rental_price: true,
         start_date: true,
@@ -2088,32 +2164,20 @@ export class RevenueService {
       },
     });
 
-    // Group by sorted item combination
-    const bundleGroups = new Map<string, {
-      items: string[];
-      title: string;
-      revenue: number;
-      count: number;
-      days: number;
-    }>();
+    // Match each rental to a real bundle and group by bundle name
+    const bundleGroups = new Map<string, { revenue: number; count: number; days: number }>();
 
     for (const r of rentals) {
       const parsedItems = r.parsed_items as { item: string; qty: number }[];
-      if (!parsedItems || parsedItems.length < 2) continue;
+      if (!parsedItems || parsedItems.length < 1) continue;
 
-      const itemNames = parsedItems.map(i => i.item).sort();
-      const bundleKey = itemNames.join(' + ');
+      const bundleName = this.matchRentalToBundle(parsedItems);
+      if (!bundleName) continue;
 
-      if (!bundleGroups.has(bundleKey)) {
-        bundleGroups.set(bundleKey, {
-          items: itemNames,
-          title: r.title?.substring(0, 200) || '',
-          revenue: 0,
-          count: 0,
-          days: 0,
-        });
+      if (!bundleGroups.has(bundleName)) {
+        bundleGroups.set(bundleName, { revenue: 0, count: 0, days: 0 });
       }
-      const g = bundleGroups.get(bundleKey)!;
+      const g = bundleGroups.get(bundleName)!;
       g.revenue += r.rental_price || 0;
       g.count += 1;
       if (r.start_date && r.end_date) {
@@ -2139,41 +2203,43 @@ export class RevenueService {
     const cumulativeMap = new Map<string, { revenue: number; count: number; firstRental: Date | null; lastRental: Date | null }>();
     for (const r of allRentals) {
       const parsedItems = r.parsed_items as { item: string; qty: number }[];
-      if (!parsedItems || parsedItems.length < 2) continue;
-      const bundleKey = parsedItems.map(i => i.item).sort().join(' + ');
-      if (!cumulativeMap.has(bundleKey)) {
-        cumulativeMap.set(bundleKey, { revenue: 0, count: 0, firstRental: null, lastRental: null });
+      if (!parsedItems || parsedItems.length < 1) continue;
+      const bundleName = this.matchRentalToBundle(parsedItems);
+      if (!bundleName) continue;
+
+      if (!cumulativeMap.has(bundleName)) {
+        cumulativeMap.set(bundleName, { revenue: 0, count: 0, firstRental: null, lastRental: null });
       }
-      const c = cumulativeMap.get(bundleKey)!;
+      const c = cumulativeMap.get(bundleName)!;
       c.revenue += r.rental_price || 0;
       c.count += 1;
       if (!c.firstRental || (r.start_date && r.start_date < c.firstRental)) c.firstRental = r.start_date;
       if (!c.lastRental || (r.end_date && r.end_date > c.lastRental)) c.lastRental = r.end_date;
     }
 
-    // Save snapshots for bundles that had activity in this period OR have cumulative history
+    // Save snapshots for bundles that had activity this period
     let savedCount = 0;
-    const allBundleKeys = new Set([...bundleGroups.keys(), ...cumulativeMap.keys()]);
+    const allBundleNames = new Set([...bundleGroups.keys(), ...cumulativeMap.keys()]);
 
-    for (const bundleKey of allBundleKeys) {
-      const periodData = bundleGroups.get(bundleKey);
-      const cumData = cumulativeMap.get(bundleKey);
+    for (const bundleName of allBundleNames) {
+      const periodData = bundleGroups.get(bundleName);
+      const cumData = cumulativeMap.get(bundleName);
 
       const revenue = periodData ? Math.round(periodData.revenue * 100) / 100 : 0;
       const rentalCount = periodData?.count || 0;
-      // Only save bundles that have had at least some revenue
       if (revenue === 0 && (!cumData || cumData.revenue === 0)) continue;
-      // Only save if this period had activity (skip zero-revenue months to reduce bloat)
       if (revenue === 0) continue;
 
-      const items = periodData?.items || bundleKey.split(' + ');
+      const bundleDef = BUNDLE_DEFINITIONS.find(b => b.bundle_name === bundleName);
+      const items = bundleDef?.items || [];
+
       const data = {
         period_start: periodStart,
         period_end: periodEnd,
-        bundle_key: bundleKey,
-        bundle_label: this.generateBundleLabel(items),
+        bundle_key: bundleName,
+        bundle_label: bundleName,
         items,
-        listing_title: periodData?.title || null,
+        listing_title: null,
         revenue,
         rental_count: rentalCount,
         avg_per_rental: rentalCount > 0 ? Math.round((revenue / rentalCount) * 100) / 100 : 0,
@@ -2185,7 +2251,7 @@ export class RevenueService {
       };
 
       const existing = await this.prisma.bundle_revenue_snapshot.findFirst({
-        where: { period_start: periodStart, bundle_key: bundleKey },
+        where: { period_start: periodStart, bundle_key: bundleName },
       });
 
       if (existing) {
@@ -2236,8 +2302,13 @@ export class RevenueService {
 
   /**
    * Backfill bundle revenue snapshots from earliest rental.
+   * Wipes all old data first for a clean rebuild with real bundle matching.
    */
   async backfillBundleRevenueSnapshots(): Promise<{ monthsProcessed: number; bundlesTotal: number }> {
+    // Wipe all old snapshots (old data used wrong matching logic)
+    const deleted = await this.prisma.bundle_revenue_snapshot.deleteMany({});
+    this.logger.log(`Wiped ${deleted.count} old bundle revenue snapshots for clean backfill`);
+
     const earliest = await this.prisma.rental.findFirst({
       where: { rental_price: { gt: 0 }, parsed_items: { not: Prisma.JsonNull } },
       orderBy: { start_date: 'asc' },
@@ -2258,17 +2329,9 @@ export class RevenueService {
     while (cursor < lastMonth) {
       const periodStart = new Date(cursor);
       const periodEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-
-      const existing = await this.prisma.bundle_revenue_snapshot.findFirst({
-        where: { period_start: periodStart },
-      });
-
-      if (!existing) {
-        const count = await this.takeBundleRevenueSnapshot(periodStart, periodEnd);
-        bundlesTotal += count;
-        monthsProcessed++;
-      }
-
+      const count = await this.takeBundleRevenueSnapshot(periodStart, periodEnd);
+      bundlesTotal += count;
+      monthsProcessed++;
       cursor.setMonth(cursor.getMonth() + 1);
     }
 
@@ -2365,6 +2428,7 @@ export class RevenueService {
 
   /**
    * Get top bundles with period filtering (live query from rental data, not snapshots).
+   * Only matches rentals to REAL listed bundles from BUNDLE_DEFINITIONS.
    * For dashboard tile display.
    */
   async getTopBundlesLive(
@@ -2381,13 +2445,7 @@ export class RevenueService {
       return true;
     });
 
-    // Only include multi-item rentals (bundles)
-    const bundles = periodFiltered.filter(r => {
-      const items = r.parsed_items as any[];
-      return items && items.length >= 2;
-    });
-
-    // Aggregate by sorted item combination
+    // Match each rental to a real bundle and aggregate
     const byBundle: Record<string, {
       label: string;
       items: string[];
@@ -2396,24 +2454,27 @@ export class RevenueService {
       days: number;
     }> = {};
 
-    for (const r of bundles) {
-      const items = (r.parsed_items as { item: string; qty: number }[])
-        .map(p => this.normalizeItemName(p.item) || p.item)
-        .sort();
-      const key = items.join(' + ');
-      if (!byBundle[key]) {
-        byBundle[key] = {
-          label: items.join(' + '),
-          items,
+    for (const r of periodFiltered) {
+      const parsedItems = r.parsed_items as { item: string; qty: number }[];
+      if (!parsedItems || parsedItems.length < 1) continue;
+
+      const bundleName = this.matchRentalToBundle(parsedItems);
+      if (!bundleName) continue;
+
+      if (!byBundle[bundleName]) {
+        const bundleDef = BUNDLE_DEFINITIONS.find(b => b.bundle_name === bundleName);
+        byBundle[bundleName] = {
+          label: bundleName,
+          items: bundleDef?.items || [],
           revenue: 0,
           count: 0,
           days: 0,
         };
       }
-      byBundle[key].revenue += r.rental_price || 0;
-      byBundle[key].count += 1;
+      byBundle[bundleName].revenue += r.rental_price || 0;
+      byBundle[bundleName].count += 1;
       if (r.start_date && r.end_date) {
-        byBundle[key].days += Math.max(1, Math.round((r.end_date.getTime() - r.start_date.getTime()) / 86400000) + 1);
+        byBundle[bundleName].days += Math.max(1, Math.round((r.end_date.getTime() - r.start_date.getTime()) / 86400000) + 1);
       }
     }
 

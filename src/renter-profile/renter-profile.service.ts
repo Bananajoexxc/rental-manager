@@ -33,20 +33,28 @@ export class RenterProfileService {
         where: { hygglo_user_id: hyggloUserId },
       });
       if (byUserId) {
-        // Update name if different, add variant
+        // Name changed (e.g. Hygglo verification) — promote new name to primary, demote old to variant
         const nameVariants = byUserId.name_variants || [];
         if (
           renterName &&
-          byUserId.name !== renterName &&
-          !nameVariants.includes(renterName)
+          byUserId.name !== renterName
         ) {
+          const updatedVariants = [...nameVariants];
+          // Keep old primary as variant if not already there
+          if (!updatedVariants.includes(byUserId.name)) {
+            updatedVariants.push(byUserId.name);
+          }
+          // Remove new name from variants if it was there (it's now primary)
+          const filtered = updatedVariants.filter(v => v !== renterName);
           await this.prisma.renter_profile.update({
             where: { id: byUserId.id },
             data: {
-              name_variants: [...nameVariants, renterName],
+              name: renterName,
+              name_variants: filtered,
               last_seen_at: new Date(),
             },
           });
+          this.logger.log(`Renter name updated: "${byUserId.name}" → "${renterName}" (profile ${byUserId.id})`);
         } else {
           await this.prisma.renter_profile.update({
             where: { id: byUserId.id },

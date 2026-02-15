@@ -684,31 +684,23 @@ export class AppService {
 
   /**
    * Get ongoing rentals for Return Hub.
-   * Includes: (1) date-based ongoing (start <= today AND end >= today)
-   * AND (2) overdue rentals (Hygglo still says 'ongoing' but end date has passed — gear not returned).
+   * Only shows rentals whose return time has actually passed (exact time, not just date).
+   * Includes overdue rentals (Hygglo still says 'ongoing' but return time has passed).
    */
   async getOngoingRentals(account?: string) {
+    const now = new Date();
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
+    // Fetch broadly — rentals that started and are ongoing/upcoming with end_date <= today
+    // (no point showing future-ending rentals, their return time can't have passed)
     const where: any = {
       rental_price: { gt: 0 },
-      OR: [
-        // Normal ongoing: within date range
-        {
-          status: { in: ['ongoing', 'upcoming'] },
-          start_date: { lte: todayEnd },
-          end_date: { gte: todayStart },
-        },
-        // Overdue: Hygglo still says ongoing but end date has passed (gear not returned)
-        {
-          status: 'ongoing',
-          start_date: { lte: todayEnd },
-          end_date: { lt: todayStart },
-        },
-      ],
+      status: { in: ['ongoing', 'upcoming'] },
+      start_date: { lte: todayEnd },
+      end_date: { lte: todayEnd },
     };
     if (account) where.account = account;
 
@@ -743,6 +735,23 @@ export class AppService {
 
     return rentals
       .filter(r => !processedSet.has(r.id))
+      // Exclude rentals with no confirmed bookings — verification was aborted, never actually booked
+      .filter(r => r.bookings.length > 0)
+      // Only show rentals whose return time has actually passed
+      .filter(r => {
+        if (!r.end_date) return false;
+        const returnTimeStr = r.bookings.find(b => b.return_time)?.return_time;
+        // Build exact return datetime from end_date + return_time
+        const returnMoment = new Date(r.end_date);
+        if (returnTimeStr) {
+          const [h, m] = returnTimeStr.split(':').map(Number);
+          returnMoment.setHours(h || 0, m || 0, 0, 0);
+        } else {
+          // No return time set — default to end of day
+          returnMoment.setHours(23, 59, 59, 999);
+        }
+        return now >= returnMoment;
+      })
       .map(r => {
         const items: string[] = [];
         // Prefer parsed_items for richer data

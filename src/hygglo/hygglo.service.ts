@@ -25,7 +25,8 @@ export interface RentalListing {
   description?: string;
   photosUrls: string[];
   account?: HyggloAccount;
-  rentalPrice?: number;
+  rentalPrice?: number;   // ownerEarnings (after platform fees)
+  renterPrice?: number;   // total renter-facing price (including platform fees)
   pricePerDay?: number;
   currency?: string;
   listingLocation?: string; // Advertised pickup location parsed from listing slug/data
@@ -588,14 +589,18 @@ export class HyggloService implements OnModuleInit {
       }
 
       // --- Price from detail.price ---
-      let rentalPrice: number | undefined;
+      let rentalPrice: number | undefined;  // owner earnings (after fees)
+      let renterPrice: number | undefined;  // renter-facing total (including fees)
       let pricePerDay: number | undefined;
       let currency: string | undefined;
 
       if (detail.price) {
-        // Use ownerEarnings (what the owner actually receives after Hygglo's cut)
-        // Falls back to total if ownerEarnings not available
-        rentalPrice = detail.price.ownerEarnings ?? detail.price.total ?? undefined;
+        // ownerEarnings = what Daniel receives after Hygglo's cut (~64% of total)
+        // total = what the renter pays (including platform fees)
+        rentalPrice = detail.price.ownerEarnings ?? undefined;
+        renterPrice = detail.price.total ?? undefined;
+        // If ownerEarnings missing, fall back to total (better than nothing)
+        if (!rentalPrice && renterPrice) rentalPrice = renterPrice;
         currency = detail.price.currency ?? undefined;
       }
 
@@ -623,6 +628,7 @@ export class HyggloService implements OnModuleInit {
         photosUrls,
         account,
         rentalPrice,
+        renterPrice,
         pricePerDay,
         currency,
         renterRating,

@@ -283,7 +283,9 @@ export class AppController {
   @ApiOperation({ summary: 'Force re-evaluation of AI boost rate (normally runs weekly)' })
   @ApiResponse({ status: 200, description: 'Fresh AI boost evaluation results' })
   async evaluateAiBoost() {
-    return await this.revenueService.evaluateAiPerformance();
+    const result = await this.revenueService.evaluateAiPerformance();
+    await this.revenueService.storeBoostEvaluation(result);
+    return result;
   }
 
   @Get('revenue/tax-summary')
@@ -1391,12 +1393,22 @@ export class AppController {
 
   // --- Lost Revenue endpoints ---
 
-  @Get('lost-revenue/summary')
+  @Get('denied-revenue/summary')
   @ApiTags('Lost Revenue')
-  @ApiOperation({ summary: 'Lost revenue summary for period' })
+  @ApiOperation({ summary: 'Denied revenue summary — items were available but owner declined' })
   @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
   @ApiQuery({ name: 'account', required: false, type: String })
-  @ApiResponse({ status: 200, description: 'Lost revenue summary with top denied items (>£25 only)' })
+  @ApiResponse({ status: 200, description: 'Denied revenue summary with top denied items (>£25 only)' })
+  async getDeniedRevenueSummary(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getDeniedRevenueSummary(period || '3m', account || undefined);
+  }
+
+  @Get('lost-revenue/summary')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Lost revenue summary — items were booked out/unavailable' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Lost revenue summary with top blocked items (>£25 only)' })
   async getLostRevenueSummary(@Query('period') period?: string, @Query('account') account?: string) {
     return await this.lostRevenueService.getLostRevenueSummary(period || '3m', account || undefined);
   }
@@ -1431,6 +1443,14 @@ export class AppController {
     }
 
     return results;
+  }
+
+  @Get('lost-revenue/backfill')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Backfill denial_type for existing records' })
+  @ApiResponse({ status: 200, description: 'Number of records backfilled' })
+  async backfillDenialTypes() {
+    return await this.lostRevenueService.backfillDenialTypes();
   }
 
   @Get('lost-revenue/unmatched')
@@ -1639,6 +1659,14 @@ export class AppController {
   @ApiOperation({ summary: 'Get price template (all items with current cached prices)' })
   async getEbayTemplate() {
     return await this.sellRecommenderService.getEbayPriceTemplate();
+  }
+
+  @Get('inventory/valuation')
+  @ApiTags('Sell Recommender')
+  @ApiOperation({ summary: 'Conservative inventory valuation based on eBay sold prices' })
+  @ApiResponse({ status: 200, description: 'Total inventory resale value with per-item breakdown' })
+  async getInventoryValuation() {
+    return await this.sellRecommenderService.getInventoryValuation();
   }
 
   @Get('dashboard')

@@ -34,8 +34,8 @@ export class RemindersService {
     try {
       // Check for pickups in next 5 minutes that haven't been reminded
       await this.checkUpcomingPickups(now);
-      // Check for returns 30+ min late
-      await this.checkLateReturns(now);
+      // Late return alerts disabled — Daniel handles return checks manually via dashboard
+      // await this.checkLateReturns(now);
       // Send arrival confirmations to renters via Hygglo chat
       await this.checkArrivalConfirmations(now);
     } catch (error) {

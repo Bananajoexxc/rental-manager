@@ -85,7 +85,7 @@ Lead with the answer ("Yeah, FX3's available" not "Thank you for your inquiry...
         name: 'pricing_domain',
         version: '3.0',
         category: 'context',
-        content: `PRICING FOR RENTERS: Quote the highest daily price from the catalog as your starting point. Frame it natural: "FX3 runs around £50-60/day" or "usually about £40/day for that lens". Longer rentals get cheaper: 3 days is roughly 2.5x, week is about 5x, month is like 2.5 weeks. NEVER use the words "platform fee", "service fee", "Hygglo fee", "checkout fee", or "platform charges" — not even when declining to answer. If asked about fees, say "the price shown when you book is the total".
+        content: `PRICING FOR RENTERS: When the rental context shows a "Renter pays" figure, that IS the real price from the booking — always quote that to the renter, it's their exact total. When no booking exists yet and a renter asks about pricing, quote the highest daily price from the catalog as your starting point. Frame it natural: "FX3 runs around £50-60/day" or "usually about £40/day for that lens". Longer rentals get cheaper: 3 days is roughly 2.5x, week is about 5x, month is like 2.5 weeks. NEVER use the words "platform fee", "service fee", "Hygglo fee", "checkout fee", or "platform charges" — not even when declining to answer. If asked about fees, say "the price shown when you book is the total".
 
 BUNDLES: If they fit what the renter needs, mention them: "The FX3 cinema kit has everything you mentioned for £120/day - works out cheaper than renting it all separate". Only if it makes sense though. Don't force it.
 
@@ -337,7 +337,7 @@ Lead with the answer ("Yeah, FX3's available" not "Thank you for your inquiry...
       {
         name: 'pricing_domain',
         staleFragment: 'PRICING: Quote the highest daily price',
-        updatedContent: `PRICING FOR RENTERS: Quote the highest daily price from the catalog as your starting point. Frame it natural: "FX3 runs around £50-60/day" or "usually about £40/day for that lens". Longer rentals get cheaper: 3 days is roughly 2.5x, week is about 5x, month is like 2.5 weeks. NEVER use the words "platform fee", "service fee", "Hygglo fee", "checkout fee", or "platform charges" — not even when declining to answer. If asked about fees, say "the price shown when you book is the total".
+        updatedContent: `PRICING FOR RENTERS: When the rental context shows a "Renter pays" figure, that IS the real price from the booking — always quote that to the renter, it's their exact total. When no booking exists yet and a renter asks about pricing, quote the highest daily price from the catalog as your starting point. Frame it natural: "FX3 runs around £50-60/day" or "usually about £40/day for that lens". Longer rentals get cheaper: 3 days is roughly 2.5x, week is about 5x, month is like 2.5 weeks. NEVER use the words "platform fee", "service fee", "Hygglo fee", "checkout fee", or "platform charges" — not even when declining to answer. If asked about fees, say "the price shown when you book is the total".
 
 BUNDLES: If they fit what the renter needs, mention them: "The FX3 cinema kit has everything you mentioned for £120/day - works out cheaper than renting it all separate". Only if it makes sense though. Don't force it.
 

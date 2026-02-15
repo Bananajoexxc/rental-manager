@@ -335,6 +335,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             start_date: rental.startDate ?? existingRental.start_date,
             end_date: rental.endDate ?? existingRental.end_date,
             rental_price: rental.rentalPrice ?? existingRental.rental_price,
+            renter_price: rental.renterPrice ?? existingRental.renter_price,
             price_per_day: rental.pricePerDay ?? existingRental.price_per_day,
             currency: rental.currency ?? existingRental.currency,
             listing_location: rental.listingLocation ?? existingRental.listing_location,
@@ -344,14 +345,35 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
-        // Cascade renter name updates to bookings (Hygglo API may return full name later)
+        // Cascade renter name updates to bookings and profile (Hygglo verification may change name)
         if (rental.renterInfo && rental.renterInfo !== existingRental.renter_info) {
+          const oldName = existingRental.renter_info;
+          const newName = rental.renterInfo;
+          this.logger.log(`Renter name changed on rental ${existingRental.listing_id}: "${oldName}" → "${newName}"`);
+
           try {
             await this.prisma.booking.updateMany({
               where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review'] } },
-              data: { renter_name: rental.renterInfo },
+              data: { renter_name: newName },
             });
           } catch { /* non-critical */ }
+
+          // Update renter profile: pair old+new name to same profile
+          try {
+            const renterUserId = rental.renterUserId;
+            // First check if this rental is already linked to a profile
+            const existingProfile = await this.renterProfileService.getProfileForRental(existingRental.id);
+            if (existingProfile) {
+              // Profile exists — update name via findOrCreateProfile (handles variant logic)
+              await this.renterProfileService.findOrCreateProfile(newName, renterUserId || existingProfile.hygglo_user_id);
+            } else {
+              // No profile linked yet — create/find one and link
+              const profile = await this.renterProfileService.findOrCreateProfile(newName, renterUserId);
+              await this.renterProfileService.linkRentalToProfile(existingRental.id, profile.id);
+            }
+          } catch (profileErr) {
+            this.logger.warn(`Renter profile update on name change failed: ${profileErr.message}`);
+          }
         }
 
         // Cascade rental status changes to bookings (e.g., pending → upcoming promotes bookings)
@@ -567,6 +589,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           photos_urls: photosUrls,
           account: rental.account || null,
           rental_price: rental.rentalPrice ?? null,
+          renter_price: rental.renterPrice ?? null,
           price_per_day: rental.pricePerDay ?? null,
           currency: rental.currency ?? null,
           listing_location: rental.listingLocation ?? null,

@@ -229,6 +229,7 @@ NOTE: Items in "BOOKED ITEMS FOR THIS RENTAL" are being held for this renter. Do
 OBJECTIVE: Great service. Confirm times, handle logistics.
 CRITICAL: This booking is CONFIRMED. All items listed under "BOOKED ITEMS FOR THIS RENTAL" are RESERVED for this renter. Do NOT say any of these items are "booked", "out of stock", or "unavailable" — they ARE this renter's gear.
 NEXT STEP: Get exact pickup/return times if not yet confirmed.
+ARRIVAL RULE: When the renter says they've arrived / they're here / they're at the pickup point — ALWAYS reply that you'll be there in about 5 minutes (e.g. "Perfect, be with you in about 5 mins!" or "On my way, 5 minutes!"). NEVER say you are already there or at the location. Daniel needs time to get to the meeting point.
 Be helpful and responsive — this is where repeat business is built.`,
         },
       ],
@@ -241,7 +242,8 @@ Be helpful and responsive — this is where repeat business is built.`,
           transitionTriggers: [],
           prompt: `STAGE: Completed
 OBJECTIVE: Rental is finished. Only respond if they have questions about past rental.
-Don't upsell or follow up — they're done.`,
+Don't upsell or follow up — they're done.
+RETURN CLOSURE: If the renter asks to mark the rental as returned or close it, explain that the equipment is still being inspected and we usually close open rentals within 24–72 hours after return, though in rare edge cases it may take a bit longer. Reassure them it's routine.`,
         },
       ],
       [

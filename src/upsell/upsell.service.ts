@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { getSpecHighlight, findItemsByFeature, FEATURE_KEYWORD_MAP } from '../data/item-specs';
@@ -578,6 +579,52 @@ export class UpsellService {
   }
 
   /**
+   * Resolve item names to their best Hygglo listing URL.
+   * Prefers standalone (fewest-item) listings so the link goes to the specific item page.
+   */
+  async resolveItemListingUrls(itemNames: string[]): Promise<Map<string, string>> {
+    const urlMap = new Map<string, string>();
+    if (itemNames.length === 0) return urlMap;
+
+    try {
+      // Find rentals that contain these items in parsed_items, with listing URLs
+      const rentals = await this.prisma.rental.findMany({
+        where: {
+          listing_url: { not: '' },
+          parsed_items: { not: Prisma.JsonNull },
+        },
+        select: { listing_url: true, parsed_items: true },
+        orderBy: { created_at: 'desc' },
+      });
+
+      for (const itemName of itemNames) {
+        const itemLower = itemName.toLowerCase();
+        let bestUrl = '';
+        let fewestItems = Infinity;
+
+        for (const r of rentals) {
+          const items = r.parsed_items as any[];
+          if (!items || !Array.isArray(items)) continue;
+
+          const match = items.some((i: any) =>
+            (i.item || '').toLowerCase() === itemLower,
+          );
+          if (match && r.listing_url && items.length < fewestItems) {
+            bestUrl = r.listing_url;
+            fewestItems = items.length;
+          }
+        }
+
+        if (bestUrl) urlMap.set(itemName, bestUrl);
+      }
+    } catch (err) {
+      this.logger.debug(`Item URL resolution failed: ${err.message}`);
+    }
+
+    return urlMap;
+  }
+
+  /**
    * Generate upsell message for AI to include in response
    */
   async generateUpsellMessage(
@@ -599,6 +646,10 @@ export class UpsellService {
     const coData = await this.getCoOccurrenceData(requestedItems);
     const coMap = new Map(coData.map(c => [c.itemName, c]));
 
+    // Resolve listing URLs for recommended items
+    const topItems = recommendations.items.slice(0, 3);
+    const itemUrls = await this.resolveItemListingUrls(topItems);
+
     let message = '';
 
     // Revenue context message (discounts)
@@ -607,7 +658,7 @@ export class UpsellService {
     }
 
     // Recommendations
-    if (recommendations.items.length > 0) {
+    if (topItems.length > 0) {
       if (revenueContext.upsellUrgency === 'critical') {
         message += `🎯 To hit the minimum:\n`;
       } else if (revenueContext.upsellUrgency === 'aggressive') {
@@ -616,17 +667,27 @@ export class UpsellService {
         message += `Might also want:\n`;
       }
 
-      message += recommendations.items.slice(0, 3).map(item => {
+      message += topItems.map(item => {
         const co = coMap.get(item);
+        const url = itemUrls.get(item);
+        let line: string;
         if (co && co.coCount >= 2) {
-          return `• ${item} — rented together ${co.coCount} times by other customers`;
+          line = `• ${item} — rented together ${co.coCount} times by other customers`;
+        } else {
+          const highlight = getSpecHighlight(item);
+          line = highlight ? `• ${item} — ${highlight}` : `• ${item}`;
         }
-        const highlight = getSpecHighlight(item);
-        return highlight ? `• ${item} — ${highlight}` : `• ${item}`;
+        if (url) line += ` [link: ${url}]`;
+        return line;
       }).join('\n');
 
       if (recommendations.reasoning) {
         message += `\n\n${recommendations.reasoning}`;
+      }
+
+      // Item link instruction
+      if (itemUrls.size > 0) {
+        message += `\n\nITEM LINKS: Only share an item's link if the renter asks about it, asks for more details, or says they'll think about it / are considering it. Do NOT send links proactively — only when the renter shows interest or hesitates on a specific item.`;
       }
     }
 

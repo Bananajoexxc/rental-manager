@@ -1346,6 +1346,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         monthlyTotals,
         weekRevenue,
         monthRevenue,
+        deniedRevenue,
         lostRevenue,
         unmatchedDemand,
         investmentScorecard,
@@ -1354,6 +1355,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.revenueService.getMonthlyTotals(12).catch(() => null),
         this.revenueService.getRevenueForPeriod('week').catch(() => null),
         this.revenueService.getRevenueForPeriod('month').catch(() => null),
+        this.lostRevenueService.getDeniedRevenueSummary('6m').catch(() => null),
         this.lostRevenueService.getLostRevenueSummary('6m').catch(() => null),
         this.lostRevenueService.getUnmatchedDemand('6m').catch(() => null),
         this.lostRevenueService.getRevenuePotential('6m').catch(() => null),
@@ -1395,13 +1397,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // === LOST REVENUE (stock blocked) ===
-      if (lostRevenue && lostRevenue.deniedRequestCount > 0) {
-        parts.push(`\n=== LOST REVENUE (6mo, stock unavailable) === £${lostRevenue.totalLostRevenue} from ${lostRevenue.deniedRequestCount} denied requests`);
-        if (lostRevenue.topDeniedItems.length > 0) {
-          parts.push('Top blocked items:');
-          for (const item of lostRevenue.topDeniedItems) {
+      // === DENIED REVENUE (owner didn't accept) ===
+      if (deniedRevenue && deniedRevenue.deniedCount > 0) {
+        parts.push(`\n=== DENIED REVENUE (6mo, items were available) === £${deniedRevenue.totalDeniedRevenue} from ${deniedRevenue.deniedCount} requests not accepted`);
+        if (deniedRevenue.topDeniedItems.length > 0) {
+          parts.push('Top denied items:');
+          for (const item of deniedRevenue.topDeniedItems) {
             parts.push(`  ${item.item}: ${item.count} denials, £${item.revenue} lost`);
+          }
+        }
+      }
+
+      // === LOST REVENUE (stock blocked) ===
+      if (lostRevenue && lostRevenue.lostCount > 0) {
+        parts.push(`\n=== LOST REVENUE (6mo, stock unavailable) === £${lostRevenue.totalLostRevenue} from ${lostRevenue.lostCount} blocked requests`);
+        if (lostRevenue.topBlockedItems.length > 0) {
+          parts.push('Top blocked items:');
+          for (const item of lostRevenue.topBlockedItems) {
+            parts.push(`  ${item.item}: ${item.count} times blocked, £${item.revenue} lost`);
           }
         }
       }

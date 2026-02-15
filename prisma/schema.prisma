@@ -20,8 +20,9 @@ model rental {
   listing_url     String
   description     String?         @db.Text
   photos_urls     String[]        // Array of photo URLs
-  rental_price    Float?          // total rental price from the order
-  price_per_day   Float?          // calculated price per day
+  rental_price    Float?          // owner earnings (what Daniel receives after platform fees)
+  renter_price    Float?          // renter-facing total (what borrower pays including platform fees)
+  price_per_day   Float?          // calculated owner earnings per day
   currency        String?         @default("GBP")
   account         String?         // 'dbcinema' or 'leo' — which Hygglo account this rental belongs to
   listing_location String?        // Advertised pickup location from the listing (e.g. "Stratford", "Shoreditch") — may be fake
@@ -549,12 +550,31 @@ model lost_revenue_record {
   stock_blocked   Boolean
   blocked_items   String[]
   unmatched_items String[]
+  denial_type     String?   // 'owner_denied' | 'unavailable' | 'verification_failed' | 'unmatched'
+  active_step     String?   // Hygglo step where active=true when rental went obsolete
   synced_at       DateTime @default(now())
   created_at      DateTime @default(now())
 
   @@index([account])
   @@index([start_date])
   @@index([stock_blocked])
+  @@index([denial_type])
+}
+
+model revenue_loss_monthly {
+  id                    String   @id @default(uuid())
+  period_start          DateTime
+  period_end            DateTime
+  account               String   @default("")  // empty string = global aggregate
+  denied_revenue        Float
+  denied_count          Int
+  denied_items          String[]
+  lost_revenue          Float
+  lost_count            Int
+  lost_items            String[]
+  created_at            DateTime @default(now())
+  @@unique([period_start, account])
+  @@index([period_start])
 }
 
 // === Competitor Intelligence (dashboard-only, separate from rental bot) ===

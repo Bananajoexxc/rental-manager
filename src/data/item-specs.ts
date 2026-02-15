@@ -107,15 +107,15 @@ export const ITEM_SPECS: ItemSpec[] = [
   // ──────────────────────────────────────────
   {
     item_name: 'Anamorphic Great Joy lens 35mm',
-    specs: '1.8x squeeze, T2.9 max aperture. 18 elements/14 groups, 11 aperture blades. BLUE FLARE variant — produces subtle blue horizontal streaks with direct light sources, more restrained than the 50mm. Slightly warm/neutral color tone. Oval bokeh. Covers 33x24mm full-frame. 1.19kg. Min focus 70cm. Available in EF/E/L/PL/RF/MFT mounts. Best for: cinematic widescreen look with classic blue anamorphic character. The 35mm flare is more subtle/controlled than the 50mm — less streak, cleaner highlight handling.',
+    specs: '1.8x squeeze, T2.9 max aperture. 18 elements/14 groups, 11 aperture blades. BLUE FLARE variant — produces subtle blue horizontal streaks with direct light sources, more restrained than the 50mm. Slightly warm/neutral color tone. Oval bokeh. Covers 33x24mm full-frame. 1.19kg. Min focus 70cm. NATIVE MOUNT: Canon EF — mounts directly on EF cameras (BMPCC 6K Pro). For Sony E-mount (FX3/A7) use EF-to-E adapter. Best for: cinematic widescreen look with classic blue anamorphic character. The 35mm flare is more subtle/controlled than the 50mm — less streak, cleaner highlight handling.',
   },
   {
     item_name: 'Anamorphic Great Joy lens 50mm',
-    specs: '1.8x squeeze, T2.9 max aperture. 11 aperture blades. BLUE FLARE variant — produces beautiful soft blue horizontal streaks, the most pronounced anamorphic flare of the set. Oval bokeh with soft fall-off. Covers full-frame. Min focus 85cm. ~1.1kg. EF/E/L/PL/RF/MFT mounts. Stepless aperture T2.9-T22. Best for: the hero anamorphic lens — strongest blue flare character, ideal for music videos, narrative, fashion. 50mm is the most "classic anamorphic" of the three.',
+    specs: '1.8x squeeze, T2.9 max aperture. 11 aperture blades. BLUE FLARE variant — produces beautiful soft blue horizontal streaks, the most pronounced anamorphic flare of the set. Oval bokeh with soft fall-off. Covers full-frame. Min focus 85cm. ~1.1kg. NATIVE MOUNT: Canon EF — for Sony E-mount use EF-to-E adapter. Stepless aperture T2.9-T22. Best for: the hero anamorphic lens — strongest blue flare character, ideal for music videos, narrative, fashion. 50mm is the most "classic anamorphic" of the three.',
   },
   {
     item_name: 'Anamorphic Great Joy lens 85mm',
-    specs: '1.8x squeeze, T2.9 max aperture. 11 aperture blades. BLUE FLARE variant — blue horizontal streaks similar to the 50mm. Beautiful compressed oval bokeh for portrait work. Covers full-frame. Min focus ~100cm. ~1.2kg. EF/E/L/PL/RF/MFT mounts. Stepless aperture T2.9-T22. Best for: anamorphic portrait/close-up work, interview shots with cinematic scope. Tightest framing + strongest background separation of the set.',
+    specs: '1.8x squeeze, T2.9 max aperture. 11 aperture blades. BLUE FLARE variant — blue horizontal streaks similar to the 50mm. Beautiful compressed oval bokeh for portrait work. Covers full-frame. Min focus ~100cm. ~1.2kg. NATIVE MOUNT: Canon EF — for Sony E-mount use EF-to-E adapter. Stepless aperture T2.9-T22. Best for: anamorphic portrait/close-up work, interview shots with cinematic scope. Tightest framing + strongest background separation of the set.',
   },
 
   // ──────────────────────────────────────────
@@ -123,19 +123,19 @@ export const ITEM_SPECS: ItemSpec[] = [
   // ──────────────────────────────────────────
   {
     item_name: 'Anamorphic Blazar Remus 33mm',
-    specs: '1.5x squeeze, T1.6 max aperture (fastest in its class). 15 elements/11 groups, 11 aperture blades. AMBER FLARE — warm golden horizontal streaks. 0.9m min focus. Covers S35+ (up to 33.5mm image circle). 780g compact body. Common 77mm front. EF/E/L/RF/MFT mounts. Best for: low-light anamorphic + warm cinematic character. 1.5x desqueeze = wider FOV than 1.8x at same focal length. T1.6 is exceptional for anamorphic.',
+    specs: '1.5x squeeze, T1.6 max aperture (fastest in its class). 15 elements/11 groups, 11 aperture blades. AMBER FLARE — warm golden horizontal streaks. 0.9m min focus. Covers S35+ (up to 33.5mm image circle). 780g compact body. Common 77mm front. NATIVE MOUNT: PL — requires PL-to-E adapter for Sony (FX3/A7), PL-to-EF for Canon/BMPCC, PL-to-RF for Canon RF. Best for: low-light anamorphic + warm cinematic character. 1.5x desqueeze = wider FOV than 1.8x at same focal length. T1.6 is exceptional for anamorphic.',
   },
   {
     item_name: 'Anamorphic Blazar Remus 45mm',
-    specs: '1.5x squeeze, T1.6 max aperture. 15 elements/11 groups, 11 aperture blades. AMBER FLARE — warm golden horizontal streaks matching the set. 0.75m min focus (closest in the set). 33.5mm image circle. 750g. Common 77mm front. EF/E/L/RF/MFT mounts. Best for: standard/interview anamorphic with exceptional low-light capability. The everyday workhorse of the Remus set.',
+    specs: '1.5x squeeze, T1.6 max aperture. 15 elements/11 groups, 11 aperture blades. AMBER FLARE — warm golden horizontal streaks matching the set. 0.75m min focus (closest in the set). 33.5mm image circle. 750g. Common 77mm front. NATIVE MOUNT: PL — requires PL adapter for other mounts. Best for: standard/interview anamorphic with exceptional low-light capability. The everyday workhorse of the Remus set.',
   },
   {
     item_name: 'Anamorphic Blazar Remus 65mm',
-    specs: '1.5x squeeze, T1.6 max aperture. 15 elements/11 groups, 11 aperture blades. AMBER FLARE. 0.9m min focus. 33.5mm image circle. ~800g. Common 77mm front. EF/E/L/RF/MFT mounts. Best for: portrait and medium-tele anamorphic with shallow DOF. Pairs with 33mm for a versatile 2-lens anamorphic kit.',
+    specs: '1.5x squeeze, T1.6 max aperture. 15 elements/11 groups, 11 aperture blades. AMBER FLARE. 0.9m min focus. 33.5mm image circle. ~800g. Common 77mm front. NATIVE MOUNT: PL — requires PL adapter for other mounts. Best for: portrait and medium-tele anamorphic with shallow DOF. Pairs with 33mm for a versatile 2-lens anamorphic kit.',
   },
   {
     item_name: 'Anamorphic Blazar Remus 100mm',
-    specs: '1.5x squeeze, T2.8 max aperture (slower than rest of set). 11 aperture blades. AMBER FLARE. 1.1m min focus. 33.5mm image circle. ~900g. Common 77mm front. EF/E/L/RF/MFT mounts. Best for: tight anamorphic shots, compressed backgrounds, interviews from distance. The telephoto of the set — pairs with 33+65 for a complete 3-lens anamorphic package.',
+    specs: '1.5x squeeze, T2.8 max aperture (slower than rest of set). 11 aperture blades. AMBER FLARE. 1.1m min focus. 33.5mm image circle. ~900g. Common 77mm front. NATIVE MOUNT: PL — requires PL adapter for other mounts. Best for: tight anamorphic shots, compressed backgrounds, interviews from distance. The telephoto of the set — pairs with 33+65 for a complete 3-lens anamorphic package.',
   },
 
   // ──────────────────────────────────────────

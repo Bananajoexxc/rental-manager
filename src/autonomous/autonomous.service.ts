@@ -163,8 +163,8 @@ export class AutonomousService {
         this.logger.log(`Pickup arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
 
         await this.telegramService.sendRentalUpdate(rental.id, {
-          type: 'info', priority: 'normal',
-          data: { message: `✅ ${booking.renter_name} confirmed pickup arrival` },
+          type: 'info', priority: 'critical',
+          data: { message: `📍 ${booking.renter_name} has arrived for pickup — head to the meeting point!` },
         }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
       }
     }
@@ -762,7 +762,8 @@ export class AutonomousService {
       let renterProfileId: string | undefined;
       try {
         if (renterName) {
-          const profile = await this.renterProfileService.findOrCreateProfile(renterName);
+          const renterUserId = (rental as any)._renterUserId as string | undefined;
+          const profile = await this.renterProfileService.findOrCreateProfile(renterName, renterUserId);
           renterProfileId = profile.id;
           await this.renterProfileService.linkRentalToProfile(rental.id, profile.id);
 
@@ -2457,6 +2458,7 @@ export class AutonomousService {
           // Only include inventory list when renter is asking about items or in early stages
           `${listingInventoryContext || messageMismatchContext || hasPricingIntent || ['inquiry', 'interest', 'qualified'].includes(currentStage) ? `INVENTORY: ${getInventoryItemNames().join(', ')}.\n` : ''}` +
           `${['inquiry', 'interest'].includes(currentStage) ? 'If renter hasn\'t said what the shoot is for, ask casually.\n' : ''}` +
+          `RETURN CLOSURE RULE: If the renter asks you to mark the rental as returned or close/end it, explain that the equipment is still being inspected and you usually aim to close open rentals within 24–72 hours after return, though in edge cases it might take a bit longer. Do NOT mark anything as returned yourself.\n` +
           `Lead with the answer. Short paragraphs. Plain text, no markdown. No preamble.`;
 
         // URGENCY CONTEXT: How soon does the rental start?
@@ -2492,15 +2494,21 @@ export class AutonomousService {
           `Renter: ${rental.renter_info || 'Unknown'}\n` +
           `Dates: ${startDateStr} to ${endDateStr}${days ? ` (${days} day${days > 1 ? 's' : ''})` : ' (dates not yet set — renter has not submitted a request)'}\n` +
           `NOTE: Both start and end dates are rental days (inclusive). Minimum rental is always 1 day.\n`;
-        if (rental.rental_price) {
-          rentalContextStr += `Renter pays: £${rental.rental_price} total (this is what the renter sees)\n`;
+        // Revenue context: rental_price = owner earnings (after platform fees ~36%)
+        //                  renter_price = what the borrower pays (including fees)
+        // Tier 1: Actual booking revenue from DB (most accurate)
+        // Tier 2: rental_price from Hygglo API (already after fees — use directly as profit)
+        // Tier 3: Catalog estimate × 0.64 (catalog prices are renter-facing)
+        const profitAmount = ownerEarnings || rental.rental_price || null;
+        const renterAmount = rental.renter_price || (profitAmount ? Math.round(profitAmount / 0.64) : null);
+
+        if (renterAmount) {
+          rentalContextStr += `Renter pays: £${renterAmount} total (this is what the renter sees on checkout)\n`;
         }
-        if (ownerEarnings) {
-          rentalContextStr += `Your profit: £${ownerEarnings} (after platform fees)\n`;
-        } else if (rental.rental_price) {
-          rentalContextStr += `Your profit: ~£${Math.round(rental.rental_price * 0.64)} (estimated, after platform fees)\n`;
+        if (profitAmount) {
+          rentalContextStr += `Your profit: £${Math.round(profitAmount)} (after platform fees)\n`;
         } else {
-          // No booking yet — estimate from extracted items (1-day catalog price)
+          // No price data yet — estimate from extracted items (catalog price × 0.64)
           try {
             const extractedItems = await this.prisma.extracteditem.findMany({
               where: { rental_id: rental.id }, select: { item_name: true },
@@ -2511,24 +2519,24 @@ export class AutonomousService {
                 const entry = PRICING_CATALOG.find(p => p.item_name.toLowerCase() === ei.item_name.toLowerCase());
                 itemTotal += entry ? entry.daily_price_max : 25;
               }
-              rentalContextStr += `Your profit: ~£${Math.round(itemTotal * 0.64)} (estimated 1-day, after platform fees)\n`;
+              const estProfit = Math.round(itemTotal * 0.64);
+              rentalContextStr += `Your profit: ~£${estProfit} (estimated 1-day, after platform fees)\n`;
+              rentalContextStr += `Renter pays: ~£${itemTotal} (estimated 1-day listing price)\n`;
             }
           } catch { /* optional */ }
         }
         if (rental.price_per_day && days && days > 1) {
-          rentalContextStr += `Price per day: £${rental.price_per_day}/day\n`;
+          rentalContextStr += `Price per day: £${rental.price_per_day}/day (your earnings)\n`;
         }
         rentalContextStr += `IMPORTANT: These are the REAL prices from the booking. Quote ONLY these figures to the renter. Do NOT make up daily rates, weekly rates, or any other pricing. When speaking to the renter, use the "Renter pays" figure. When Daniel asks about profit/earnings/revenue, use the "Your profit" figure — revenue, earnings, and profit all mean the same thing (what Daniel takes home after fees).`;
 
         // ACCOUNT-SPECIFIC LOW-VALUE DETECTION: Check estimated profit against minimum thresholds
         const ACCOUNT_MIN_EARNINGS: Record<string, number> = { dbcinema: 20, leo: 25 };
         const accountMinimum = ACCOUNT_MIN_EARNINGS[accountName] || 20;
-        let estimatedProfit = ownerEarnings;
-        if (!estimatedProfit && rental.rental_price) {
-          estimatedProfit = Math.round(rental.rental_price * 0.64);
-        }
+        // rental_price IS owner earnings (already after fees) — use directly, no * 0.64
+        let estimatedProfit = ownerEarnings || rental.rental_price || null;
         if (!estimatedProfit) {
-          // Estimate from catalog prices × 0.64 (same logic as above but for the check)
+          // No Hygglo price data — estimate from catalog prices × 0.64
           try {
             const extractedItems = await this.prisma.extracteditem.findMany({
               where: { rental_id: rental.id }, select: { item_name: true },
@@ -2541,7 +2549,6 @@ export class AutonomousService {
               }
               estimatedProfit = Math.round(itemTotal * 0.64);
             } else {
-              // Estimate from the estimated total used for upsell
               estimatedProfit = Math.round(estimatedTotal * 0.64);
             }
           } catch { /* non-critical */ }

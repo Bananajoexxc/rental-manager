@@ -73,6 +73,16 @@ export class FollowUpService {
 
       for (const state of activeStates) {
         try {
+          // Skip returned/completed rentals — never follow up after return
+          const rentalStatus = state.rental?.status;
+          const orderStep = state.rental?.order_step;
+          if (
+            rentalStatus === 'completed' ||
+            orderStep === 'RETURNED' ||
+            orderStep === 'REVIEWED'
+          ) {
+            continue;
+          }
           await this.evaluateFollowUpState(state);
         } catch (error) {
           this.logger.warn(`Error evaluating follow-up for rental ${state.rental_id}: ${error.message}`);

@@ -4,9 +4,10 @@ import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { RevenueService } from '../revenue/revenue.service';
 import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
-import { MASTER_INVENTORY, ACCESSORY_ITEMS, isAccessoryItem } from '../utils/item-matcher';
+import { MASTER_INVENTORY, ACCESSORY_ITEMS, isAccessoryItem, findBestMatch } from '../utils/item-matcher';
 import { getOneDayPrice, PRICING_CATALOG } from '../data/pricing-catalog';
 import { getOwnedItemCost } from '../data/acquisition-costs';
+import { BUNDLE_DEFINITIONS } from '../data/bundle-suggestions';
 
 export interface SellRecommendation {
   item: string;
@@ -235,11 +236,11 @@ export class SellRecommenderService {
   }
 
   /**
-   * Daily cron at 5 AM — refresh eBay sold prices.
+   * Quarterly cron (1st of Jan/Apr/Jul/Oct at 5 AM) — refresh eBay sold prices.
    */
-  @Cron('0 5 * * *')
-  async dailyEbayScrape(): Promise<void> {
-    this.logger.log('=== Daily eBay price scrape starting ===');
+  @Cron('0 5 1 1,4,7,10 *')
+  async quarterlyEbayScrape(): Promise<void> {
+    this.logger.log('=== Quarterly eBay price scrape starting ===');
     try {
       await this.scrapeAllEbayPrices();
     } catch (err) {
@@ -252,14 +253,18 @@ export class SellRecommenderService {
   private static readonly MAX_IDLE_WINDOW = 730; // 2 years max idle window
 
   /**
-   * Get the last AND first rental dates for each item from the booking table.
-   * Only considers bookings within the last 2 years for accurate idle assessment.
-   * Returns Map<itemName, { daysSinceLastRental, daysSinceFirstRental } | null>.
+   * Get the last AND first rental dates for each item.
+   * Checks BOTH the booking table AND rental.parsed_items to catch items
+   * that are rented as part of bundle/set listings (e.g., lenses in the GM Triple Set).
+   * Only considers activity within the last 2 years.
    */
   private async getRentalDateRanges(): Promise<Map<string, { daysSinceLastRental: number; daysSinceFirstRental: number } | null>> {
     const twoYearsAgo = new Date(Date.now() - SellRecommenderService.MAX_IDLE_WINDOW * 86400000);
+    const now = new Date();
+    const map = new Map<string, { daysSinceLastRental: number; daysSinceFirstRental: number } | null>();
 
-    const results = await this.prisma.booking.groupBy({
+    // Source 1: booking table (individual bookings)
+    const bookingResults = await this.prisma.booking.groupBy({
       by: ['item_name'],
       where: {
         status: { in: ['confirmed', 'completed'] },
@@ -269,18 +274,52 @@ export class SellRecommenderService {
       _min: { start_date: true },
     });
 
-    const now = new Date();
-    const map = new Map<string, { daysSinceLastRental: number; daysSinceFirstRental: number } | null>();
-
-    for (const r of results) {
+    for (const r of bookingResults) {
       if (r._max.end_date) {
         const daysSinceLast = Math.max(0, Math.round((now.getTime() - r._max.end_date.getTime()) / 86400000));
         const daysSinceFirst = r._min.start_date
           ? Math.max(0, Math.round((now.getTime() - r._min.start_date.getTime()) / 86400000))
           : daysSinceLast;
         map.set(r.item_name, { daysSinceLastRental: daysSinceLast, daysSinceFirstRental: daysSinceFirst });
-      } else {
-        map.set(r.item_name, null);
+      }
+    }
+
+    // Source 2: rental.parsed_items — catches items rented in bundle/set listings
+    // that may not have individual bookings created
+    const rentals = await this.prisma.rental.findMany({
+      where: {
+        parsed_items: { not: { equals: null as any } },
+        start_date: { gte: twoYearsAgo },
+        status: { in: ['completed', 'ongoing', 'upcoming'] },
+      },
+      select: {
+        parsed_items: true,
+        start_date: true,
+        end_date: true,
+      },
+    });
+
+    for (const r of rentals) {
+      const parsedItems = r.parsed_items as { item: string; qty: number }[] | null;
+      if (!parsedItems || !r.start_date) continue;
+
+      for (const p of parsedItems) {
+        const itemName = p.item;
+        // Only merge if this is a real inventory item
+        if (MASTER_INVENTORY[itemName] === undefined) continue;
+
+        const endDate = r.end_date || r.start_date;
+        const daysSinceLast = Math.max(0, Math.round((now.getTime() - endDate.getTime()) / 86400000));
+        const daysSinceFirst = Math.max(0, Math.round((now.getTime() - r.start_date.getTime()) / 86400000));
+
+        const existing = map.get(itemName);
+        if (existing) {
+          // Merge: take the more recent last rental and oldest first rental
+          existing.daysSinceLastRental = Math.min(existing.daysSinceLastRental, daysSinceLast);
+          existing.daysSinceFirstRental = Math.max(existing.daysSinceFirstRental, daysSinceFirst);
+        } else {
+          map.set(itemName, { daysSinceLastRental: daysSinceLast, daysSinceFirstRental: daysSinceFirst });
+        }
       }
     }
 
@@ -291,7 +330,8 @@ export class SellRecommenderService {
 
   /**
    * Analyze bundle co-rental patterns for all items.
-   * Groups confirmed/completed bookings by rental_id to find multi-item rentals.
+   * Checks BOTH the booking table AND rental.parsed_items to catch items
+   * rented in set/bundle listings that may lack individual bookings.
    * Returns per-item bundle metrics: rate, revenue, top partners, dependency score.
    */
   private async getBundleAnalysis(): Promise<Map<string, {
@@ -300,57 +340,85 @@ export class SellRecommenderService {
     topPartners: { item: string; count: number }[];
     bundleDependencyScore: number;
   }>> {
-    // Load all confirmed/completed bookings with rental_id
-    const bookings = await this.prisma.booking.findMany({
-      where: {
-        status: { in: ['confirmed', 'completed'] },
-        rental_id: { not: null },
-      },
-      select: {
-        item_name: true,
-        rental_id: true,
-        revenue: true,
-      },
-    });
-
-    // Group bookings by rental_id
-    const rentalGroups = new Map<string, { items: string[]; revenue: number }>();
-    for (const b of bookings) {
-      if (!b.rental_id) continue;
-      const group = rentalGroups.get(b.rental_id);
-      if (group) {
-        group.items.push(b.item_name);
-        group.revenue += (b.revenue || 0);
-      } else {
-        rentalGroups.set(b.rental_id, {
-          items: [b.item_name],
-          revenue: b.revenue || 0,
-        });
-      }
-    }
-
-    // Per-item: total rentals, multi-item rentals, co-rental partners, bundle revenue
+    // Per-item accumulators
     const itemTotalRentals = new Map<string, number>();
     const itemBundleRentals = new Map<string, number>();
     const itemBundleRevenue = new Map<string, number>();
     const itemPartners = new Map<string, Map<string, number>>();
 
-    for (const [, group] of rentalGroups) {
-      const isMultiItem = group.items.length > 1;
-      for (const item of group.items) {
+    const processGroup = (items: string[], revenue: number) => {
+      const isMultiItem = items.length > 1;
+      // De-dup items within same group for counting (avoid double-counting same item)
+      const unique = [...new Set(items)];
+      for (const item of unique) {
         itemTotalRentals.set(item, (itemTotalRentals.get(item) || 0) + 1);
         if (isMultiItem) {
           itemBundleRentals.set(item, (itemBundleRentals.get(item) || 0) + 1);
-          itemBundleRevenue.set(item, (itemBundleRevenue.get(item) || 0) + group.revenue);
-          // Track partners
+          itemBundleRevenue.set(item, (itemBundleRevenue.get(item) || 0) + revenue);
           if (!itemPartners.has(item)) itemPartners.set(item, new Map());
           const partners = itemPartners.get(item)!;
-          for (const other of group.items) {
+          for (const other of unique) {
             if (other !== item) {
               partners.set(other, (partners.get(other) || 0) + 1);
             }
           }
         }
+      }
+    };
+
+    // Source 1: booking table (grouped by rental_id)
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: { in: ['confirmed', 'completed'] },
+        rental_id: { not: null },
+      },
+      select: { item_name: true, rental_id: true, revenue: true },
+    });
+
+    const bookingGroups = new Map<string, { items: string[]; revenue: number }>();
+    for (const b of bookings) {
+      if (!b.rental_id) continue;
+      const group = bookingGroups.get(b.rental_id);
+      if (group) {
+        group.items.push(b.item_name);
+        group.revenue += (b.revenue || 0);
+      } else {
+        bookingGroups.set(b.rental_id, { items: [b.item_name], revenue: b.revenue || 0 });
+      }
+    }
+    // Track which rental_ids we've already processed (avoid double-counting)
+    const processedRentalIds = new Set<string>();
+    for (const [rentalId, group] of bookingGroups) {
+      processGroup(group.items, group.revenue);
+      processedRentalIds.add(rentalId);
+    }
+
+    // Source 2: rental.parsed_items — catches items in set listings without individual bookings
+    const rentals = await this.prisma.rental.findMany({
+      where: {
+        parsed_items: { not: { equals: null as any } },
+        status: { in: ['completed', 'ongoing', 'upcoming'] },
+      },
+      select: { id: true, parsed_items: true, rental_price: true },
+    });
+
+    for (const r of rentals) {
+      if (processedRentalIds.has(r.id)) continue; // Already counted from bookings
+      const parsedItems = r.parsed_items as { item: string; qty: number }[] | null;
+      if (!parsedItems) continue;
+
+      // Expand items by quantity
+      const expandedItems: string[] = [];
+      for (const p of parsedItems) {
+        // Only include real inventory items
+        if (MASTER_INVENTORY[p.item] !== undefined) {
+          for (let i = 0; i < (p.qty || 1); i++) {
+            expandedItems.push(p.item);
+          }
+        }
+      }
+      if (expandedItems.length > 0) {
+        processGroup(expandedItems, r.rental_price || 0);
       }
     }
 
@@ -459,24 +527,32 @@ export class SellRecommenderService {
     }
 
     // 4. ROI — earned vs resale (15%)
-    // High ratio (earned >> resale) means it's already paid for itself
+    // High ratio (earned >> resale) = great earner = KEEP. Low ratio = poor performer = sell.
     let roiScore = 50; // neutral when no eBay data
     if (params.ebayResalePrice && params.ebayResalePrice > 0) {
       const ratio = params.lifetimeRevenue / params.ebayResalePrice;
-      if (ratio > 3) roiScore = 90; // paid for itself 3x+ → sell to upgrade
-      else if (ratio > 2) roiScore = 75;
-      else if (ratio > 1) roiScore = 60;
-      else if (ratio > 0.5) roiScore = 35; // hasn't paid off yet
-      else roiScore = 15; // barely used, hasn't earned its keep but also shouldn't sell at loss
+      if (ratio > 3) roiScore = 5;       // incredible earner (3x+ resale) — strong keep
+      else if (ratio > 2) roiScore = 10;  // great earner — keep
+      else if (ratio > 1) roiScore = 20;  // solid earner — keep
+      else if (ratio > 0.5) roiScore = 45; // moderate — neutral
+      else if (ratio > 0.2) roiScore = 65; // underperforming — lean sell
+      else roiScore = 80; // barely earned anything — sell signal
     }
 
-    // Purchase cost ROI boost: if owned 180+ days with poor cost recovery → stronger sell signal
+    // Purchase cost ROI: high ROI = keep, low ROI + old = sell
     if (params.purchaseCost && params.purchaseCost > 0) {
       const daysOwned = params.daysSinceFirstRental ?? 180;
       const purchaseRecovery = params.lifetimeRevenue / params.purchaseCost;
-      if (daysOwned >= 180) {
-        if (purchaseRecovery < 0.33) roiScore = Math.max(roiScore, 80); // <33% recovered → strong sell
-        else if (purchaseRecovery < 0.5) roiScore = Math.max(roiScore, 65); // <50% → moderate sell
+      if (purchaseRecovery >= 2) {
+        // 200%+ ROI — item is paying for itself well, strong keep signal
+        roiScore = Math.min(roiScore, 5);
+      } else if (purchaseRecovery >= 1) {
+        // Paid for itself — keep
+        roiScore = Math.min(roiScore, 15);
+      } else if (daysOwned >= 180) {
+        // Owned 6+ months with poor recovery
+        if (purchaseRecovery < 0.33) roiScore = Math.max(roiScore, 80); // <33% recovered → sell
+        else if (purchaseRecovery < 0.5) roiScore = Math.max(roiScore, 65); // <50% → lean sell
       }
     }
 
@@ -509,10 +585,15 @@ export class SellRecommenderService {
     if (params.utilization < 10) reasons.push(`${params.utilization}% utilization`);
     if (trendScore > 70) reasons.push('revenue declining');
     if (params.last3mRevenue === 0 && params.last6mRevenue === 0) reasons.push('no revenue in 6 months');
-    if (roiScore > 70 && params.ebayResalePrice) reasons.push(`earned ${((params.lifetimeRevenue / params.ebayResalePrice) || 0).toFixed(1)}x resale value`);
+    if (params.ebayResalePrice && params.ebayResalePrice > 0) {
+      const ratio = params.lifetimeRevenue / params.ebayResalePrice;
+      if (ratio > 2) reasons.push(`strong earner: ${ratio.toFixed(1)}x resale value`);
+      else if (roiScore > 60) reasons.push(`underperforming: earned ${ratio.toFixed(1)}x resale`);
+    }
     if (params.purchaseCost && params.purchaseCost > 0) {
       const recovery = Math.round((params.lifetimeRevenue / params.purchaseCost) * 100);
-      if (recovery < 50) reasons.push(`only ${recovery}% of £${params.purchaseCost} purchase cost recovered`);
+      if (recovery >= 200) reasons.push(`${recovery}% ROI on £${params.purchaseCost} cost`);
+      else if (recovery < 50) reasons.push(`only ${recovery}% of £${params.purchaseCost} cost recovered`);
     }
     if (dailyValueScore > 70) reasons.push(`low daily value (£${dailyPrice}/day)`);
     if (params.ebayResalePrice) reasons.push(`eBay ~£${Math.round(params.ebayResalePrice)}`);
@@ -659,11 +740,33 @@ export class SellRecommenderService {
 
       // Bundle synergy — post-processing penalty
       const bundle = bundleMap.get(itemName) || { bundleRate: 0, bundleRevenue: 0, topPartners: [], bundleDependencyScore: 0 };
-      const bundleSynergyScore = Math.min(100, Math.round(bundle.bundleRate * 0.4 + bundle.bundleDependencyScore * 0.6));
-      const bundlePenalty = Math.round(bundleSynergyScore * 0.20); // max -20 points
-      const score = Math.max(0, rawScore - bundlePenalty);
 
-      // Re-evaluate verdict after bundle penalty
+      // Check if this item is part of any REAL listed bundle (from BUNDLE_DEFINITIONS)
+      const listedBundles = BUNDLE_DEFINITIONS.filter(b => b.items.includes(itemName));
+      const inListedBundle = listedBundles.length > 0;
+      const listedBundleNames = listedBundles.map(b => b.bundle_name);
+
+      // Base synergy from co-rental patterns
+      const bundleSynergyScore = Math.min(100, Math.round(bundle.bundleRate * 0.4 + bundle.bundleDependencyScore * 0.6));
+
+      // Stronger penalty for items in REAL listed bundles (up to -35 pts)
+      // vs generic co-rental synergy (up to -20 pts)
+      let bundlePenalty: number;
+      if (inListedBundle) {
+        // Listed bundle items get heavy protection: base synergy + listed bundle bonus
+        bundlePenalty = Math.min(35, Math.round(bundleSynergyScore * 0.20) + 15);
+      } else {
+        bundlePenalty = Math.round(bundleSynergyScore * 0.20); // max -20 points
+      }
+      let score = Math.max(0, rawScore - bundlePenalty);
+
+      // Hard ROI cap: items with 200%+ purchase cost ROI are returning good money.
+      // They should never be recommended to sell or even flagged as "consider".
+      if (purchaseCostROI !== null && purchaseCostROI >= 2.0) {
+        score = Math.min(score, 40); // Forces "keep" (below 45 threshold)
+      }
+
+      // Re-evaluate verdict after bundle penalty + ROI cap
       let verdict: 'sell' | 'consider' | 'keep';
       if (score >= 70) verdict = 'sell';
       else if (score >= 45) verdict = 'consider';
@@ -671,7 +774,12 @@ export class SellRecommenderService {
 
       // Augment reason with bundle context
       let finalReason = reason;
-      if (bundlePenalty > 0) {
+      if (inListedBundle) {
+        const bundleList = listedBundleNames.length <= 2
+          ? listedBundleNames.join(', ')
+          : listedBundleNames.slice(0, 2).join(', ') + ` +${listedBundleNames.length - 2} more`;
+        finalReason += ` · Listed bundle (-${bundlePenalty}pts): ${bundleList}`;
+      } else if (bundlePenalty > 0) {
         const partnerNames = bundle.topPartners.slice(0, 2).map(p => p.item).join(', ');
         finalReason += ` · Bundle-protected (-${bundlePenalty}pts): ${bundle.bundleRate}% bundled with ${partnerNames}`;
       }
@@ -797,6 +905,130 @@ export class SellRecommenderService {
 
     this.logger.log(`Manual eBay import: ${imported} imported, ${skipped.length} skipped`);
     return { imported, skipped };
+  }
+
+  // ────────────── Inventory Valuation ──────────────
+
+  /**
+   * Get total inventory valuation using conservative eBay sold prices.
+   * Conservative = 25th percentile of sold prices (or min if few samples).
+   * Multiplied by quantity owned.
+   */
+  async getInventoryValuation(): Promise<{
+    totalResaleValue: number;
+    totalPurchaseCost: number;
+    gainLoss: number;
+    gainLossPercent: number;
+    itemCount: number;
+    pricedCount: number;
+    unpricedItems: string[];
+    lastScraped: string | null;
+    items: {
+      name: string;
+      qty: number;
+      purchasePrice: number | null;
+      resalePrice: number | null;
+      totalResale: number;
+      totalCost: number;
+      sampleCount: number;
+    }[];
+  }> {
+    const cache = await this.prisma.ebay_price_cache.findMany();
+    const cacheMap = new Map(cache.map(c => [c.item_name, c]));
+
+    const items: {
+      name: string;
+      qty: number;
+      purchasePrice: number | null;
+      resalePrice: number | null;
+      totalResale: number;
+      totalCost: number;
+      sampleCount: number;
+    }[] = [];
+
+    let totalResale = 0;
+    let totalCost = 0;
+    let pricedCount = 0;
+    const unpricedItems: string[] = [];
+    let oldestScrape: Date | null = null;
+
+    for (const [itemName, qty] of Object.entries(MASTER_INVENTORY)) {
+      const cached = cacheMap.get(itemName);
+      const purchasePrice = getOwnedItemCost(itemName);
+
+      // Conservative price: 25th percentile from sold_prices array
+      let resalePrice: number | null = null;
+      let sampleCount = 0;
+
+      if (cached) {
+        sampleCount = cached.sample_count;
+        const soldPrices = cached.sold_prices as number[] | null;
+
+        if (soldPrices && soldPrices.length >= 4) {
+          // 25th percentile
+          const sorted = [...soldPrices].sort((a, b) => a - b);
+          const idx = Math.floor(sorted.length * 0.25);
+          resalePrice = Math.round(sorted[idx]);
+        } else if (cached.min_price != null) {
+          // Few samples — use min as conservative
+          resalePrice = cached.min_price;
+        } else if (cached.median_price != null) {
+          // Fallback to median (manual imports have sample_count=1)
+          resalePrice = Math.round(cached.median_price * 0.85); // 15% below median for conservatism
+        }
+
+        if (cached.scraped_at) {
+          if (!oldestScrape || cached.scraped_at < oldestScrape) {
+            oldestScrape = cached.scraped_at;
+          }
+        }
+      }
+
+      if (resalePrice != null) {
+        pricedCount++;
+      } else {
+        unpricedItems.push(itemName);
+      }
+
+      const itemTotalResale = (resalePrice || 0) * qty;
+      const itemTotalCost = (purchasePrice || 0) * qty;
+      totalResale += itemTotalResale;
+      totalCost += itemTotalCost;
+
+      items.push({
+        name: itemName,
+        qty,
+        purchasePrice: purchasePrice ?? null,
+        resalePrice,
+        totalResale: itemTotalResale,
+        totalCost: itemTotalCost,
+        sampleCount,
+      });
+    }
+
+    // Sort by total resale value descending
+    items.sort((a, b) => b.totalResale - a.totalResale);
+
+    const gainLoss = totalResale - totalCost;
+    const gainLossPercent = totalCost > 0 ? Math.round((gainLoss / totalCost) * 100) : 0;
+
+    let lastScraped: string | null = null;
+    if (oldestScrape) {
+      const daysAgo = Math.round((Date.now() - oldestScrape.getTime()) / 86400000);
+      lastScraped = daysAgo === 0 ? 'today' : daysAgo === 1 ? '1 day ago' : `${daysAgo} days ago`;
+    }
+
+    return {
+      totalResaleValue: Math.round(totalResale),
+      totalPurchaseCost: Math.round(totalCost),
+      gainLoss: Math.round(gainLoss),
+      gainLossPercent,
+      itemCount: items.length,
+      pricedCount,
+      unpricedItems,
+      lastScraped,
+      items,
+    };
   }
 
   /**

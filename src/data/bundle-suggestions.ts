@@ -87,6 +87,46 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
     trigger_keywords: ['interview', 'talking head', 'corporate video', 'podcast', 'youtube', 'sit down'],
     savings_note: 'Save vs individual (~£82-114 individual vs ~£57-75 bundle)',
   },
+  {
+    bundle_name: 'BMPCC 6K Pro + Canon Dual Lens Set',
+    items: ['BMPCC 6K Pro', 'Canon EF 16-35mm f2.8', 'Canon EF 24-105mm f4'],
+    daily_price_min: 50, daily_price_max: 80,
+    use_cases: ['cinema', 'film', 'narrative', 'short film', 'commercial'],
+    trigger_keywords: ['bmpcc lens set', 'blackmagic canon', 'bmpcc two lenses', 'bmpcc wide and zoom'],
+    savings_note: 'Save vs individual (~£63-85 individual vs ~£50-80 bundle). Wide + zoom Canon EF glass.',
+  },
+  {
+    bundle_name: 'BMPCC 6K Full Frame + Canon 24-105mm Kit',
+    items: ['BMPCC 6K Full Frame', 'Canon EF 24-105mm f4'],
+    daily_price_min: 45, daily_price_max: 65,
+    use_cases: ['cinema', 'film', 'narrative', 'commercial'],
+    trigger_keywords: ['bmpcc full frame lens', 'bmpcc 6k ff kit', 'blackmagic full frame canon'],
+    savings_note: 'Save vs renting separately. Full frame cinema body + versatile Canon zoom.',
+  },
+  {
+    bundle_name: 'BMPCC 6K Full Frame + Canon 24-105mm + Gimbal Kit',
+    items: ['BMPCC 6K Full Frame', 'Canon EF 24-105mm f4', 'DJI RS3 Pro gimbal'],
+    daily_price_min: 55, daily_price_max: 80,
+    use_cases: ['cinema', 'film', 'run-and-gun', 'documentary', 'commercial'],
+    trigger_keywords: ['bmpcc full frame gimbal', 'blackmagic full frame stabilized'],
+    savings_note: 'Save vs renting separately. Stabilized full frame cinema rig.',
+  },
+  {
+    bundle_name: 'BMPCC Explorer Set (6K Pro + Full Frame + Canon 16-35mm)',
+    items: ['BMPCC 6K Pro', 'BMPCC 6K Full Frame', 'Canon EF 16-35mm f2.8', 'DJI RS3 Pro gimbal'],
+    daily_price_min: 80, daily_price_max: 120,
+    use_cases: ['cinema', 'film production', 'short film', 'narrative'],
+    trigger_keywords: ['bmpcc explorer', 'two blackmagic', 'bmpcc dual', 'blackmagic set'],
+    savings_note: 'Save vs renting separately. Two cinema bodies (S35 + FF) with wide Canon glass + gimbal.',
+  },
+  {
+    bundle_name: 'BMPCC 6K Pro Ultimate Short Film Set',
+    items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'DJI RS3 Pro gimbal', 'Atomos Ninja V', 'Rode Wireless Mic Pro set'],
+    daily_price_min: 100, daily_price_max: 140,
+    use_cases: ['short film', 'cinema', 'narrative', 'music video', 'commercial'],
+    trigger_keywords: ['bmpcc ultimate', 'blackmagic full kit', 'bmpcc short film'],
+    savings_note: 'Save vs renting separately. Complete Blackmagic cinema production kit.',
+  },
 
   // ── Lens Bundles ──
   {

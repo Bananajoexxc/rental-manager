@@ -121,6 +121,25 @@ export class LostRevenueService {
     private readonly hyggloService: HyggloService,
   ) {}
 
+  /**
+   * Extract the active order step from rental detail.
+   * Steps: REQUEST → APPROVED → FUNDS_RESERVED → VERIFIED → BOOKED_AFTER_VERIFIED → DELIVERED → RETURNED → REVIEWED
+   */
+  private extractActiveOrderStep(detail: any): string | null {
+    if (!detail?.steps || !Array.isArray(detail.steps)) return null;
+    const active = detail.steps.find((s: any) => s.active === true);
+    return active?.key || null;
+  }
+
+  /**
+   * Check if a specific step is completed in the order detail.
+   */
+  private isStepCompleted(detail: any, stepKey: string): boolean {
+    if (!detail?.steps || !Array.isArray(detail.steps)) return false;
+    const step = detail.steps.find((s: any) => s.key === stepKey);
+    return step?.completed === true;
+  }
+
   /** Normalize a parsed_item name to its MASTER_INVENTORY key using token overlap. */
   private normalizeParsedItemName(parsedName: string): string | null {
     if (MASTER_INVENTORY[parsedName] !== undefined) return parsedName;
@@ -188,11 +207,37 @@ export class LostRevenueService {
           continue;
         }
 
-        // Skip if already imported
+        // If already imported, update active_step + denial_type if missing
         const existing = await this.prisma.lost_revenue_record.findUnique({
           where: { hygglo_order_id: rental.listingId },
         });
         if (existing) {
+          // Reclassify records that still have 'expired' denial_type (from backfill)
+          if (existing.denial_type === 'expired' || !existing.denial_type) {
+            const step = this.extractActiveOrderStep(rental._detail);
+            const items = (existing.items_requested as any[]) || [];
+            const hasMatched = items.some(i => i.matched !== null);
+            const approved = this.isStepCompleted(rental._detail, 'APPROVED');
+            let newType = existing.denial_type;
+            if (step && ['VERIFIED', 'FUNDS_RESERVED'].includes(step)) {
+              newType = 'verification_failed';
+            } else if (existing.stock_blocked) {
+              newType = 'unavailable';
+            } else if (hasMatched && !approved) {
+              // Owner never approved — items were available but not accepted
+              newType = 'owner_denied';
+            } else if (hasMatched && approved) {
+              newType = 'expired';
+            } else if (!hasMatched) {
+              newType = 'unmatched';
+            }
+            if (newType !== existing.denial_type || step) {
+              await this.prisma.lost_revenue_record.update({
+                where: { id: existing.id },
+                data: { active_step: step || existing.active_step, denial_type: newType },
+              });
+            }
+          }
           skipped++;
           continue;
         }
@@ -208,6 +253,28 @@ export class LostRevenueService {
         const blockedItems = itemsAnalysis.filter(i => i.blocked).map(i => i.matched!);
         const unmatchedItems = itemsAnalysis.filter(i => !i.matched).map(i => i.item);
         const stockBlocked = blockedItems.length > 0;
+
+        // Classify denial type using order step
+        // REQUEST active = owner never approved (declined or didn't respond) → owner_denied
+        // APPROVED completed but went obsolete = not owner's fault
+        // VERIFIED/FUNDS_RESERVED active = verification issue
+        const activeStep = this.extractActiveOrderStep(rental._detail);
+        const hasMatchedItems = itemsAnalysis.some(i => i.matched !== null);
+        const approvedCompleted = this.isStepCompleted(rental._detail, 'APPROVED');
+        let denialType: string;
+        if (activeStep && ['VERIFIED', 'FUNDS_RESERVED'].includes(activeStep)) {
+          denialType = 'verification_failed';
+        } else if (stockBlocked) {
+          denialType = 'unavailable';
+        } else if (hasMatchedItems && !approvedCompleted) {
+          // Items we stock, owner never approved the request
+          denialType = 'owner_denied';
+        } else if (hasMatchedItems && approvedCompleted) {
+          // Owner approved but order still went obsolete (renter cancelled, etc.)
+          denialType = 'expired';
+        } else {
+          denialType = 'unmatched';
+        }
 
         // Calculate lost revenue
         const hyggloPrice = rental.rentalPrice && rental.rentalPrice > 0 ? rental.rentalPrice : null;
@@ -225,6 +292,12 @@ export class LostRevenueService {
         }
 
         const lostRevenue = hyggloPrice ?? estimatedPrice ?? 0;
+
+        // Skip verification failures entirely — not actionable
+        if (denialType === 'verification_failed') {
+          skipped++;
+          continue;
+        }
 
         // Skip low-value rentals under £25 — these would have been declined
         if (lostRevenue < MIN_REVENUE_THRESHOLD) {
@@ -248,6 +321,8 @@ export class LostRevenueService {
             stock_blocked: stockBlocked,
             blocked_items: blockedItems,
             unmatched_items: unmatchedItems,
+            denial_type: denialType,
+            active_step: activeStep,
           },
         });
         imported++;
@@ -311,12 +386,58 @@ export class LostRevenueService {
   // ────────────── QUERY METHODS ──────────────
 
   /**
-   * Get lost revenue summary for a period.
+   * Get denied revenue summary — items WERE available but owner didn't accept.
+   */
+  async getDeniedRevenueSummary(period: string = '3m', account?: string) {
+    const { start, end } = this.getFlexiblePeriodRange(period);
+
+    const where: any = { denial_type: 'owner_denied', lost_revenue: { gte: MIN_REVENUE_THRESHOLD } };
+    if (account) where.account = account;
+    if (start) where.start_date = { ...(where.start_date || {}), gte: start };
+    if (end) where.start_date = { ...(where.start_date || {}), lt: end };
+
+    const records = await this.prisma.lost_revenue_record.findMany({ where });
+
+    const totalDeniedRevenue = records.reduce((sum, r) => sum + r.lost_revenue, 0);
+    const deniedCount = records.length;
+
+    // For owner-denied, use matched items from items_requested JSON
+    const itemCounts: Record<string, { count: number; revenue: number }> = {};
+    for (const record of records) {
+      const items = (record.items_requested as any[]) || [];
+      const matchedItems = items.filter(i => i.matched !== null);
+      const share = matchedItems.length > 0 ? record.lost_revenue / matchedItems.length : 0;
+      for (const item of matchedItems) {
+        const name = item.matched;
+        if (!itemCounts[name]) itemCounts[name] = { count: 0, revenue: 0 };
+        itemCounts[name].count++;
+        itemCounts[name].revenue += share;
+      }
+    }
+
+    const topDeniedItems = Object.entries(itemCounts)
+      .map(([item, data]) => ({ item, count: data.count, revenue: Math.round(data.revenue * 100) / 100 }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    const uniqueItems = new Set(Object.keys(itemCounts));
+
+    return {
+      totalDeniedRevenue: Math.round(totalDeniedRevenue * 100) / 100,
+      deniedCount,
+      itemsAffected: uniqueItems.size,
+      topDeniedItems,
+      period,
+    };
+  }
+
+  /**
+   * Get lost revenue summary — items were booked out/unavailable.
    */
   async getLostRevenueSummary(period: string = '3m', account?: string) {
     const { start, end } = this.getFlexiblePeriodRange(period);
 
-    const where: any = { stock_blocked: true, lost_revenue: { gte: MIN_REVENUE_THRESHOLD } };
+    const where: any = { denial_type: 'unavailable', lost_revenue: { gte: MIN_REVENUE_THRESHOLD } };
     if (account) where.account = account;
     if (start) where.start_date = { ...(where.start_date || {}), gte: start };
     if (end) where.start_date = { ...(where.start_date || {}), lt: end };
@@ -324,7 +445,7 @@ export class LostRevenueService {
     const records = await this.prisma.lost_revenue_record.findMany({ where });
 
     const totalLostRevenue = records.reduce((sum, r) => sum + r.lost_revenue, 0);
-    const deniedRequestCount = records.length;
+    const lostCount = records.length;
 
     const itemCounts: Record<string, { count: number; revenue: number }> = {};
     for (const record of records) {
@@ -336,7 +457,7 @@ export class LostRevenueService {
       }
     }
 
-    const topDeniedItems = Object.entries(itemCounts)
+    const topBlockedItems = Object.entries(itemCounts)
       .map(([item, data]) => ({ item, count: data.count, revenue: Math.round(data.revenue * 100) / 100 }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
@@ -348,9 +469,9 @@ export class LostRevenueService {
 
     return {
       totalLostRevenue: Math.round(totalLostRevenue * 100) / 100,
-      deniedRequestCount,
+      lostCount,
       itemsAffected: uniqueItems.size,
-      topDeniedItems,
+      topBlockedItems,
       period,
     };
   }
@@ -361,7 +482,7 @@ export class LostRevenueService {
   async getBlockedItemsBreakdown(period: string = '3m', account?: string) {
     const { start, end } = this.getFlexiblePeriodRange(period);
 
-    const where: any = { stock_blocked: true, lost_revenue: { gte: MIN_REVENUE_THRESHOLD } };
+    const where: any = { denial_type: 'unavailable', lost_revenue: { gte: MIN_REVENUE_THRESHOLD } };
     if (account) where.account = account;
     if (start) where.start_date = { ...(where.start_date || {}), gte: start };
     if (end) where.start_date = { ...(where.start_date || {}), lt: end };
@@ -623,12 +744,21 @@ export class LostRevenueService {
   async buildAIContext(): Promise<string> {
     const parts: string[] = [];
 
-    // Lost revenue summary (3m)
+    // Denied revenue (owner didn't accept, 3m)
+    try {
+      const denied = await this.getDeniedRevenueSummary('3m');
+      if (denied.deniedCount > 0) {
+        parts.push(`DENIED REVENUE (last 3 months): £${denied.totalDeniedRevenue} from ${denied.deniedCount} requests where items were available but not accepted.`);
+        parts.push('Top denied items: ' + denied.topDeniedItems.slice(0, 5).map((i: any) => `${i.item} (${i.count}x, £${i.revenue})`).join(', '));
+      }
+    } catch {}
+
+    // Lost revenue (stock unavailable, 3m)
     try {
       const lost = await this.getLostRevenueSummary('3m');
-      if (lost.deniedRequestCount > 0) {
-        parts.push(`LOST REVENUE (last 3 months): £${lost.totalLostRevenue} from ${lost.deniedRequestCount} denied requests (stock unavailable).`);
-        parts.push('Top denied items: ' + lost.topDeniedItems.slice(0, 5).map(i => `${i.item} (${i.count}x, £${i.revenue})`).join(', '));
+      if (lost.lostCount > 0) {
+        parts.push(`LOST REVENUE (last 3 months): £${lost.totalLostRevenue} from ${lost.lostCount} requests where stock was unavailable.`);
+        parts.push('Top blocked items: ' + lost.topBlockedItems.slice(0, 5).map((i: any) => `${i.item} (${i.count}x, £${i.revenue})`).join(', '));
       }
     } catch {}
 
@@ -724,6 +854,109 @@ export class LostRevenueService {
 
   // ────────────── CRON ──────────────
 
+  /**
+   * Save/update monthly snapshot of denied + lost revenue.
+   */
+  async saveMonthlySnapshot(periodStart: Date, periodEnd: Date) {
+    // Per-account + global aggregation
+    const records = await this.prisma.lost_revenue_record.findMany({
+      where: {
+        start_date: { gte: periodStart, lt: periodEnd },
+        lost_revenue: { gte: MIN_REVENUE_THRESHOLD },
+        denial_type: { in: ['owner_denied', 'unavailable'] },
+      },
+    });
+
+    // Group by account (+ null for global)
+    const accountGroups = new Map<string | null, typeof records>();
+    accountGroups.set(null, records); // global
+    for (const r of records) {
+      if (!accountGroups.has(r.account)) accountGroups.set(r.account, []);
+      accountGroups.get(r.account)!.push(r);
+    }
+
+    for (const [account, recs] of accountGroups) {
+      const denied = recs.filter(r => r.denial_type === 'owner_denied');
+      const lost = recs.filter(r => r.denial_type === 'unavailable');
+
+      const deniedItems = new Set<string>();
+      for (const r of denied) {
+        const items = (r.items_requested as any[]) || [];
+        items.filter(i => i.matched).forEach(i => deniedItems.add(i.matched));
+      }
+
+      const lostItems = new Set<string>();
+      for (const r of lost) {
+        r.blocked_items.forEach(i => lostItems.add(i));
+      }
+
+      const acctKey = account ?? '';
+      await this.prisma.revenue_loss_monthly.upsert({
+        where: {
+          period_start_account: { period_start: periodStart, account: acctKey },
+        },
+        create: {
+          period_start: periodStart,
+          period_end: periodEnd,
+          account: acctKey,
+          denied_revenue: Math.round(denied.reduce((s, r) => s + r.lost_revenue, 0) * 100) / 100,
+          denied_count: denied.length,
+          denied_items: [...deniedItems],
+          lost_revenue: Math.round(lost.reduce((s, r) => s + r.lost_revenue, 0) * 100) / 100,
+          lost_count: lost.length,
+          lost_items: [...lostItems],
+        },
+        update: {
+          denied_revenue: Math.round(denied.reduce((s, r) => s + r.lost_revenue, 0) * 100) / 100,
+          denied_count: denied.length,
+          denied_items: [...deniedItems],
+          lost_revenue: Math.round(lost.reduce((s, r) => s + r.lost_revenue, 0) * 100) / 100,
+          lost_count: lost.length,
+          lost_items: [...lostItems],
+        },
+      });
+    }
+  }
+
+  /**
+   * Backfill denial_type for existing records.
+   * Without active_step data, we can't distinguish owner-declined from expired.
+   * So matched-but-not-blocked records get 'expired' (conservative).
+   * Also re-classifies any 'owner_denied' records that lack active_step evidence.
+   */
+  async backfillDenialTypes(): Promise<{ updated: number }> {
+    const records = await this.prisma.lost_revenue_record.findMany({
+      where: {
+        OR: [
+          { denial_type: null },
+          { denial_type: 'expired' }, // reclassify: matched + not blocked = owner_denied
+        ],
+      },
+    });
+
+    let updated = 0;
+    for (const record of records) {
+      let denialType: string;
+      if (record.stock_blocked) {
+        denialType = 'unavailable';
+      } else {
+        const items = (record.items_requested as any[]) || [];
+        const hasMatched = items.some(i => i.matched !== null);
+        // Items were available, owner didn't accept
+        denialType = hasMatched ? 'owner_denied' : 'unmatched';
+      }
+
+      await this.prisma.lost_revenue_record.update({
+        where: { id: record.id },
+        data: { denial_type: denialType },
+      });
+      updated++;
+    }
+
+    this.logger.log(`Backfilled denial_type for ${updated} records`);
+    return { updated };
+  }
+
   @Cron('0 5 * * *')
   async dailySync() {
     this.logger.log('Starting daily lost revenue sync...');
@@ -735,6 +968,18 @@ export class LostRevenueService {
         this.logger.error(`Daily sync failed for ${account.name}: ${error.message}`);
       }
     }
+
+    // Save/refresh monthly snapshot for current month
+    try {
+      const now = new Date();
+      const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await this.saveMonthlySnapshot(periodStart, periodEnd);
+      this.logger.log('Monthly snapshot updated.');
+    } catch (error) {
+      this.logger.error(`Monthly snapshot failed: ${error.message}`);
+    }
+
     this.logger.log('Daily lost revenue sync complete.');
   }
 

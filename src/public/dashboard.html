@@ -109,6 +109,8 @@
     .stat-card .value.red { color: #ef4444; text-shadow: 0 0 20px rgba(239,68,68,0.15); }
     .stat-card.lost-revenue-card { border-left: 3px solid #ef4444; box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), inset 3px 0 8px rgba(239,68,68,0.06), 0 4px 24px rgba(0,0,0,0.25); }
     .stat-card.lost-revenue-card:hover { border-left-color: #f87171; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 0 24px rgba(239,68,68,0.15), 0 8px 40px rgba(0,0,0,0.3); }
+    .stat-card.denied-revenue-card { border-left: 3px solid #f59e0b; box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), inset 3px 0 8px rgba(245,158,11,0.06), 0 4px 24px rgba(0,0,0,0.25); }
+    .stat-card.denied-revenue-card:hover { border-left-color: #fbbf24; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 0 24px rgba(245,158,11,0.15), 0 8px 40px rgba(0,0,0,0.3); }
 
     /* Calendar - Carousel Style */
     .cal-carousel { display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:6px; padding:4px 2px 8px; scrollbar-width:none; }
@@ -916,9 +918,16 @@
         <div class="sub" id="statScannerSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandScanner"></div></div>
       </div>
+      <div class="stat-card denied-revenue-card" data-stat="denied-revenue" data-stat-label="Denied Revenue" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
+        <div class="label">Denied Revenue</div>
+        <div class="value amber" id="statDeniedRevenue">--</div>
+        <div class="sub" id="statDeniedRevenueSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandDeniedRevenue"></div></div>
+      </div>
       <div class="stat-card lost-revenue-card" data-stat="lost-revenue" data-stat-label="Lost Revenue" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
-        <div class="label">Lost Revenue (Last Month)</div>
+        <div class="label">Lost Revenue</div>
         <div class="value red" id="statLostRevenue">--</div>
         <div class="sub" id="statLostRevenueSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandLostRevenue"></div></div>
@@ -956,6 +965,13 @@
         <div class="value amber" id="statSellReco">--</div>
         <div class="sub" id="statSellRecoSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandSellReco"></div></div>
+      </div>
+      <div class="stat-card" data-stat="inventory-worth" data-stat-label="Inventory Worth" draggable="false" style="border-left:3px solid #3b82f6;">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
+        <div class="label">Inventory Worth</div>
+        <div class="value blue" id="statInventoryWorth">--</div>
+        <div class="sub" id="statInventoryWorthSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandInventoryWorth"></div></div>
       </div>
       <div class="stat-card" data-stat="tax" data-stat-label="Tax Liability" draggable="false" style="border-left:3px solid #ef4444;">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
@@ -1230,7 +1246,8 @@
         <span>Missed Revenue</span>
         <div style="display:flex;align-items:center;gap:8px;">
           <div id="missedTabs" style="display:flex;gap:0;">
-            <button onclick="switchMissedTab('blocked')" id="missedTabBlocked" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:4px 0 0 4px;background:#2563eb;color:#fff;">Denied</button>
+            <button onclick="switchMissedTab('denied')" id="missedTabDenied" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:4px 0 0 0px;background:#f59e0b;color:#000;">Denied</button>
+            <button onclick="switchMissedTab('blocked')" id="missedTabBlocked" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0;">Blocked</button>
             <button onclick="switchMissedTab('notinstock')" id="missedTabNotInStock" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0 4px 4px 0;">Not in Stock</button>
           </div>
           <select id="lostRevenuePeriod" onchange="loadLostRevenue()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
@@ -1242,7 +1259,10 @@
           </select>
         </div>
       </div>
-      <div class="section-body padded" id="lostRevenueBody">
+      <div class="section-body padded" id="deniedRevenueBody">
+        <div style="color:#8b8fa3;font-size:12px;">Loading denied items...</div>
+      </div>
+      <div class="section-body padded" id="lostRevenueBody" style="display:none;">
         <div style="color:#8b8fa3;font-size:12px;">Run sync first: <code>/lost-revenue/sync</code></div>
       </div>
       <div class="section-body padded" id="unmatchedBody" style="display:none;">
@@ -1878,6 +1898,8 @@
       }
 
       window._lastBookingStats = data;
+      // Re-render Month Confirmed with booking stats ongoing/upcoming (matches Active Rentals)
+      renderMonthConfirmed();
     }
 
     function renderRentalRow(r) {
@@ -1980,6 +2002,7 @@
     }
 
     function renderProjection(data) {
+      window._lastProjection = data;
       var el = document.getElementById('statMonthProjection');
       var sub = document.getElementById('statMonthProjectionSub');
       var projected = data.projectedMonthEarnings != null ? data.projectedMonthEarnings : data.projectedMonthProfit;
@@ -2007,39 +2030,55 @@
           (dailyAvg ? '<div style="margin-top:6px;font-size:10px;color:#6b6f82;">\u00A3' + Math.round(dailyAvg) + '/day avg · ' + (data.daysRemaining || 0) + ' days left in month</div>' : '');
       }
 
-      // Month Confirmed card
+      // Month Confirmed card — rendered separately so booking stats can trigger re-render
+      renderMonthConfirmed();
+    }
+
+    // Month Confirmed card: uses booking stats ongoing/upcoming to match Active Rentals tile
+    function renderMonthConfirmed() {
+      var data = window._lastProjection;
+      if (!data) return;
+
+      var currentEarnings = data.currentMonthEarnings != null ? data.currentMonthEarnings : data.currentMonthProfit;
+      var rentalCount = data.currentMonthRentals != null ? data.currentMonthRentals : data.currentMonthBookings;
+
       var confirmedEl = document.getElementById('statMonthConfirmed');
       var confirmedSub = document.getElementById('statMonthConfirmedSub');
-      if (currentEarnings != null) {
-        confirmedEl.textContent = '\u00A3' + Math.round(currentEarnings).toLocaleString();
-        var bParts = [];
-        if (data.breakdown) {
-          bParts.push(data.breakdown.completed + ' done, ' + data.breakdown.ongoing + ' active, ' + data.breakdown.upcoming + ' upcoming');
-        }
-        bParts.push(rentalCount + ' rentals');
-        confirmedSub.textContent = bParts.join(' \u00B7 ');
+      if (currentEarnings == null) return;
 
-        // Confirmed expand: breakdown bars (+ pending segment, display only)
-        var confirmedExp = document.getElementById('expandConfirmed');
-        if (confirmedExp && data.breakdown) {
-          var bd = data.breakdown;
-          var pendingC = window._lastBookingStats ? (window._lastBookingStats.pendingRentals || 0) : (data.pendingRentals || 0);
-          var total = bd.completed + bd.ongoing + bd.upcoming + pendingC;
-          confirmedExp.innerHTML = total > 0
-            ? '<div style="display:flex;gap:3px;height:8px;border-radius:4px;overflow:hidden;">' +
-                (bd.completed ? '<div style="flex:' + bd.completed + ';background:#22c55e;border-radius:2px;" title="' + bd.completed + ' completed"></div>' : '') +
-                (bd.ongoing ? '<div style="flex:' + bd.ongoing + ';background:#f59e0b;border-radius:2px;" title="' + bd.ongoing + ' ongoing"></div>' : '') +
-                (bd.upcoming ? '<div style="flex:' + bd.upcoming + ';background:#a78bfa;border-radius:2px;" title="' + bd.upcoming + ' upcoming"></div>' : '') +
-                (pendingC ? '<div style="flex:' + pendingC + ';background:#f472b6;border-radius:2px;" title="' + pendingC + ' pending"></div>' : '') +
-              '</div>' +
-              '<div style="display:flex;gap:12px;margin-top:6px;font-size:10px;flex-wrap:wrap;">' +
-                '<span style="color:#22c55e;">\u25CF ' + bd.completed + ' done</span>' +
-                '<span style="color:#f59e0b;">\u25CF ' + bd.ongoing + ' active</span>' +
-                '<span style="color:#a78bfa;">\u25CF ' + bd.upcoming + ' upcoming</span>' +
-                (pendingC ? '<span style="color:#f472b6;">\u25CF ' + pendingC + ' pending</span>' : '') +
-              '</div>'
-            : '';
-        }
+      confirmedEl.textContent = '\u00A3' + Math.round(currentEarnings).toLocaleString();
+
+      // Pull ongoing/upcoming from booking stats (same source as Active Rentals tile)
+      var bs = window._lastBookingStats;
+      var bd = data.breakdown;
+      var activeCount = bs ? (bs.ongoingRentals || 0) : (bd ? bd.ongoing : 0);
+      var upcomingCount = bs ? (bs.upcomingRentals || 0) : (bd ? bd.upcoming : 0);
+      var completedCount = bd ? bd.completed : 0;
+      var pendingC = bs ? (bs.pendingRentals || 0) : 0;
+
+      var bParts = [];
+      bParts.push(completedCount + ' done, ' + activeCount + ' active, ' + upcomingCount + ' upcoming');
+      bParts.push(rentalCount + ' rentals');
+      confirmedSub.textContent = bParts.join(' \u00B7 ');
+
+      // Confirmed expand: breakdown bars
+      var confirmedExp = document.getElementById('expandConfirmed');
+      if (confirmedExp) {
+        var total = completedCount + activeCount + upcomingCount + pendingC;
+        confirmedExp.innerHTML = total > 0
+          ? '<div style="display:flex;gap:3px;height:8px;border-radius:4px;overflow:hidden;">' +
+              (completedCount ? '<div style="flex:' + completedCount + ';background:#22c55e;border-radius:2px;" title="' + completedCount + ' completed"></div>' : '') +
+              (activeCount ? '<div style="flex:' + activeCount + ';background:#f59e0b;border-radius:2px;" title="' + activeCount + ' ongoing"></div>' : '') +
+              (upcomingCount ? '<div style="flex:' + upcomingCount + ';background:#a78bfa;border-radius:2px;" title="' + upcomingCount + ' upcoming"></div>' : '') +
+              (pendingC ? '<div style="flex:' + pendingC + ';background:#f472b6;border-radius:2px;" title="' + pendingC + ' pending"></div>' : '') +
+            '</div>' +
+            '<div style="display:flex;gap:12px;margin-top:6px;font-size:10px;flex-wrap:wrap;">' +
+              '<span style="color:#22c55e;">\u25CF ' + completedCount + ' done</span>' +
+              '<span style="color:#f59e0b;">\u25CF ' + activeCount + ' active</span>' +
+              '<span style="color:#a78bfa;">\u25CF ' + upcomingCount + ' upcoming</span>' +
+              (pendingC ? '<span style="color:#f472b6;">\u25CF ' + pendingC + ' pending</span>' : '') +
+            '</div>'
+          : '';
       }
     }
 
@@ -2262,20 +2301,17 @@
       fetchJSON('/revenue/top-items?period=' + period + '&limit=15' + acctAmp).then(renderTopItems).catch(function() {});
     }
 
-    // ---- Top Bundles ----
+    // ---- Top Bundles (real listed bundles only) ----
     function renderTopBundles(data) {
       var el = document.getElementById('topBundlesBody');
       var bundles = data && data.bundles ? data.bundles : [];
       var totalRev = data && data.totalBundleRevenue ? data.totalBundleRevenue : 0;
-      if (bundles.length === 0) { renderEmpty(el, 'No bundle data yet'); return; }
+      if (bundles.length === 0) { renderEmpty(el, 'No bundle rentals matched'); return; }
 
       var html = '';
       for (var i = 0; i < bundles.length && i < 15; i++) {
         var b = bundles[i];
-        // Shorten bundle label: show item count if > 2 items
-        var label = b.items && b.items.length > 2
-          ? b.items.slice(0, 2).map(function(n) { return truncate(n, 18); }).join(' + ') + ' +' + (b.items.length - 2)
-          : truncate(b.label, 40);
+        var label = truncate(b.label, 44);
         html += '<div class="top-item">';
         html += '<span class="top-item-name" style="font-size:11px;">' + (i + 1) + '. ' + escapeHtml(label) + '</span>';
         html += '<span class="top-item-count">' + b.count + 'x</span>';
@@ -3565,21 +3601,27 @@
     }
 
     // ---- Missed Revenue Tabs ----
-    var currentMissedTab = 'blocked';
+    var currentMissedTab = 'denied';
     function switchMissedTab(tab) {
       currentMissedTab = tab;
+      var deniedBtn = document.getElementById('missedTabDenied');
       var blockedBtn = document.getElementById('missedTabBlocked');
       var notInStockBtn = document.getElementById('missedTabNotInStock');
+      var deniedBody = document.getElementById('deniedRevenueBody');
       var blockedBody = document.getElementById('lostRevenueBody');
       var unmatchedBody = document.getElementById('unmatchedBody');
-      if (tab === 'blocked') {
-        blockedBtn.style.background = '#2563eb'; blockedBtn.style.color = '#fff';
-        notInStockBtn.style.background = ''; notInStockBtn.style.color = '';
-        blockedBody.style.display = ''; unmatchedBody.style.display = 'none';
+      // Reset all
+      [deniedBtn, blockedBtn, notInStockBtn].forEach(function(btn) { btn.style.background = ''; btn.style.color = ''; });
+      [deniedBody, blockedBody, unmatchedBody].forEach(function(b) { b.style.display = 'none'; });
+      if (tab === 'denied') {
+        deniedBtn.style.background = '#f59e0b'; deniedBtn.style.color = '#000';
+        deniedBody.style.display = '';
+      } else if (tab === 'blocked') {
+        blockedBtn.style.background = '#ef4444'; blockedBtn.style.color = '#fff';
+        blockedBody.style.display = '';
       } else {
         notInStockBtn.style.background = '#2563eb'; notInStockBtn.style.color = '#fff';
-        blockedBtn.style.background = ''; blockedBtn.style.color = '';
-        blockedBody.style.display = 'none'; unmatchedBody.style.display = '';
+        unmatchedBody.style.display = '';
       }
     }
 
@@ -3648,34 +3690,78 @@
       var period = document.getElementById('lostRevenuePeriod').value || '3m';
       var acctAmp = getAccountParam();
       Promise.allSettled([
-        fetchJSON('/lost-revenue/summary?period=month' + acctAmp).then(renderLostRevenueStat),
+        fetchJSON('/denied-revenue/summary?period=month' + acctAmp).then(renderDeniedStat),
+        fetchJSON('/lost-revenue/summary?period=month' + acctAmp).then(renderLostStat),
+        fetchJSON('/denied-revenue/summary?period=' + period + acctAmp).then(renderDeniedItems),
         fetchJSON('/lost-revenue/items?period=' + period + acctAmp).then(renderLostRevenueItems),
         fetchJSON('/lost-revenue/unmatched?period=' + period + acctAmp).then(renderUnmatched),
       ]);
     }
 
-    function renderLostRevenueStat(data) {
-      var el = document.getElementById('statLostRevenue');
-      var sub = document.getElementById('statLostRevenueSub');
-      var exp = document.getElementById('expandLostRevenue');
-      if (!data || data.deniedRequestCount === 0) {
-        el.textContent = '£0';
+    function renderDeniedStat(data) {
+      var el = document.getElementById('statDeniedRevenue');
+      var sub = document.getElementById('statDeniedRevenueSub');
+      var exp = document.getElementById('expandDeniedRevenue');
+      if (!data || data.deniedCount === 0) {
+        el.textContent = '\u00A30';
         sub.textContent = 'No denied requests';
         if (exp) exp.innerHTML = '';
         return;
       }
-      el.textContent = '£' + data.totalLostRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-      sub.textContent = data.deniedRequestCount + ' denied · ' + data.itemsAffected + ' items';
+      el.textContent = '\u00A3' + data.totalDeniedRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      sub.textContent = data.deniedCount + ' denied \u00B7 ' + data.itemsAffected + ' items';
 
-      // Expand: top blocked items
       if (exp && data.topDeniedItems && data.topDeniedItems.length > 0) {
         exp.innerHTML = data.topDeniedItems.slice(0, 4).map(function(item) {
           return '<div class="stat-rental-row">' +
             '<div class="stat-rental-info"><div class="stat-rental-name">' + escapeHtml(item.item) + '</div>' +
             '<div class="stat-rental-items">' + item.count + ' denied</div></div>' +
-            '<div class="stat-rental-amount" style="color:#ef4444;">-£' + Math.round(item.revenue) + '</div></div>';
+            '<div class="stat-rental-amount" style="color:#f59e0b;">-\u00A3' + Math.round(item.revenue) + '</div></div>';
         }).join('');
       }
+    }
+
+    function renderLostStat(data) {
+      var el = document.getElementById('statLostRevenue');
+      var sub = document.getElementById('statLostRevenueSub');
+      var exp = document.getElementById('expandLostRevenue');
+      if (!data || data.lostCount === 0) {
+        el.textContent = '\u00A30';
+        sub.textContent = 'No blocked requests';
+        if (exp) exp.innerHTML = '';
+        return;
+      }
+      el.textContent = '\u00A3' + data.totalLostRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      sub.textContent = data.lostCount + ' blocked \u00B7 ' + data.itemsAffected + ' items';
+
+      if (exp && data.topBlockedItems && data.topBlockedItems.length > 0) {
+        exp.innerHTML = data.topBlockedItems.slice(0, 4).map(function(item) {
+          return '<div class="stat-rental-row">' +
+            '<div class="stat-rental-info"><div class="stat-rental-name">' + escapeHtml(item.item) + '</div>' +
+            '<div class="stat-rental-items">' + item.count + ' blocked</div></div>' +
+            '<div class="stat-rental-amount" style="color:#ef4444;">-\u00A3' + Math.round(item.revenue) + '</div></div>';
+        }).join('');
+      }
+    }
+
+    function renderDeniedItems(data) {
+      var body = document.getElementById('deniedRevenueBody');
+      if (!data || data.deniedCount === 0) {
+        body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No denied requests found for this period.</div>';
+        return;
+      }
+      var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:4px;">Item</th><th style="text-align:right;padding:4px;">Denied</th><th style="text-align:right;padding:4px;">Revenue Lost</th></tr>';
+      (data.topDeniedItems || []).forEach(function(item) {
+        html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
+        html += '<td style="padding:4px;color:#e4e6eb;">' + escapeHtml(item.item) + '</td>';
+        html += '<td style="padding:4px;text-align:right;color:#f59e0b;">' + item.count + '</td>';
+        html += '<td style="padding:4px;text-align:right;color:#f59e0b;">-\u00A3' + Math.round(item.revenue) + '</td>';
+        html += '</tr>';
+      });
+      html += '</table>';
+      html += '<div style="color:#6b6f82;font-size:10px;margin-top:6px;">Items were available \u2014 declined or not responded to in time.</div>';
+      body.innerHTML = html;
     }
 
     function renderAiBoost(data) {
@@ -4751,6 +4837,45 @@
     // ---- Sell Recommender ----
     var sellRecoData = null;
 
+    function loadInventoryWorth() {
+      fetchJSON('/inventory/valuation').then(renderInventoryWorth).catch(function() {});
+    }
+
+    function renderInventoryWorth(data) {
+      var el = document.getElementById('statInventoryWorth');
+      var sub = document.getElementById('statInventoryWorthSub');
+      var exp = document.getElementById('expandInventoryWorth');
+      if (!data || data.totalResaleValue == null) {
+        el.textContent = '--';
+        sub.textContent = 'No eBay data';
+        return;
+      }
+      el.textContent = '\u00A3' + data.totalResaleValue.toLocaleString('en-GB');
+      var subParts = [];
+      subParts.push('Cost: \u00A3' + data.totalPurchaseCost.toLocaleString('en-GB'));
+      var glSign = data.gainLoss >= 0 ? '+' : '';
+      var glColor = data.gainLoss >= 0 ? '#22c55e' : '#ef4444';
+      subParts.push('<span style="color:' + glColor + ';">' + glSign + data.gainLossPercent + '%</span>');
+      if (data.lastScraped) subParts.push(data.lastScraped);
+      sub.innerHTML = subParts.join(' \u00B7 ');
+
+      // Expand: top items by resale value
+      if (exp && data.items) {
+        var top = data.items.filter(function(i) { return i.totalResale > 0; }).slice(0, 8);
+        if (top.length > 0) {
+          exp.innerHTML = top.map(function(i) {
+            var qtyStr = i.qty > 1 ? ' \u00D7' + i.qty : '';
+            return '<div style="display:flex;justify-content:space-between;font-size:11px;color:#8b8fa3;padding:1px 0;">' +
+              '<span style="color:#c9cde0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;">' + escapeHtml(i.name) + qtyStr + '</span>' +
+              '<span style="color:#3b82f6;font-weight:600;">\u00A3' + i.totalResale.toLocaleString('en-GB') + '</span></div>';
+          }).join('') +
+          '<div style="font-size:10px;color:#6b6f82;margin-top:4px;">' + data.pricedCount + '/' + data.itemCount + ' items priced</div>';
+        } else {
+          exp.innerHTML = '<div style="color:#6b6f82;font-size:11px;">No eBay price data. Run scrape first.</div>';
+        }
+      }
+    }
+
     function loadSellReco() {
       var acctAmp = getAccountParam();
       fetchJSON('/recommender/sell-items' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(function(data) {
@@ -4945,7 +5070,9 @@
         fetchJSON('/revenue/top-bundles?period=' + (document.getElementById('bundlePeriod').value || '6m') + '&limit=15' + acctAmp).then(renderTopBundles).catch(function() {}),
         fetchJSON('/revenue/item-cycle' + getAccountQuery()).then(renderCycleChart).catch(function() {}),
         fetchJSON('/revenue/projection' + acct).then(renderProjection).catch(function() {}),
-        fetchJSON('/lost-revenue/summary?period=month' + acctAmp).then(renderLostRevenueStat).catch(function() {}),
+        fetchJSON('/denied-revenue/summary?period=month' + acctAmp).then(renderDeniedStat).catch(function() {}),
+        fetchJSON('/lost-revenue/summary?period=month' + acctAmp).then(renderLostStat).catch(function() {}),
+        fetchJSON('/denied-revenue/summary?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderDeniedItems).catch(function() {}),
         fetchJSON('/lost-revenue/items?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderLostRevenueItems).catch(function() {}),
         fetchJSON('/lost-revenue/unmatched?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderUnmatched).catch(function() {}),
         fetchJSON('/revenue/potential?period=' + (document.getElementById('roiPeriod').value || '6m') + acctAmp).then(renderROI).catch(function() {}),
@@ -4956,6 +5083,7 @@
         fetchJSON('/revenue/tax-multi-year' + (acctAmp ? '?' + acctAmp.substring(1) : '')).then(renderMultiYearTax).catch(function() {}),
         loadReturnHub(),
         loadSellReco(),
+        loadInventoryWorth(),
       ]).then(function(results) {
         if (results[0].status === 'rejected') {
           document.getElementById('statusDot').className = 'status-dot unhealthy';
