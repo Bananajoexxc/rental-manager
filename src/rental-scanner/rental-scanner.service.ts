@@ -158,11 +158,28 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       const allRentals = await this.hyggloService.scanAllAccounts('both');
       let newRentalsCount = 0;
 
-      this.logger.log(`📊 Total rentals found: ${allRentals.length}`);
+      // Deduplicate: a rental can appear in multiple API endpoints (e.g., both 'pending' and 'upcoming').
+      // Without dedup, the last occurrence overwrites the status — a confirmed rental in both
+      // 'upcoming' and 'pending' endpoints would end up as 'pending' because pending is scanned last.
+      // Keep the highest-priority status: ongoing > upcoming > pending.
+      const STATUS_PRIORITY: Record<string, number> = { ongoing: 3, upcoming: 2, pending: 1 };
+      const rentalMap = new Map<string, any>();
+      for (const rental of allRentals) {
+        const existing = rentalMap.get(rental.listingId);
+        if (!existing || (STATUS_PRIORITY[rental.status] || 0) > (STATUS_PRIORITY[existing.status] || 0)) {
+          rentalMap.set(rental.listingId, rental);
+        }
+      }
+      const dedupedRentals = Array.from(rentalMap.values());
+      if (dedupedRentals.length < allRentals.length) {
+        this.logger.log(`🔄 Deduplicated ${allRentals.length} → ${dedupedRentals.length} rentals (${allRentals.length - dedupedRentals.length} duplicates across endpoints)`);
+      }
+
+      this.logger.log(`📊 Total rentals found: ${dedupedRentals.length}`);
 
       // Process each rental and collect new ones for grouping
       const newRentalResults: Array<{ savedRental: any; rawRental: any }> = [];
-      for (const rental of allRentals) {
+      for (const rental of dedupedRentals) {
         const result = await this.processRental(rental);
         if (result.isNew) {
           newRentalResults.push({ savedRental: result.savedRental, rawRental: result.rawRental });
@@ -324,11 +341,22 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
         // Update existing rental (including dates and price if newly available)
         const orderStep = this.extractActiveOrderStep(rental._detail);
+
+        // Reconcile status with order_step: if DELIVERED and rental period has started,
+        // force 'ongoing' regardless of which API endpoint returned it
+        let reconciledStatus = rental.status;
+        if (orderStep === 'DELIVERED' && rental.startDate && rental.startDate <= new Date()) {
+          if (reconciledStatus !== 'ongoing') {
+            this.logger.log(`🔄 Status reconciled: ${reconciledStatus} → ongoing (order_step=${orderStep}, rental period started)`);
+            reconciledStatus = 'ongoing';
+          }
+        }
+
         const updatedRental = await this.prisma.rental.update({
           where: { listing_id: rental.listingId },
           data: {
             title: rental.title,
-            status: rental.status,
+            status: reconciledStatus,
             renter_info: rental.renterInfo,
             photos_urls: rental.photosUrls,
             account: rental.account || existingRental.account,
@@ -377,10 +405,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         }
 
         // Cascade rental status changes to bookings (e.g., pending → upcoming promotes bookings)
-        if (rental.status !== existingRental.status) {
+        if (reconciledStatus !== existingRental.status) {
           try {
             await this.calendarService.cascadeRentalStatusToBookings(
-              existingRental.id, rental.status, existingRental.status,
+              existingRental.id, reconciledStatus, existingRental.status,
             );
           } catch (err) {
             this.logger.warn(`Cascade status failed for rental ${existingRental.id}: ${err.message}`);
@@ -388,7 +416,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
           // Rental just became confirmed (pending → upcoming/ongoing)
           const wasUnconfirmed = ['pending', 'requested'].includes(existingRental.status);
-          const isNowConfirmed = ['upcoming', 'ongoing'].includes(rental.status);
+          const isNowConfirmed = ['upcoming', 'ongoing'].includes(reconciledStatus);
           if (wasUnconfirmed && isNowConfirmed) {
             // Send happy Telegram notification
             const earnings = rental.rentalPrice || updatedRental.rental_price || 0;
@@ -491,7 +519,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         // Auto-promote: if rental is accepted on Hygglo but bookings are still pending_review
         // (from auto-accepted detection on first scan), promote after 2 hours.
         // Uses booking.updated_at (not rental.created_at) so manually-demoted bookings get a fresh window.
-        const isAccepted = ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+        const isAccepted = ['upcoming', 'ongoing', 'completed'].includes(reconciledStatus);
         if (isAccepted && hasBookings > 0) {
           const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
           try {
@@ -576,11 +604,21 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
       // Save new rental to database (including price data)
       const orderStep = this.extractActiveOrderStep(rental._detail);
+
+      // Reconcile status with order_step for new rentals too
+      let newRentalStatus = rental.status;
+      if (orderStep === 'DELIVERED' && rental.startDate && rental.startDate <= new Date()) {
+        if (newRentalStatus !== 'ongoing') {
+          this.logger.log(`🔄 New rental status reconciled: ${newRentalStatus} → ongoing (order_step=${orderStep}, rental period started)`);
+          newRentalStatus = 'ongoing';
+        }
+      }
+
       const savedRental = await this.prisma.rental.create({
         data: {
           listing_id: rental.listingId,
           title: rental.title,
-          status: rental.status,
+          status: newRentalStatus,
           start_date: rental.startDate,
           end_date: rental.endDate,
           renter_info: rental.renterInfo,

@@ -130,7 +130,7 @@ MATCHING GUIDE:
 - "a7III" / "a7 3" / "a73" → "Sony A7 III"
 - "nanlite 500" → "Nanlite 500B"
 - "v-mount" / "v mount" batteries → "V-mount 95mAh" or "V-mount 150mAh"
-- "boom mic" / "shotgun sennheiser" → "Audio boom mic Sennheiser"
+- "sennheiser" / "MKE" / "MKE600" → "Audio boom mic Sennheiser"
 - "rode wireless" → "Rode Wireless Mic Pro set"
 - "suction cup" / "suction mount" → "Suction cups"
 - "2x" or "3x" prefix → set qty accordingly

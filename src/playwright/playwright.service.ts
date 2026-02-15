@@ -1036,4 +1036,72 @@ export class PlaywrightService implements OnModuleDestroy {
       return { reviews: [] };
     }
   }
+
+  /**
+   * Check if a renter is a first-time renter on Hygglo by scraping their profile page.
+   * Looks for "first rental" / "första uthyrning" text and confirms 0 reviews.
+   */
+  async checkFirstTimeRenter(
+    renterUserId: string,
+    account: HyggloAccount = 'dbcinema',
+  ): Promise<{
+    isFirstTime: boolean;
+    reviewCount: number;
+    profileText?: string;
+  }> {
+    if (!this.isEnabled) {
+      return { isFirstTime: false, reviewCount: -1 };
+    }
+
+    try {
+      const context = await this.getContext(account);
+      const page = await context.newPage();
+
+      try {
+        const profileUrl = `https://www.hygglo.com/user/${renterUserId}`;
+        this.logger.debug(`Checking first-time renter status from ${profileUrl}`);
+
+        await page.goto(profileUrl, {
+          waitUntil: 'networkidle',
+          timeout: 20000,
+        });
+
+        await page.waitForTimeout(2000);
+
+        const pageText = await page.innerText('body').catch(() => '');
+        const lowerText = pageText.toLowerCase();
+
+        // Check for "first rental" indicators (English + Swedish)
+        const firstRentalPatterns = [
+          'first rental',
+          'first time',
+          'första uthyrning',
+          'första hyra',
+          'no reviews yet',
+          'inga omdömen',
+          'no ratings',
+        ];
+        const hasFirstRentalText = firstRentalPatterns.some(p => lowerText.includes(p));
+
+        // Check review count from page
+        let reviewCount = 0;
+        const countMatch = pageText.match(/(\d+)\s*(?:reviews?|omdömen|recension)/i)
+          || pageText.match(/(?:reviews?|omdömen)[:\s]*(\d+)/i);
+        if (countMatch) {
+          reviewCount = parseInt(countMatch[1], 10);
+        }
+
+        const isFirstTime = hasFirstRentalText && reviewCount === 0;
+
+        this.logger.log(`First-time renter check for ${renterUserId}: firstRentalText=${hasFirstRentalText}, reviews=${reviewCount}, isFirstTime=${isFirstTime}`);
+
+        return { isFirstTime, reviewCount, profileText: hasFirstRentalText ? pageText.substring(0, 200) : undefined };
+      } finally {
+        await page.close();
+      }
+    } catch (error) {
+      this.logger.warn(`checkFirstTimeRenter failed for user ${renterUserId}: ${error.message}`);
+      return { isFirstTime: false, reviewCount: -1 };
+    }
+  }
 }

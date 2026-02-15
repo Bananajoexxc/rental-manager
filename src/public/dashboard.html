@@ -268,7 +268,10 @@
       opacity: 0; margin-top: 0;
     }
     .stat-card:hover .stat-expand, .stat-card.expanded .stat-expand {
-      max-height: 320px; opacity: 1; margin-top: 10px; overflow-y: auto;
+      max-height: 500px; opacity: 1; margin-top: 10px;
+    }
+    .stat-expand.scrollable {
+      overflow-y: auto;
     }
     .stat-expand-inner {
       border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px; font-size: 12px; color: #b0b3c0;
@@ -395,7 +398,7 @@
       .grid-2, .grid-3, .grid-3col { grid-template-columns: 1fr; }
       /* Mobile: disable hover expand, use tap-to-toggle via .expanded class only */
       .stat-card:hover .stat-expand { max-height: 0; opacity: 0; margin-top: 0; }
-      .stat-card.expanded .stat-expand { max-height: 320px; opacity: 1; margin-top: 10px; }
+      .stat-card.expanded .stat-expand { max-height: 500px; opacity: 1; margin-top: 10px; }
     }
 
     /* Tables */
@@ -1443,6 +1446,37 @@
       card.classList.toggle('expanded');
     });
 
+    // Enable scroll on stat-expand AFTER expand transition finishes (prevents scrollbar flash)
+    document.querySelectorAll('.stat-expand').forEach(function(el) {
+      el.addEventListener('transitionend', function(e) {
+        if (e.propertyName !== 'max-height') return;
+        // Check if currently expanded (max-height > 0)
+        var mh = parseFloat(getComputedStyle(el).maxHeight);
+        if (mh > 0) {
+          el.classList.add('scrollable');
+        }
+      });
+    });
+    // Remove scrollable immediately on collapse (mouseout / class removal)
+    var observer = new MutationObserver(function(mutations) {
+      mutations.forEach(function(m) {
+        if (m.type === 'attributes' && m.attributeName === 'class') {
+          var card = m.target;
+          if (!card.classList.contains('expanded') && !card.matches(':hover')) {
+            var exp = card.querySelector('.stat-expand');
+            if (exp) exp.classList.remove('scrollable');
+          }
+        }
+      });
+    });
+    document.querySelectorAll('.stat-card').forEach(function(card) {
+      observer.observe(card, { attributes: true });
+      card.addEventListener('mouseleave', function() {
+        var exp = card.querySelector('.stat-expand');
+        if (exp) exp.classList.remove('scrollable');
+      });
+    });
+
     // ---- Layout Persistence (Edit Mode) ----
     var LAYOUT_KEY = 'dashboard_layout_v2';
 
@@ -1871,7 +1905,7 @@
       var activeEl = document.getElementById('expandActive');
       if (activeEl) {
         var all = (data.ongoingDetails || []).concat(data.upcomingDetails || []);
-        var html = all.length > 0 ? all.slice(0, 6).map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
+        var html = all.length > 0 ? all.map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
         // Pending section (separated, rose-colored)
         if (data.pendingDetails && data.pendingDetails.length > 0) {
           html += '<div style="border-top:1px solid rgba(255,255,255,0.06);margin:8px 0;"></div>';
@@ -2938,7 +2972,7 @@
 
         // Items — compact chip layout
         var notes = r.notes || {};
-        var allItems = notes.allItems || r.items || [];
+        var allItems = (r.items && r.items.length > 0) ? r.items : (notes.allItems || []);
         var accessories = notes.accessories || [];
         var pendingItems = r.pendingItems || notes.pendingItems || [];
         if (allItems.length > 0 || pendingItems.length > 0) {

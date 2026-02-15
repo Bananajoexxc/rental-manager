@@ -191,8 +191,9 @@ export class AppService {
       where: rentalWhere,
       select: {
         start_date: true, end_date: true, rental_price: true, renter_info: true, listing_id: true,
+        status: true,
         bookings: {
-          where: { status: { in: ['confirmed', 'pending_review'] } },
+          where: { status: 'confirmed' },
           select: { pickup_date: true },
           take: 1,
         },
@@ -203,6 +204,9 @@ export class AppService {
     const deduped = new Map<string, typeof allRentalsForEarnings[0] & { _effectiveDate: Date }>();
     for (const r of allRentalsForEarnings) {
       if (!r.start_date) continue;
+      // Upcoming rentals require at least 1 confirmed booking to count in revenue.
+      // Without confirmed bookings, the rental is unvalidated (phantom).
+      if (r.status === 'upcoming' && r.bookings.length === 0) continue;
       const key = `${(r as any).listing_id}|${r.renter_info}|${r.start_date.toISOString().split('T')[0]}`;
       const existing = deduped.get(key);
       if (!existing || (r.rental_price || 0) > (existing.rental_price || 0)) {
@@ -340,9 +344,14 @@ export class AppService {
       todayEarnings: Math.round(todayRentalEarnings * 100) / 100,
       todayRentalCount,
       weekEarnings: Math.round(weekRentalEarnings * 100) / 100,
-      // Rental details for expandable tiles
-      ongoingDetails: ongoingRentals.map(mapRentalDetail),
-      upcomingDetails: upcomingRentals.slice(0, 8).map(mapRentalDetail),
+      // Rental details for expandable tiles (sorted nearest-first so slice never hides imminent rentals)
+      ongoingDetails: ongoingRentals
+        .sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
+        .map(mapRentalDetail),
+      upcomingDetails: upcomingRentals
+        .sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
+        .slice(0, 8)
+        .map(mapRentalDetail),
       todayDetails: todayPickupRentals.map(r => ({
         renter: r.renter_info || 'Unknown',
         earnings: Math.round((r.rental_price || 0) * 100) / 100,
@@ -612,9 +621,12 @@ export class AppService {
     }
 
     // "Pending" = owner accepted on Hygglo but platform verifying renter (order_step='VERIFIED').
+    // Scoped to active/future rentals only — old expired verifications don't inflate the count.
     const pendingVerCount = await this.prisma.rental.count({
       where: {
         order_step: 'VERIFIED',
+        start_date: { gte: todayStart },
+        status: { notIn: ['completed', 'cancelled', 'obsolete'] },
         ...(account ? { account } : {}),
       },
     });
@@ -696,11 +708,15 @@ export class AppService {
 
     // Fetch broadly — rentals that started and are ongoing/upcoming with end_date <= today
     // (no point showing future-ending rentals, their return time can't have passed)
+    // Exclude zombie rentals: end_date > 3 days ago means Hygglo never updated the status
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    threeDaysAgo.setHours(0, 0, 0, 0);
     const where: any = {
       rental_price: { gt: 0 },
       status: { in: ['ongoing', 'upcoming'] },
       start_date: { lte: todayEnd },
-      end_date: { lte: todayEnd },
+      end_date: { lte: todayEnd, gte: threeDaysAgo },
     };
     if (account) where.account = account;
 

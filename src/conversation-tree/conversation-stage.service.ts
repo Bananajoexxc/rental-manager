@@ -549,6 +549,21 @@ Don't reference the silence or sound disappointed.`,
       return { shouldTransition: false };
     }
 
+    // Pending rental with VERIFIED or BOOKED_AFTER_VERIFIED order_step → BOOKED
+    // Only these order_steps indicate the renter is actually in verification, which is what
+    // the dashboard "verifying" funnel bar should show. Earlier order_steps (REQUEST, APPROVED,
+    // FUNDS_RESERVED) keep their chat-derived stage to avoid inflating the funnel.
+    if (rental.status === 'pending' && currentStage !== ConversationStage.DEAD &&
+        ['VERIFIED', 'BOOKED_AFTER_VERIFIED'].includes(rental.order_step ?? '')) {
+      const bookedIdx = STAGE_ORDER.indexOf(ConversationStage.BOOKED);
+      const currentIdx2 = STAGE_ORDER.indexOf(currentStage);
+      if (currentIdx2 >= 0 && currentIdx2 < bookedIdx) {
+        await this.persistStage(rentalId, ConversationStage.BOOKED);
+        this.logger.log(`Stage ${currentStage} → BOOKED (order_step=${rental.order_step}) for ${rentalId}`);
+        return { shouldTransition: true, newStage: ConversationStage.BOOKED, reason: `Renter verification in progress (${rental.order_step})` };
+      }
+    }
+
     // Get conversation history
     const history = await this.prisma.conversation.findMany({
       where: { chat_id: `rental:${rentalId}` },
@@ -589,7 +604,7 @@ Don't reference the silence or sound disappointed.`,
     } else if ((priceQuoted || datesDiscussed) && availabilityConfirmed && msgCount >= 3) {
       newStage = ConversationStage.READY_TO_BOOK;
       reason = 'Details discussed, availability confirmed';
-    } else if (priceQuoted || datesDiscussed || availabilityConfirmed || /available|price|cost|book|rent|hire/.test(fullConversation)) {
+    } else if (priceQuoted || datesDiscussed || availabilityConfirmed || /available|price|cost|book|rent|hire/.test(renterConversation)) {
       newStage = ConversationStage.INTERESTED;
       reason = 'Showed interest (price/dates/availability mentioned)';
     } else {
@@ -618,6 +633,17 @@ Don't reference the silence or sound disappointed.`,
       reason = currentStage === ConversationStage.DEAD
         ? 'Still dead (no new renter message)'
         : `Follow-ups exhausted (${followUpCount}) + ${Math.round(hoursSinceRenter)}h silence`;
+    }
+
+    // Pending rental = booking request sent on Hygglo → minimum stage is BOOKED
+    // (unless renter ghosted and we're marking DEAD)
+    if (rental.status === 'pending' && newStage !== ConversationStage.DEAD) {
+      const bookedIdx = STAGE_ORDER.indexOf(ConversationStage.BOOKED);
+      const detectedIdx = STAGE_ORDER.indexOf(newStage);
+      if (detectedIdx < bookedIdx) {
+        newStage = ConversationStage.BOOKED;
+        reason = 'Booking request sent on Hygglo';
+      }
     }
 
     // Only persist if stage actually changed (and don't downgrade, except to DEAD)
@@ -815,7 +841,7 @@ Don't reference the silence or sound disappointed.`,
       const rentalIds = states.map(s => s.rental_id);
       const rentals = await this.prisma.rental.findMany({
         where: { id: { in: rentalIds } },
-        select: { id: true, status: true, start_date: true, end_date: true },
+        select: { id: true, status: true, start_date: true, end_date: true, order_step: true, created_at: true },
       });
       const rentalMap = new Map(rentals.map(r => [r.id, r]));
 
@@ -856,6 +882,34 @@ Don't reference the silence or sound disappointed.`,
           rental.start_date && new Date(rental.start_date) >= now
         ) {
           newStage = ConversationStage.DEAD;
+        }
+        // Dead: chat-less pending rentals that are stale or expired
+        // Catches Hygglo auto-requests with no actual conversation
+        else if (
+          currentStage !== ConversationStage.DEAD &&
+          rental.status === 'pending' &&
+          !state.last_renter_message_at &&
+          !state.last_bot_message_at &&
+          !['VERIFIED', 'BOOKED_AFTER_VERIFIED'].includes(rental.order_step ?? '') && (
+            // Start date passed — rental window expired
+            (rental.start_date && new Date(rental.start_date) < now) ||
+            // No start date — incomplete rental, never going to happen
+            !rental.start_date ||
+            // Request is >48h old and no chat activity
+            (rental.created_at && (now.getTime() - new Date(rental.created_at).getTime()) > 48 * 60 * 60 * 1000)
+          )
+        ) {
+          newStage = ConversationStage.DEAD;
+        }
+        // Pending with VERIFIED/BOOKED_AFTER_VERIFIED order_step → BOOKED
+        // Only these order_steps indicate actual renter verification in progress
+        else if (
+          rental.status === 'pending' &&
+          currentStage !== ConversationStage.DEAD &&
+          ['VERIFIED', 'BOOKED_AFTER_VERIFIED'].includes(rental.order_step ?? '') &&
+          STAGE_ORDER.indexOf(currentStage) < STAGE_ORDER.indexOf(ConversationStage.BOOKED)
+        ) {
+          newStage = ConversationStage.BOOKED;
         }
         // Fix NULL stages
         else if (!state.conversation_stage) {

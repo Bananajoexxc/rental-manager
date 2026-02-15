@@ -187,7 +187,7 @@ export class RevenueService {
         parsed_items: true,
         // Get actual pickup date from confirmed bookings (when gear physically goes out)
         bookings: {
-          where: { status: { in: ['confirmed', 'pending_review'] } },
+          where: { status: 'confirmed' },
           select: { pickup_date: true, return_date: true },
           take: 1,
         },
@@ -198,6 +198,10 @@ export class RevenueService {
     const seen = new Map<string, RentalRevenueRow>();
     for (const r of rentals) {
       if (!r.start_date || !r.renter_info) continue;
+      // Upcoming rentals require at least 1 confirmed booking to count in revenue.
+      // Without confirmed bookings, the rental is unvalidated (phantom).
+      // Completed/ongoing already happened — rental_price is the truth.
+      if (r.status === 'upcoming' && r.bookings.length === 0) continue;
       const key = `${r.listing_id}|${r.renter_info}|${r.start_date.toISOString().split('T')[0]}`;
       const existing = seen.get(key);
       if (!existing || (r.rental_price || 0) > (existing.rental_price || 0)) {
@@ -1654,7 +1658,7 @@ export class RevenueService {
       // Map stages to counts
       const stageCounts: Record<string, number> = {
         inquiry: 0, interested: 0, ready_to_book: 0, booked: 0,
-        awaiting_verification: 0, confirmed: 0, completed: 0, dead: 0,
+        pending: 0, confirmed: 0, completed: 0, dead: 0,
       };
       for (const s of states) {
         const stage = s.conversation_stage || 'inquiry';
@@ -1670,7 +1674,7 @@ export class RevenueService {
       const interested = stageCounts['interested'];
       const readyToBook = stageCounts['ready_to_book'];
       const booked = stageCounts['booked'];
-      const pending = stageCounts['awaiting_verification'];
+      const pending = stageCounts['pending'];
       const confirmed = stageCounts['confirmed'];
       const completed = stageCounts['completed'];
       const dead = stageCounts['dead'];

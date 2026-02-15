@@ -246,9 +246,37 @@ export class FollowUpService {
     // Deterministic templates — no AI call needed, saves tokens
     const itemName = rental?.title || 'the rental';
     const followupNumber = state.followup_count + 1;
-    const followUpMessage = followupNumber === 1
-      ? `Just checking in - let me know if you had any other questions about the ${itemName}!`
-      : `Still interested in the ${itemName}? Happy to hold it for you if needed.`;
+
+    let followUpMessage: string;
+
+    if (followupNumber === 1) {
+      // Check conversation history for pricing objections → offer price match instead of generic FU1
+      let hasPricingObjection = false;
+      try {
+        const chatId = `rental:${rental.id}`;
+        const recentMessages = await this.prisma.conversation.findMany({
+          where: { chat_id: chatId },
+          orderBy: { created_at: 'desc' },
+          take: 10,
+          select: { content: true, role: true },
+        });
+        hasPricingObjection = recentMessages.some(m =>
+          m.role === 'user' &&
+          /too expensive|too much|cheaper|out of.*budget|can.?t afford|price.*high|bit much|over.*budget|pricey|steep|lower.*price|better.*price/i.test(m.content),
+        );
+      } catch {
+        // Non-critical — fall through to generic template
+      }
+
+      if (hasPricingObjection) {
+        followUpMessage = `Hey, just wanted to let you know — if you've seen the ${itemName} listed anywhere for less, happy to price match for you. Just send me a link or screenshot and I'll sort it out!`;
+        this.logger.log(`Price match offer sent for ${rental?.title} (pricing objection detected in conversation)`);
+      } else {
+        followUpMessage = `Just checking in - let me know if you had any other questions about the ${itemName}!`;
+      }
+    } else {
+      followUpMessage = `Still interested in the ${itemName}? Happy to hold it for you if needed.`;
+    }
 
     // Send via Hygglo (sendMessage handles READ_ONLY_MODE with per-rental exceptions)
     try {
@@ -697,7 +725,42 @@ export class FollowUpService {
       return { applied: false, reason: 'Discount already applied (one per booking)' };
     }
 
-    // Check eligibility
+    // Check for AI-flagged first-time rental discount (takes priority over automatic eligibility)
+    const firstTimeDiscount = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        decision_type: 'first_time_discount',
+      },
+    });
+
+    if (firstTimeDiscount) {
+      const originalPrice = rental.rental_price || 0;
+      const RENTER_DISCOUNT = 15;
+      const PLATFORM_RETENTION = 0.64;
+      const ownerReduction = RENTER_DISCOUNT * PLATFORM_RETENTION; // ~£9.60
+      const ftPercentage = originalPrice > 0 ? Math.round((ownerReduction / originalPrice) * 10000) / 100 : 0;
+
+      if (ftPercentage > 0 && ftPercentage < 50) { // safety cap
+        const discountedPrice = Math.round(originalPrice - ownerReduction);
+
+        await this.prisma.ai_decision.create({
+          data: {
+            rental_id: rental.id,
+            decision_type: 'analyze',
+            input_summary: `discount_applied: First-time rental discount (${ftPercentage}% off £${originalPrice} = £${discountedPrice}, renter saves ~£${RENTER_DISCOUNT})`,
+            output_summary: `First-time discount applied. Original: £${originalPrice}, Discounted: £${discountedPrice}`,
+            confidence: 1.0,
+            action_taken: `First-time discount: £${ownerReduction} off earnings (${ftPercentage}%)`,
+            notified: true,
+          },
+        });
+
+        this.logger.log(`First-time discount for ${rental.title}: £${originalPrice} → £${discountedPrice} (renter saves ~£${RENTER_DISCOUNT})`);
+        return { applied: true, reason: 'First-time rental discount', percentage: ftPercentage };
+      }
+    }
+
+    // Check automatic eligibility (distance, high-value, long rental)
     const eligibility = this.checkDiscountEligibility(rental);
     if (!eligibility.eligible) {
       return { applied: false };

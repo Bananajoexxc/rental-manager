@@ -970,6 +970,51 @@ export class AutonomousService {
         }
       }
 
+      // First-time renter check for onNewRental (proactive discount on high-value)
+      let onNewRentalFirstTimeCtx = '';
+      try {
+        if (renterUserIdForReview && (renterReviewCount === undefined || renterReviewCount === null || renterReviewCount === 0)) {
+          const ftCheck = await this.playwrightService.checkFirstTimeRenter(
+            renterUserIdForReview,
+            (rental.account || 'dbcinema') as 'dbcinema' | 'leo',
+          );
+
+          if (ftCheck.isFirstTime) {
+            // Cache the result
+            await this.prisma.ai_decision.create({
+              data: {
+                rental_id: rental.id,
+                decision_type: 'first_time_renter_verified',
+                input_summary: `First-time renter check for ${rental.renter_info || 'Unknown'} (userId: ${renterUserIdForReview})`,
+                output_summary: `isFirstTime: true, reviewCount: ${ftCheck.reviewCount}`,
+                confidence: 1.0,
+                action_taken: 'Verified first-time renter on Hygglo',
+                notified: false,
+              },
+            });
+
+            const earningsEstimate = rental.rental_price || 0;
+            if (earningsEstimate >= 200) {
+              onNewRentalFirstTimeCtx =
+                `\n\n--- FIRST-TIME RENTER (PROACTIVE DISCOUNT) ---\n` +
+                `This renter has NEVER rented on the platform before (0 reviews, profile confirmed). ` +
+                `Owner earnings: £${Math.round(earningsEstimate)} (above £200). ` +
+                `PROACTIVELY offer them a £15 first-time discount in your welcome message. ` +
+                `Work it in naturally. Add <memory>FIRST_TIME_DISCOUNT_ACCEPTED</memory> in your response.\n`;
+            } else if (earningsEstimate >= 120) {
+              onNewRentalFirstTimeCtx =
+                `\n\n--- FIRST-TIME RENTER ---\n` +
+                `This renter is new to the platform (0 reviews, profile confirmed). ` +
+                `If they ask about first-time discounts or vouchers, offer to manually apply £15 off.\n`;
+            }
+
+            this.logger.log(`FIRST-TIME RENTER confirmed in onNewRental: ${rental.renter_info} for ${rental.title} (earnings: £${earningsEstimate})`);
+          }
+        }
+      } catch (ftErr) {
+        this.logger.debug(`First-time renter check failed in onNewRental: ${ftErr.message}`);
+      }
+
       const rentalContext =
         `New rental detected:\n` +
         `Title: ${rental.title}\n` +
@@ -983,7 +1028,8 @@ export class AutonomousService {
         chatContext +
         (renterProfileContext ? `\n\n${renterProfileContext}` : '') +
         (rentalStageCtx ? `\n\n${rentalStageCtx}` : '') +
-        multiItemContextStr;
+        multiItemContextStr +
+        onNewRentalFirstTimeCtx;
 
       // 2. Ask Claude to analyze and decide
       let returningContext = '';
@@ -1069,6 +1115,42 @@ export class AutonomousService {
       // 7. Store any memories
       if (response.memories.length > 0) {
         await this.memoryService.processAiMemories(response.memories);
+
+        // 7b. Check for first-time discount acceptance flag
+        if (response.memories.some(m => m.toUpperCase().includes('FIRST_TIME_DISCOUNT_ACCEPTED'))) {
+          const rentalPrice = rental.rental_price || 0;
+          if (rentalPrice >= 120) {
+            const RENTER_DISCOUNT = 15; // £15 off renter price
+            const PLATFORM_RETENTION = 0.64; // owner keeps ~64% of renter price
+            const ownerReduction = Math.round(RENTER_DISCOUNT * PLATFORM_RETENTION * 100) / 100;
+            const discountPercentage = Math.round((ownerReduction / rentalPrice) * 10000) / 100;
+
+            // Check not already flagged
+            const alreadyFlagged = await this.prisma.ai_decision.findFirst({
+              where: { rental_id: rental.id, decision_type: 'first_time_discount' },
+            });
+
+            if (!alreadyFlagged) {
+              await this.prisma.ai_decision.create({
+                data: {
+                  rental_id: rental.id,
+                  decision_type: 'first_time_discount',
+                  input_summary: `first_time_discount_flagged: £${RENTER_DISCOUNT} off renter price (£${ownerReduction} off earnings, ${discountPercentage}% of £${rentalPrice})`,
+                  output_summary: `First-time rental discount accepted by renter. Flagged for application at auto-accept.`,
+                  confidence: 1.0,
+                  action_taken: `First-time discount flagged. Renter saves £${RENTER_DISCOUNT}. Owner earnings reduce by £${ownerReduction}.`,
+                  notified: true,
+                },
+              });
+
+              await this.followUpService.updateAcceptanceReadiness(rental.id, {
+                discount_eligible: true,
+              });
+
+              this.logger.log(`First-time discount flagged for ${rental.title}: £${ownerReduction} off earnings (${discountPercentage}% of £${rentalPrice})`);
+            }
+          }
+        }
       }
 
       // 8. Check item availability and update acceptance readiness
@@ -2529,6 +2611,73 @@ export class AutonomousService {
           rentalContextStr += `Price per day: £${rental.price_per_day}/day (your earnings)\n`;
         }
         rentalContextStr += `IMPORTANT: These are the REAL prices from the booking. Quote ONLY these figures to the renter. Do NOT make up daily rates, weekly rates, or any other pricing. When speaking to the renter, use the "Renter pays" figure. When Daniel asks about profit/earnings/revenue, use the "Your profit" figure — revenue, earnings, and profit all mean the same thing (what Daniel takes home after fees).`;
+
+        // FIRST-TIME RENTER CHECK: Verify via Hygglo profile and inject context for discount handling
+        try {
+          const msgRenterUserId = (rental as any)._renterUserId as string | undefined;
+          const msgRenterReviewCount = (rental as any)._renterReviewCount as number | undefined;
+
+          // Only check if review count is 0/null/undefined (potential first-timer) and we have a user ID
+          if (msgRenterUserId && (msgRenterReviewCount === undefined || msgRenterReviewCount === null || msgRenterReviewCount === 0)) {
+            // Check if we already verified this renter for this rental (cache via ai_decision)
+            const existingCheck = await this.prisma.ai_decision.findFirst({
+              where: { rental_id: rental.id, decision_type: 'first_time_renter_verified' },
+            });
+
+            let isFirstTime = false;
+            if (existingCheck) {
+              isFirstTime = existingCheck.output_summary?.includes('isFirstTime: true') || false;
+            } else {
+              // Scrape profile page to verify
+              const ftCheck = await this.playwrightService.checkFirstTimeRenter(
+                msgRenterUserId,
+                (rental.account || 'dbcinema') as 'dbcinema' | 'leo',
+              );
+              isFirstTime = ftCheck.isFirstTime;
+
+              // Cache the result
+              await this.prisma.ai_decision.create({
+                data: {
+                  rental_id: rental.id,
+                  decision_type: 'first_time_renter_verified',
+                  input_summary: `First-time renter check for ${rental.renter_info || 'Unknown'} (userId: ${msgRenterUserId})`,
+                  output_summary: `isFirstTime: ${isFirstTime}, reviewCount: ${ftCheck.reviewCount}`,
+                  confidence: 1.0,
+                  action_taken: isFirstTime ? 'Verified first-time renter on Hygglo' : 'Not a first-time renter',
+                  notified: false,
+                },
+              });
+
+              if (isFirstTime) {
+                this.logger.log(`FIRST-TIME RENTER confirmed: ${rental.renter_info} for ${rental.title}`);
+              }
+            }
+
+            if (isFirstTime) {
+              const currentProfit = profitAmount || 0;
+              if (currentProfit >= 200) {
+                rentalContextStr += `\n\n--- FIRST-TIME RENTER (PROACTIVE DISCOUNT) ---\n` +
+                  `This renter has NEVER rented on the platform before (0 reviews, profile confirmed). ` +
+                  `Owner earnings are £${Math.round(currentProfit)} (above £200 threshold). ` +
+                  `PROACTIVELY offer them a £15 first-time discount as a welcome gesture. ` +
+                  `Work it in naturally — e.g. "by the way, since it's your first rental I've knocked £15 off for you". ` +
+                  `Add <memory>FIRST_TIME_DISCOUNT_ACCEPTED</memory> in your response when you offer it.\n`;
+              } else if (currentProfit >= 120) {
+                rentalContextStr += `\n\n--- FIRST-TIME RENTER ---\n` +
+                  `This renter has NEVER rented on the platform before (0 reviews, profile confirmed). ` +
+                  `Owner earnings are £${Math.round(currentProfit)} (above £120). ` +
+                  `If they ask about first-time discounts or vouchers, offer to manually apply £15 off. ` +
+                  `Do NOT proactively offer it — only if they bring it up.\n`;
+              } else {
+                rentalContextStr += `\n\n--- FIRST-TIME RENTER ---\n` +
+                  `This renter is new to the platform (0 reviews). ` +
+                  `If they ask about first-time discounts or vouchers, say it's not available at the moment.\n`;
+              }
+            }
+          }
+        } catch (ftErr) {
+          this.logger.debug(`First-time renter check failed: ${ftErr.message}`);
+        }
 
         // ACCOUNT-SPECIFIC LOW-VALUE DETECTION: Check estimated profit against minimum thresholds
         const ACCOUNT_MIN_EARNINGS: Record<string, number> = { dbcinema: 20, leo: 25 };
