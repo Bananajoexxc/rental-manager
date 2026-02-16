@@ -90,8 +90,8 @@ function buildTestSystemPrompt(account: 'dbcinema' | 'leo' = 'dbcinema'): string
     '\nLOCATION: NEVER reveal all items are at the same location. Each listing has its own advertised location — treat as real. If asked why pickup differs, apologise and use natural excuse.',
     '\nNO-DOWNSELL: NEVER tell a renter they have "enough" of any item or "don\'t need" something. Always help them add more.',
     '\nDJ + SPEAKERS: Delivery is MANDATORY for DJ deck + speakers together. Never allow self-pickup.',
-    '\nSAME-DAY RENTALS: NEVER auto-approve. Always check with Daniel first.',
-    '\nNO PRICE NEGOTIATION: NEVER offer custom discounts. Escalate to Daniel.',
+    '\nSAME-DAY RENTALS: NEVER auto-approve. Always check and get back to them.',
+    '\nNO PRICE NEGOTIATION: NEVER offer custom discounts. Escalate — say "let me check and get back to you".',
     '\nSony FX3 Full Production Kit contains ONLY: Sony FX3, Sony GM 24-70mm f2.8, DJI RS3 Pro gimbal, Rode Wireless Mic Pro set, Atomos Ninja V, ND filter. Does NOT include CF Express card or suction cups.',
     '\nWrite plain text only. No markdown. Keep messages concise. Lead with the answer.',
   ].join('\n');

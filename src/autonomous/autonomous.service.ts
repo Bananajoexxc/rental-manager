@@ -1,7 +1,7 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { AiService } from '../ai/ai.service';
+import { AiService, ToolHandlers } from '../ai/ai.service';
 import { RulesService } from '../rules/rules.service';
 import { MemoryService } from '../memory/memory.service';
 import { TelegramService, DecisionPromptConfig } from '../telegram/telegram.service';
@@ -17,9 +17,10 @@ import { ConversationStageService } from '../conversation-tree/conversation-stag
 import { RecommendationService } from '../recommendations/recommendation.service';
 import { ErrorLogService } from '../monitoring/error-log.service';
 import { VisionService } from '../vision/vision.service';
-import { findBestMatch, getInventoryItemNames, validateListingAgainstInventory, extractListingQuantity, MASTER_INVENTORY } from '../utils/item-matcher';
-import { PRICING_CATALOG, formatFilteredPricingForAI } from '../data/pricing-catalog';
+import { findBestMatch, getInventoryItemNames, validateListingAgainstInventory, validateListingItems, extractListingQuantity, normalizeItemName, MASTER_INVENTORY } from '../utils/item-matcher';
+import { PRICING_CATALOG, formatFilteredPricingForAI, getItemPrice } from '../data/pricing-catalog';
 import { checkAcquisitionOpportunity, findAcquisitionMatch } from '../data/acquisition-costs';
+import { checkCompatibilityConflicts, detectMissingEssentials, formatCompatibilityForAI } from '../data/item-compatibility';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
 import { VerificationService } from '../verification/verification.service';
@@ -48,6 +49,7 @@ export class AutonomousService {
   private activeRentalProcessing = new Set<string>(); // Per-rental dedup guard
   private recentlyProcessedMessages = new Map<string, number>(); // content hash → timestamp for cross-scan dedup
   private readonly MESSAGE_DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minute dedup window
+  private listingIdentityBackfillDone = false;
   private recentlyNotifiedRentals = new Map<number, number>(); // rental DB id → timestamp for new-rental notification dedup
   private readonly RENTAL_NOTIFICATION_DEDUP_TTL_MS = 10 * 60 * 1000; // 10 minute dedup window for rental notifications
 
@@ -78,6 +80,43 @@ export class AutonomousService {
     private couponService: CouponService,
     private playwrightService: PlaywrightService,
   ) {}
+
+  /**
+   * One-time backfill: create listing_title extracteditem records for active rentals
+   * that don't have them yet. Runs once on first processMessage call.
+   */
+  private async backfillListingIdentity(): Promise<void> {
+    if (this.listingIdentityBackfillDone) return;
+    this.listingIdentityBackfillDone = true;
+    try {
+      const rentals = await this.prisma.rental.findMany({
+        where: { status: { in: ['pending_review', 'upcoming', 'ongoing'] } },
+        select: { id: true, title: true },
+      });
+      let backfilled = 0;
+      for (const r of rentals) {
+        const existing = await this.prisma.extracteditem.findFirst({
+          where: { rental_id: r.id, source: 'listing_title' },
+        });
+        if (!existing) {
+          const match = validateListingItems(r.title);
+          if (match.someMatched || match.allMatched) {
+            for (const item of match.items.filter(i => i.matched && i.inventoryItem)) {
+              try {
+                await this.prisma.extracteditem.create({
+                  data: { rental_id: r.id, item_name: item.inventoryItem!, source: 'listing_title', confidence_score: 1.0 },
+                });
+                backfilled++;
+              } catch { /* duplicate or non-critical */ }
+            }
+          }
+        }
+      }
+      if (backfilled > 0) this.logger.log(`Backfilled ${backfilled} listing_title extracteditem records`);
+    } catch (err) {
+      this.logger.debug(`Listing identity backfill failed: ${err.message}`);
+    }
+  }
 
   /**
    * Determine context complexity level for optimization
@@ -771,12 +810,71 @@ export class AutonomousService {
           const returningCheck = await this.renterProfileService.isReturningRenter(renterName, rental.id);
           isReturningRenter = returningCheck.isReturning;
 
+          // OVERRIDE: If renter explicitly says this is their first time, suppress returning renter context
+          // regardless of what profile matching says. Also suppress if conversation is empty (brand new rental).
           if (isReturningRenter) {
-            this.logger.log(`Returning renter detected: ${renterName} (${returningCheck.previousRentalCount} previous rentals)`);
+            const renterMsgText = initialMessages
+              .filter(m => m.sender !== 'Owner' && m.sender !== 'owner')
+              .map(m => m.content)
+              .join(' ')
+              .toLowerCase();
+            const firstTimeSignals = /\b(first\s*time|new\s*here|first\s*booking|never\s*(used|rented|booked)|new\s*to\s*(this|the\s*platform))\b/i;
+            if (firstTimeSignals.test(renterMsgText)) {
+              this.logger.log(`Suppressing returning renter for ${renterName} — renter says it's their first time`);
+              isReturningRenter = false;
+            } else {
+              this.logger.log(`Returning renter detected: ${renterName} (${returningCheck.previousRentalCount} previous rentals)`);
+            }
           }
         }
       } catch (profileErr) {
         this.logger.warn(`Renter profile linking failed: ${profileErr.message}`);
+      }
+
+      // Active rental detection for returning renters — detect additions/extensions
+      let activeRentalContext = '';
+      if (isReturningRenter && renterProfileId) {
+        try {
+          const activeRentals = await this.renterProfileService.getActiveRentalsForProfile(renterProfileId, rental.id);
+          if (activeRentals.length > 0) {
+            const newStart = rental.start_date ? new Date(rental.start_date).getTime() : null;
+            const newEnd = rental.end_date ? new Date(rental.end_date).getTime() : null;
+
+            for (const active of activeRentals) {
+              const activeStart = active.start_date ? new Date(active.start_date).getTime() : null;
+              const activeEnd = active.end_date ? new Date(active.end_date).getTime() : null;
+
+              if (!newStart || !activeStart || !activeEnd) continue;
+
+              // Overlap = addition (requesting more gear for the same period)
+              // New start after old end = extension (extending their rental period)
+              const hasOverlap = newEnd && activeEnd && newStart <= activeEnd && newEnd >= activeStart;
+              const isExtension = newStart > activeEnd;
+
+              if (hasOverlap) {
+                activeRentalContext = `\n--- ADDITION TO EXISTING RENTAL ---\n` +
+                  `This renter already has an active booking: "${active.title}" (${active.status}, ` +
+                  `${active.start_date ? new Date(active.start_date).toLocaleDateString('en-GB') : '?'} - ` +
+                  `${active.end_date ? new Date(active.end_date).toLocaleDateString('en-GB') : '?'}). ` +
+                  `This new request has OVERLAPPING dates — likely adding extra gear to their existing rental. ` +
+                  `Acknowledge their existing booking warmly and confirm availability for the new items.\n`;
+                this.logger.log(`ADDITION detected: "${rental.title}" overlaps with active "${active.title}" for ${renterName}`);
+                break;
+              } else if (isExtension) {
+                activeRentalContext = `\n--- EXTENSION OF EXISTING RENTAL ---\n` +
+                  `This renter has a recent booking: "${active.title}" (${active.status}, ` +
+                  `${active.start_date ? new Date(active.start_date).toLocaleDateString('en-GB') : '?'} - ` +
+                  `${active.end_date ? new Date(active.end_date).toLocaleDateString('en-GB') : '?'}). ` +
+                  `This new request starts AFTER their existing rental ends — likely extending their rental period or booking a follow-up. ` +
+                  `Acknowledge their previous booking and handle this smoothly.\n`;
+                this.logger.log(`EXTENSION detected: "${rental.title}" follows active "${active.title}" for ${renterName}`);
+                break;
+              }
+            }
+          }
+        } catch (activeErr) {
+          this.logger.debug(`Active rental detection failed: ${activeErr.message}`);
+        }
       }
 
       // Initialize follow-up state
@@ -895,7 +993,7 @@ export class AutonomousService {
       if (hasExistingChat) {
         const recentMessages = existingChatMessages.slice(-10);
         chatContext = `\n\nEXISTING CHAT HISTORY (${existingChatMessages.length} messages):\n` +
-          recentMessages.map(m => `[${m.timestamp}] ${m.sender}: ${m.content}`).join('\n');
+          recentMessages.map(m => `${m.sender}: ${m.content}`).join('\n');
       }
 
       // Build full renter context from profile, bookings, and history
@@ -939,32 +1037,67 @@ export class AutonomousService {
       let onNewRentalInventoryWarning = '';
       if (!isOnNewRentalAccepted) {
         try {
-          const listingCheck = validateListingAgainstInventory(rental.title);
+          const multiCheck = validateListingItems(rental.title);
           const listingQty = extractListingQuantity(rental.title);
-          if (!listingCheck.matched) {
+
+          if (multiCheck.noneMatched) {
+            // No items matched — ghost/SEO listing or completely unknown item
             const altMatch = findBestMatch(rental.title, getInventoryItemNames());
             if (altMatch) {
               onNewRentalInventoryWarning =
                 `\n\nWARNING — LISTING_INVENTORY_MISMATCH: The listing "${rental.title}" does not match any item in our physical inventory. ` +
-                `This is a ghost/SEO listing. Do NOT confirm this item as available. ` +
-                `NEVER confirm availability of items not in the master inventory. ` +
+                `Do NOT confirm this item as available. ` +
                 `Closest real item: "${altMatch}" (${MASTER_INVENTORY[altMatch]} units). Offer this as an alternative. ` +
-                `IMPORTANT FRAMING: NEVER say "we don't stock this", "not in our lineup", "we don't carry this". ` +
-                `Instead say this specific item is "currently unavailable" and suggest the alternative. ` +
-                `NEVER invent specific reasons for unavailability (e.g., "out for another rental", "being serviced"). Just say "currently unavailable".`;
+                `IMPORTANT FRAMING: Say this specific item is "currently unavailable" and suggest the alternative. ` +
+                `NEVER say "we don't stock this" or "not in our lineup". NEVER invent reasons for unavailability.`;
             } else {
               onNewRentalInventoryWarning =
-                `\n\nCRITICAL — NO INVENTORY MATCH: The listing "${rental.title}" does not match ANY item in our inventory and we have NO alternative. ` +
-                `Politely decline — say this item is "currently out of stock" or "unavailable at the moment". Apologise for the inconvenience. ` +
-                `NEVER reveal we don't own, don't stock, or don't carry an item. NEVER say "not in our lineup", "we don't have this type", or similar. ` +
-                `To the renter it must ALWAYS sound like a temporary stock issue, not a permanent gap in our inventory. ` +
-                `NEVER invent specific reasons for unavailability (e.g., "out for another rental", "being serviced"). Just say "currently unavailable". ` +
-                `Do NOT suggest unrelated equipment. Do NOT reference previous rentals as alternatives.`;
+                `\n\nWARNING — NO INVENTORY MATCH: The listing "${rental.title}" is not currently available and we have no similar alternative. ` +
+                `Apologise and say this item is "currently unavailable". ` +
+                `NEVER reveal we don't own or carry an item — frame as temporary. ` +
+                `Do NOT suggest unrelated equipment.`;
             }
-          } else if (listingQty > listingCheck.maxQuantity) {
+          } else if (multiCheck.someMatched && multiCheck.isComboListing) {
+            // COMBO LISTING: Some items matched, some didn't — DON'T say "out of stock"
+            const matched = multiCheck.items.filter(i => i.matched).map(i => `"${i.inventoryItem}" (${i.maxQuantity} unit(s))`).join(', ');
+            const unmatched = multiCheck.items.filter(i => !i.matched).map(i => `"${i.name}"`).join(', ');
             onNewRentalInventoryWarning =
-              `\n\nWARNING — LISTING_INVENTORY_MISMATCH: The listing title says "${listingQty}x" but we only have ${listingCheck.maxQuantity} unit(s) of "${listingCheck.inventoryItem}". ` +
-              `State that we have ${listingCheck.maxQuantity} available. NEVER offer to source, procure, or find additional units — our inventory is fixed.`;
+              `\n\nINFO — COMBO LISTING: This listing "${rental.title}" contains multiple items. ` +
+              `Items we HAVE in stock: ${matched}. ` +
+              `Items NOT in our current inventory: ${unmatched}. ` +
+              `Offer the available items. For unavailable items, suggest alternatives if any exist. ` +
+              `Do NOT say the whole listing is "out of stock" — individual items ARE available.`;
+          } else if (multiCheck.allMatched && !multiCheck.isComboListing) {
+            // Single matched item — check quantity
+            const singleItem = multiCheck.items[0];
+            if (listingQty > singleItem.maxQuantity) {
+              onNewRentalInventoryWarning =
+                `\n\nWARNING — LISTING_INVENTORY_MISMATCH: The listing title says "${listingQty}x" but we only have ${singleItem.maxQuantity} unit(s) of "${singleItem.inventoryItem}". ` +
+                `State that we have ${singleItem.maxQuantity} available. NEVER offer to source or find additional units.`;
+            }
+          }
+
+          // FEATURE: Pre-Extracted Listing Identity
+          // Store matched inventory items with source='listing_title' so processMessage
+          // can inject verified identity instead of relying on raw SEO-laden title
+          if (multiCheck.someMatched || multiCheck.allMatched) {
+            for (const item of multiCheck.items.filter(i => i.matched && i.inventoryItem)) {
+              try {
+                const existing = await this.prisma.extracteditem.findFirst({
+                  where: { rental_id: rental.id, item_name: item.inventoryItem!, source: 'listing_title' },
+                });
+                if (!existing) {
+                  await this.prisma.extracteditem.create({
+                    data: {
+                      rental_id: rental.id,
+                      item_name: item.inventoryItem!,
+                      source: 'listing_title',
+                      confidence_score: 1.0,
+                    },
+                  });
+                }
+              } catch { /* non-critical */ }
+            }
           }
         } catch {
           // Non-critical
@@ -1056,6 +1189,7 @@ export class AutonomousService {
         `- What items are being rented?\n` +
         `- Does the pricing seem right based on our inventory?\n` +
         returningContext +
+        activeRentalContext +
         (hasExistingChat
           ? `- There is ALREADY an ongoing conversation with this renter (see chat history above). ` +
             `Do NOT send a generic welcome message — it would be out of context and awkward. ` +
@@ -1066,7 +1200,7 @@ export class AutonomousService {
         `\nRespond with:\n` +
         `1. Your analysis (2-3 sentences)\n` +
         `2. Recommended action (e.g., "send welcome message", "approve", "flag for review", "no message needed")\n` +
-        `3. If sending a message, include the exact message text after "MESSAGE:"`;
+        `3. If sending a message, include the exact message text after "MESSAGE:" on the same line (plain text, no markdown). If no message needed, do NOT include a MESSAGE: line.`;
 
       const response = await this.aiService.processComplex(analysisPrompt, {
         rules,
@@ -1761,15 +1895,16 @@ export class AutonomousService {
   }
 
   private async processMessage(msg: HyggloMessage) {
+      // One-time backfill for listing identity records
+      this.backfillListingIdentity().catch(() => {});
+
       // Per-rental deduplication: skip if this rental is already being processed
       if (this.activeRentalProcessing.has(msg.rentalId)) {
         this.logger.warn(`Skipping duplicate processing for rental ${msg.rentalId} — already in progress`);
         return;
       }
 
-      // Content-based dedup: skip if we already processed this exact message recently
-      // Sender-agnostic: same rental + same content = duplicate regardless of sender label
-      // (prevents cross-account duplicate processing where sender names differ)
+      // Content-based dedup (in-memory fast path): skip if we already processed this exact message recently
       const messageKey = `${msg.rentalId}:${msg.content}`;
       const lastProcessed = this.recentlyProcessedMessages.get(messageKey);
       if (lastProcessed && Date.now() - lastProcessed < this.MESSAGE_DEDUP_TTL_MS) {
@@ -1784,6 +1919,28 @@ export class AutonomousService {
         for (const [key, ts] of this.recentlyProcessedMessages) {
           if (ts < cutoff) this.recentlyProcessedMessages.delete(key);
         }
+      }
+
+      // DATABASE-LEVEL DEDUP: Check if an ai_decision was already created for this exact message
+      // within the last 60 seconds. This catches race conditions where concurrent scan cycles
+      // both pass the in-memory check before either creates a decision record.
+      const msgContentHash = msg.content.substring(0, 200);
+      try {
+        const recentDecision = await this.prisma.ai_decision.findFirst({
+          where: {
+            input_summary: { contains: msgContentHash.substring(0, 100) },
+            decision_type: 'message',
+            created_at: { gte: new Date(Date.now() - 60_000) },
+          },
+          select: { id: true },
+        });
+        if (recentDecision) {
+          this.logger.debug(`DB dedup: skipping message for rental ${msg.rentalId} — decision ${recentDecision.id} already exists`);
+          return;
+        }
+      } catch (dedupErr) {
+        // Non-critical — continue processing if dedup check fails
+        this.logger.debug(`DB dedup check failed: ${(dedupErr as Error).message}`);
       }
 
       this.activeRentalProcessing.add(msg.rentalId);
@@ -2126,6 +2283,17 @@ export class AutonomousService {
           if (specsContext) {
             memories = [memories, specsContext].filter(Boolean).join('\n');
           }
+
+          // COMPATIBILITY GUARDRAILS: Warn about incompatible item combos
+          const { conflicts } = checkCompatibilityConflicts(mentionedItems);
+          if (conflicts.length > 0) {
+            const warningLines = conflicts.map(
+              (c) => `WARNING: ${c.camera} is NOT compatible with ${c.item} — ${c.reason}. Alert the renter.`,
+            );
+            memories = [memories, `\n--- COMPATIBILITY WARNING ---\n${warningLines.join('\n')}`].filter(Boolean).join('\n');
+            this.logger.log(`COMPATIBILITY WARNING: ${conflicts.length} conflict(s) detected for ${mentionedItems.join(', ')}`);
+          }
+
         }
 
         // UNIFIED RECOMMENDATIONS: Bundle intelligence + upsell in a single pass
@@ -2180,7 +2348,25 @@ export class AutonomousService {
         // Upsell context from unified recommendations
         let upsellContext = recommendations.upsellContext;
 
-        // DEMAND-BASED UPSELLING: First 3 messages, reuse already-fetched demand data
+        // UPSELL THROTTLE: Detect messages where upselling is inappropriate
+        // Logistics: renter is arriving, confirming times, en route
+        const isLogisticsMessage = /\b(i'?m here|on my way|waiting|arrived|outside|coming|here now|at the|be there|minutes away|just (got|arrived|walking)|heading over|pickup|drop.?off|return|collecting)\b/i.test(msg.content);
+        // Payment/verification: renter struggling with platform
+        const isPaymentMessage = /\b(payment|pay|paying|book(ed|ing)?|verif|document|id.?check|not accepted|trying|submit)\b/i.test(msg.content);
+        // Goodbye/decline: renter is wrapping up or declining
+        const isGoodbyeMessage = /^(thanks?|cheers|ok|okay|no worries|perfect|great|cool|lovely|brilliant|sorted|bye|see you|ta|noted|got it|will do|understood|sounds good|amazing)\b/i.test(msg.content.trim()) && msg.content.trim().length < 80;
+        // Simple acknowledgment: one-word or very short response
+        const isSimpleAck = msg.content.trim().split(/\s+/).length <= 5 && /^(yes|yeah|yep|ok|okay|sure|no|nah|confirmed?|done|sent|here|ready)\b/i.test(msg.content.trim());
+        // Conversation already deep: upselling gets repetitive after 3rd exchange
+        const isDeepConversation = conversationHistory.length > 4;
+
+        const suppressUpsell = isLogisticsMessage || isPaymentMessage || isGoodbyeMessage || isSimpleAck || isDeepConversation;
+        if (suppressUpsell) {
+          upsellContext = ''; // Kill all upsell context for this response
+        }
+
+        // DEMAND-BASED UPSELLING: First 3 messages only, reuse already-fetched demand data
+        // Stage gating applied later in commercialBlock (isEarlyStage ? upsellContext : '')
         if ((upsellContext || hasPricingIntent) && topDemandItems.length > 0 && conversationHistory.length <= 4) {
           const popularNotMentioned = topDemandItems
             .filter(([item]) => !mentionedItems.some(m => m.toLowerCase() === item.toLowerCase()))
@@ -2359,7 +2545,7 @@ export class AutonomousService {
             `If a relevant bundle exists, suggest it as better value. ` +
             `CRITICAL: Quote INDIVIDUAL item price for single items -- never confuse with bundle prices (e.g. a single Sony GM lens is £14-22/day, NOT the bundle price). ` +
             `NEVER reveal owner margins or commission rates. Do NOT require a rental request just for a quote.\n`
-          : '';
+          : (mentionedItems.length > 0 ? `If you mention any prices, use ONLY the pricing catalog data in your context — do NOT guess prices from memory. If no pricing data is provided for an item, say "around £X/day" only if you're confident, otherwise say "let me confirm the rate".\n` : '');
 
         const deliveryInstruction = hasDeliveryIntent
           ? `The renter is asking about delivery. We only deliver within London (max 30km from our pickup point). ` +
@@ -2381,6 +2567,21 @@ export class AutonomousService {
           ? this.conversationStageService.getStagePromptFromState(convState)
           : '';
 
+        // MISSING ESSENTIALS: Flag when camera has no lens mentioned (early stages only)
+        if (mentionedItems.length > 0 && ['inquiry', 'interest', 'qualified'].includes(currentStage)) {
+          const { missing } = detectMissingEssentials(mentionedItems);
+          if (missing.length > 0) {
+            const missingLines = missing.map((m) => {
+              if (m.category === 'lens') {
+                return `The renter requested ${m.camera} but hasn't mentioned a lens. Compatible options: ${m.suggestions.join(', ')}. Casually mention they'll need one.`;
+              }
+              return `The renter's ${m.camera} can use ${m.suggestions.join(', ')} for best performance. Worth mentioning if relevant.`;
+            });
+            memories = [memories, `\n--- MISSING ESSENTIALS ---\n${missingLines.join('\n')}`].filter(Boolean).join('\n');
+            this.logger.log(`MISSING ESSENTIALS: ${missing.length} gap(s) for ${mentionedItems.join(', ')}`);
+          }
+        }
+
         // RENTER PROFILE CONTEXT: Always provide full renter history and progress
         let renterProfileContext = '';
         let currentProfileId: string | undefined;
@@ -2392,6 +2593,42 @@ export class AutonomousService {
           }
         } catch (rpErr) {
           this.logger.debug(`Renter profile context fetch failed: ${rpErr.message}`);
+        }
+
+        // MULTI-RENTAL COORDINATION: Detect when renter has other active rentals with overlapping dates
+        let multiRentalContext = '';
+        if (currentProfileId) {
+          try {
+            const otherRentals = await this.renterProfileService.getActiveRentalsForProfile(currentProfileId, rental.id);
+            if (otherRentals.length > 0) {
+              const currentStart = rental.start_date ? new Date(rental.start_date).getTime() : null;
+              const currentEnd = rental.end_date ? new Date(rental.end_date).getTime() : null;
+              const DAY_MS = 24 * 60 * 60 * 1000;
+
+              const overlapping = otherRentals.filter((r) => {
+                if (!currentStart || !r.start_date || !r.end_date) return false;
+                const rStart = new Date(r.start_date).getTime();
+                const rEnd = new Date(r.end_date).getTime();
+                // Overlapping or adjacent (within 1 day)
+                return currentEnd
+                  ? (currentStart <= rEnd + DAY_MS && currentEnd >= rStart - DAY_MS)
+                  : (currentStart <= rEnd + DAY_MS && currentStart >= rStart - DAY_MS);
+              });
+
+              if (overlapping.length > 0) {
+                const rentalList = overlapping.map((r) =>
+                  `"${r.title}" (${r.status}, ${r.start_date ? new Date(r.start_date).toLocaleDateString('en-GB') : '?'} - ${r.end_date ? new Date(r.end_date).toLocaleDateString('en-GB') : '?'})`,
+                ).join('; ');
+                multiRentalContext = `\n--- MULTI-RENTAL COORDINATION ---\n` +
+                  `This renter also has active bookings: ${rentalList}.\n` +
+                  `Coordinate pickup/return times across all bookings. If you confirm a time here, mention it applies to their other items too.\n` +
+                  `Don't repeat information already discussed in other rental chats.`;
+                this.logger.log(`MULTI-RENTAL COORDINATION: ${overlapping.length} overlapping rental(s) for profile ${currentProfileId}`);
+              }
+            }
+          } catch (mrErr) {
+            this.logger.debug(`Multi-rental coordination check failed: ${mrErr.message}`);
+          }
         }
 
         // WELCOME-BACK CONTEXT: Detect recently-revived DEAD conversations
@@ -2464,13 +2701,14 @@ export class AutonomousService {
 
           if (rentalValue <= SAME_DAY_AUTO_THRESHOLD) {
             // Low-value same-day: upsell first, then escalate for approval
+            // BUT only suggest add-ons if conversation is still early and context allows
             sameDayInstruction =
-              `\n--- SAME-DAY RENTAL (LOW VALUE — UPSELL FIRST) ---\n` +
+              `\n--- SAME-DAY RENTAL (LOW VALUE) ---\n` +
               `This is a SAME-DAY rental worth only £${rentalValue}. Before sending to Daniel for approval:\n` +
-              `1. Try to upsell — suggest additional items, accessories, or longer rental period to increase the order value.\n` +
-              `2. After upselling (or if the renter declines), let them know you're checking availability.\n` +
+              `1. If this is the renter's FIRST message, casually mention complementary items that fit their shoot.\n` +
+              `2. If they've already replied or confirmed what they want, do NOT keep suggesting extras.\n` +
               `3. Do NOT confirm or accept the booking — Daniel must approve.\n` +
-              `Keep it natural — don't be pushy, just suggest relevant add-ons.\n`;
+              `Let them know you're checking availability. Don't be pushy.\n`;
           } else {
             sameDayInstruction =
               `\n--- SAME-DAY RENTAL ---\n` +
@@ -2484,8 +2722,22 @@ export class AutonomousService {
         // Account-based persona selection (matches Telegram sim mode)
         const accountName = rental.account || 'dbcinema';
         const persona = accountName === 'leo'
-          ? 'You are replying AS Leo from Leo Adams gear rental. Use "I" and "my" naturally (e.g., "I\'ve got the FX3 available"). Be warm, personable, slightly chill. But remember: you represent Leo — you cannot make business decisions (pricing, discounts, freebies) without checking with the actual owner first.'
-          : 'You are replying AS Daniel from DB Cinema Rentals. Professional, concise, human tone. But remember: you represent Daniel — you cannot make business decisions (pricing, discounts, freebies) on his behalf. When in doubt, escalate.';
+          ? `You are replying AS Leo from Leo Adams gear rental.
+VOICE: Use "I" and "my" — you're an individual, not a company. Casual, warm, slightly chill.
+STYLE: "mate", "cheers", "sorted", "no worries". Short sentences. No corporate speak.
+EXAMPLES:
+- "Yeah mate, I've got the FX3 available for those dates — sorted!"
+- "Cheers for confirming, I'll get everything prepped for you."
+- "No worries at all, let me check what I've got free that weekend."
+AUTHORITY: You represent Leo — you cannot make business decisions (pricing, discounts, freebies) without checking with the actual owner first.`
+          : `You are replying AS Daniel from DB Cinema Rentals.
+VOICE: Use "our" and "the gear" — you represent a professional rental business.
+STYLE: Professional, concise, human. Efficient but not cold. No slang.
+EXAMPLES:
+- "Hi there — the FX3 is available for those dates. Shall I go ahead and confirm?"
+- "Thanks for getting back to us. Everything's prepped and ready for collection."
+- "Absolutely, let me check our availability and get back to you shortly."
+AUTHORITY: You represent Daniel — you cannot make business decisions (pricing, discounts, freebies) on his behalf. When in doubt, escalate.`;
         const businessName = accountName === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals';
 
         // ACCOUNT TEMPLATES: Inject account-specific template guidance
@@ -2499,53 +2751,57 @@ export class AutonomousService {
         }
 
         // LISTING_INVENTORY_MISMATCH: Validate listing title against actual inventory
+        // Uses multi-item validation to handle combo listings (e.g. "FX3 + 28-70mm lens")
         // SKIP for accepted/ongoing/completed rentals — the renter's booked items ARE their items
         const rentalStatusLower = (rental.status || '').toLowerCase();
         const isAcceptedRental = ['upcoming', 'ongoing', 'completed'].some(s => rentalStatusLower.includes(s));
         let listingInventoryContext = '';
         try {
           if (isAcceptedRental) {
-            // Don't warn about listing mismatch — booked items context (buildRentalStageContext) handles this
             this.logger.debug(`Skipping LISTING_INVENTORY_MISMATCH for accepted rental ${rental.id} (status: ${rental.status})`);
-          }
-          const listingValidation = !isAcceptedRental ? validateListingAgainstInventory(rental.title) : { matched: true, inventoryItem: '', maxQuantity: 0 };
-          const listingQty = !isAcceptedRental ? extractListingQuantity(rental.title) : 0;
+          } else {
+            const multiValidation = validateListingItems(rental.title);
+            const listingQty = extractListingQuantity(rental.title);
 
-          if (!listingValidation.matched) {
-            // Ghost / SEO listing — item does NOT exist in our physical inventory
-            const altMatch = findBestMatch(rental.title, getInventoryItemNames());
-            if (altMatch) {
+            if (multiValidation.noneMatched) {
+              // No items matched — ghost/SEO listing
+              const altMatch = findBestMatch(rental.title, getInventoryItemNames());
+              if (altMatch) {
+                listingInventoryContext =
+                  `\n--- LISTING_INVENTORY_MISMATCH ---\n` +
+                  `This listing item "${rental.title}" is not currently available.\n` +
+                  `Closest alternative in stock: "${altMatch}" (${MASTER_INVENTORY[altMatch]} unit(s)). Offer this instead.\n` +
+                  `Say this specific item is "currently unavailable" and suggest the alternative.\n` +
+                  `NEVER say "we don't stock this" or "not in our lineup". Frame as temporary.\n`;
+              } else {
+                listingInventoryContext =
+                  `\n--- LISTING_INVENTORY_MISMATCH ---\n` +
+                  `This listing item "${rental.title}" is currently unavailable and we have no similar alternative.\n` +
+                  `Apologise and say it's "currently unavailable". Frame as temporary.\n` +
+                  `Do NOT suggest unrelated equipment as substitutes.\n`;
+              }
+            } else if (multiValidation.someMatched && multiValidation.isComboListing) {
+              // COMBO LISTING FIX: Some items in the combo ARE available individually
+              const matched = multiValidation.items.filter(i => i.matched).map(i => `"${i.inventoryItem}" (${i.maxQuantity} unit(s))`).join(', ');
+              const unmatched = multiValidation.items.filter(i => !i.matched).map(i => `"${i.name}"`).join(', ');
               listingInventoryContext =
-                `\n--- LISTING_INVENTORY_MISMATCH ---\n` +
-                `WARNING: This listing item is NOT in our physical inventory. The listing title "${rental.title}" does not match any item we actually own.\n` +
-                `You MUST NOT confirm this item as available.\n` +
-                `NEVER confirm availability of items not in the master inventory.\n` +
-                `Closest alternative we DO have in stock: "${altMatch}" (${MASTER_INVENTORY[altMatch]} unit(s)). Offer this instead.\n` +
-                `Do NOT suggest items from the renter's previous rental history unless they are in our MASTER INVENTORY.\n` +
-                `IMPORTANT FRAMING: NEVER tell the renter "we don't stock this", "not in our lineup", "we don't carry this". ` +
-                `Say this specific item is "currently unavailable" and suggest the alternative.\n` +
-                `NEVER invent specific reasons for unavailability (e.g., "out for another rental", "being serviced", "hasn't come back yet"). Just say "currently unavailable".\n`;
-            } else {
-              // No alternative at all
-              listingInventoryContext =
-                `\n--- LISTING_INVENTORY_MISMATCH (NO ALTERNATIVE) ---\n` +
-                `CRITICAL: This listing item "${rental.title}" is currently unavailable and we have NO similar alternative.\n` +
-                `You MUST politely decline: apologise, say this item is "currently out of stock" or "unavailable at the moment".\n` +
-                `NEVER reveal we don't own, don't stock, or don't carry an item. NEVER say "not in our lineup", "we don't have this type", etc.\n` +
-                `To the renter it must ALWAYS sound like a TEMPORARY stock issue, not a permanent gap.\n` +
-                `Do NOT suggest cameras, lights, mics, or any unrelated equipment as a "substitute".\n` +
-                `Do NOT reference previous rentals or suggest items the renter has rented before — those may also be ghost listings.\n` +
-                `NEVER fabricate availability for items not in inventory.\n` +
-                `NEVER invent specific reasons for unavailability (e.g., "out for another rental", "being serviced", "hasn't come back yet"). Just say "currently unavailable".\n`;
+                `\n--- COMBO LISTING ---\n` +
+                `This listing "${rental.title}" contains multiple items.\n` +
+                `Items WE HAVE in stock: ${matched}.\n` +
+                `Items not in current inventory: ${unmatched}.\n` +
+                `DO NOT say the listing is "out of stock" — the available items ARE in stock.\n` +
+                `Offer the available items normally. For unavailable parts, suggest alternatives if any.\n`;
+            } else if (multiValidation.allMatched && !multiValidation.isComboListing) {
+              // Single matched item — check quantity
+              const singleItem = multiValidation.items[0];
+              if (listingQty > singleItem.maxQuantity) {
+                listingInventoryContext =
+                  `\n--- LISTING_INVENTORY_MISMATCH ---\n` +
+                  `The listing says "${listingQty}x" but we only have ${singleItem.maxQuantity} unit(s) of "${singleItem.inventoryItem}".\n` +
+                  `State we have ${singleItem.maxQuantity} available. NEVER offer to source additional units.\n`;
+              }
             }
-          } else if (listingQty > listingValidation.maxQuantity) {
-            // Listing title claims more units than we have (e.g. "4x Anker F2000" but only 1 in stock)
-            listingInventoryContext =
-              `\n--- LISTING_INVENTORY_MISMATCH ---\n` +
-              `WARNING: The listing title says "${listingQty}x" but we only have ${listingValidation.maxQuantity} unit(s) of "${listingValidation.inventoryItem}" in stock.\n` +
-              `Tell the renter we have ${listingValidation.maxQuantity} unit(s) available. ` +
-              `NEVER offer to source, procure, find, or negotiate additional units — our inventory is fixed.\n` +
-              `Ask if ${listingValidation.maxQuantity} unit(s) would work for them.\n`;
+            // allMatched combo listings = all items available, no warning needed
           }
         } catch (invErr) {
           this.logger.debug(`Listing inventory validation failed: ${invErr.message}`);
@@ -2574,27 +2830,101 @@ export class AutonomousService {
           }
         }
 
+        // CONSOLIDATED CONTEXT BLOCKS: Merge related blocks to reduce prompt section count
+        // Block 1: ITEM AVAILABILITY (listing validation + message-level item mismatches)
+        const itemAvailabilityBlock = [listingInventoryContext, messageMismatchContext].filter(Boolean).join('\n');
+
+        // Block 2: COMMERCIAL (pricing + delivery + upsell + discount + same-day)
+        const isEarlyStage = ['inquiry', 'interest', 'qualified'].includes(currentStage);
+        const isLateStage = ['booking_sent', 'awaiting_verification', 'confirmed', 'dead'].includes(currentStage);
+        // Anti-upsell instruction when context is inappropriate
+        const antiUpsell = (suppressUpsell || isLateStage)
+          ? 'Do NOT suggest additional items, accessories, or upgrades in this response. Just answer what the renter asked — keep it focused and concise.'
+          : '';
+        const commercialBlock = [
+          pricingInstruction,
+          deliveryInstruction,
+          deliveryRecalc,
+          // Upselling only during early stages AND only when not suppressed by context
+          (isEarlyStage && !suppressUpsell) ? upsellContext : '',
+          antiUpsell,
+          discountContext,
+          sameDayInstruction,
+        ].filter(Boolean).join('\n');
+
+        // Block 3: STAGE & RENTER (stage guidance + rental stage + renter profile)
+        const stageRenterBlock = [
+          stageGuidance,
+          rentalStageContext,
+          renterProfileContext,
+        ].filter(Boolean).join('\n');
+
+        // FEATURE 1: Pre-Extracted Listing Identity — inject verified item identity so AI doesn't misidentify from SEO titles
+        let verifiedListingItem = '';
+        let extractedItemNames: string[] = [];
+        try {
+          const extractedIdentity = await this.prisma.extracteditem.findMany({
+            where: { rental_id: rental.id, source: 'listing_title' },
+          });
+          if (extractedIdentity.length > 0) {
+            extractedItemNames = extractedIdentity.map(e => e.item_name);
+            const itemNamesStr = extractedItemNames.join(', ');
+            verifiedListingItem = `\n--- VERIFIED LISTING ITEM ---\n` +
+              `This listing's actual inventory item(s): ${itemNamesStr}\n` +
+              `The listing title "${rental.title}" may contain SEO keywords — IGNORE any other product names in the title.\n` +
+              `When the renter asks about this rental, they are asking about: ${itemNamesStr}.\n`;
+          }
+        } catch { /* non-critical */ }
+
+        // FEATURE 3: Conversation State Machine — inject accumulated state so AI doesn't repeat questions or re-introduce items
+        let conversationStateCtx = '';
+        try {
+          const convState = await this.followUpService.getStructuredState(rental.id);
+          const parts: string[] = [];
+          if (convState.confirmedItems?.length) parts.push(`Confirmed items: ${convState.confirmedItems.join(', ')}`);
+          if (convState.agreedPickupTime) parts.push(`Agreed pickup: ${convState.agreedPickupTime}`);
+          if (convState.agreedReturnTime) parts.push(`Agreed return: ${convState.agreedReturnTime}`);
+          if (convState.renterShootType) parts.push(`Shoot type: ${convState.renterShootType}`);
+          if (convState.questionsAsked?.length) parts.push(`Already asked: ${convState.questionsAsked.join(', ')}`);
+          if (convState.upsellAttempted) parts.push('Upselling already attempted — do NOT upsell again');
+          if (convState.priceQuoted) parts.push(`Last price quoted: £${convState.priceQuoted}`);
+          if (convState.deliveryDiscussed) parts.push('Delivery already discussed');
+          if (parts.length > 0) {
+            conversationStateCtx = `\n--- CONVERSATION STATE ---\n${parts.join('\n')}\nDo NOT re-ask questions listed above. Do NOT repeat information already established.\n`;
+          }
+        } catch { /* non-critical */ }
+
+        // FEATURE 2: Preflight Reasoning — extract verified facts before the main AI call
+        let preflightContext = '';
+        try {
+          const preflight = await this.aiService.preflightReasoning(
+            msg.content,
+            rental.title,
+            rental.status || '',
+            extractedItemNames,
+            { start: rental.start_date, end: rental.end_date },
+          );
+          preflightContext = `\n--- VERIFIED FACTS (from preflight check) ---\n` +
+            `Actual item: ${preflight.listingItem}\n` +
+            `Renter wants: ${preflight.renterIntent}\n` +
+            `Rental status: ${preflight.status}\n` +
+            (preflight.warnings.length > 0 ? `Warnings: ${preflight.warnings.join('; ')}\n` : '');
+        } catch (preflightErr) {
+          this.logger.debug(`Preflight reasoning failed: ${preflightErr.message}`);
+        }
+
         const messagePrompt =
           `A renter sent a message on the ${businessName} account. Draft a reply.\n\n` +
           `${persona}\n\n` +
           `Renter: ${msg.sender}\n` +
           `Their message: "${msg.content}"\n` +
           `Rental: ${rental.title}\n\n` +
-          `${listingInventoryContext}` +
-          `${messageMismatchContext}` +
-          `${pricingInstruction}` +
-          `${deliveryInstruction}` +
-          `${deliveryRecalc}` +
-          `${['booking_sent', 'awaiting_verification', 'confirmed', 'dead'].includes(currentStage) ? '' : upsellContext}` +
-          `${stageGuidance}` +
-          (renterProfileContext ? `\n${renterProfileContext}\n` : '') +
-          (rentalStageContext ? `\n${rentalStageContext}\n` : '') +
-          `${discountContext}` +
-          `${sameDayInstruction}` +
-          // --- OPERATIONAL CONTEXT (minimal, message-specific) ---
-          `\nVOICE: ${accountName === 'leo' ? 'Use "I" and "my" — you\'re Leo, an individual.' : 'Use "our" and "the gear" — you represent the business.'}\n` +
-          // Only include inventory list when renter is asking about items or in early stages
-          `${listingInventoryContext || messageMismatchContext || hasPricingIntent || ['inquiry', 'interest', 'qualified'].includes(currentStage) ? `INVENTORY: ${getInventoryItemNames().join(', ')}.\n` : ''}` +
+          (itemAvailabilityBlock ? `${itemAvailabilityBlock}\n` : '') +
+          (verifiedListingItem ? `${verifiedListingItem}\n` : '') +
+          (commercialBlock ? `${commercialBlock}\n` : '') +
+          (stageRenterBlock ? `${stageRenterBlock}\n` : '') +
+          `\nVOICE: ${accountName === 'leo' ? 'Use "I" and "my" — you\'re Leo, an individual.' : 'Use "our" and "the gear" — you represent the business.'} NEVER mention "Hygglo" by name — say "the platform" or "the booking system". Never prefix your response with timestamps or date markers.\n` +
+          `${itemAvailabilityBlock || hasPricingIntent || isEarlyStage ? `INVENTORY: ${getInventoryItemNames().join(', ')}.\n` : ''}` +
           `${['inquiry', 'interest'].includes(currentStage) ? 'If renter hasn\'t said what the shoot is for, ask casually.\n' : ''}` +
           `RETURN CLOSURE RULE: If the renter asks you to mark the rental as returned or close/end it, explain that the equipment is still being inspected and you usually aim to close open rentals within 24–72 hours after return, though in edge cases it might take a bit longer. Do NOT mark anything as returned yourself.\n` +
           `Lead with the answer. Short paragraphs. Plain text, no markdown. No preamble.`;
@@ -2801,6 +3131,50 @@ export class AutonomousService {
           }
         }
 
+        // FEATURE 4: Tool Use — construct handlers so AI can request real-time data
+        const toolHandlers: ToolHandlers = {
+          checkAvailability: async (itemName, startDate, endDate) => {
+            const result = await this.calendarService.checkAvailability(
+              itemName, new Date(startDate), new Date(endDate),
+            );
+            return result.available
+              ? `${result.matchedItem || itemName} is available (${result.booked}/${result.maxQuantity} booked)`
+              : `${result.matchedItem || itemName} is NOT available for those dates (${result.booked}/${result.maxQuantity} booked)`;
+          },
+          lookupPricing: async (itemName, days) => {
+            const entry = getItemPrice(itemName);
+            if (!entry) return `Pricing not found for ${itemName}`;
+            const dailyRate = entry.daily_price_max;
+            // Multi-day discount approximation: 3 days ~2.5x, 7 days ~5x
+            let total = dailyRate * days;
+            if (days >= 7) total = dailyRate * 5;
+            else if (days >= 3) total = dailyRate * 2.5;
+            const ownerEarnings = Math.round(total * 0.64);
+            return `${itemName} for ${days} day(s): ~£${Math.round(total)} (renter pays), ~£${ownerEarnings} (owner earnings)`;
+          },
+          checkCompatibility: async (items) => {
+            const conflicts = checkCompatibilityConflicts(items);
+            const missing = detectMissingEssentials(items);
+            const parts: string[] = [];
+            if (conflicts.conflicts.length > 0) {
+              parts.push('CONFLICTS: ' + conflicts.conflicts.map(c => c.reason).join('; '));
+            }
+            if (missing.missing.length > 0) {
+              parts.push('MISSING: ' + missing.missing.map(m => `${m.camera} needs ${m.category}: ${m.suggestions.join(', ')}`).join('; '));
+            }
+            const compatInfo = formatCompatibilityForAI(items);
+            if (compatInfo) parts.push(compatInfo);
+            return parts.length > 0 ? parts.join('\n') : 'All items are compatible. No issues detected.';
+          },
+          getRentalDetails: async (rentalId) => {
+            const r = await this.prisma.rental.findUnique({ where: { id: rentalId } });
+            if (!r) return 'Rental not found';
+            const startStr = r.start_date ? new Date(r.start_date).toLocaleDateString('en-GB') : 'TBC';
+            const endStr = r.end_date ? new Date(r.end_date).toLocaleDateString('en-GB') : 'TBC';
+            return `Title: ${r.title}, Status: ${r.status}, Dates: ${startStr} to ${endStr}, Renter: ${r.renter_info || 'Unknown'}`;
+          },
+        };
+
         const response = dspyResponse?.response
           ? { content: dspyResponse.response, memories: [], model: 'dspy-optimized', inputTokens: 0, outputTokens: 0 }
           : await this.aiService.processAdaptive(messagePrompt, {
@@ -2808,7 +3182,18 @@ export class AutonomousService {
           memories,
           conversationHistory,
           rentalContext: rentalContextStr,
-          additionalContext: [inventoryContext, scheduleContext, vacationContext, blacklistContext, couponContext, deliveryQuoteContext, conversationSummary, urgencyContext, welcomeBackContext, ['booking_sent', 'awaiting_verification', 'confirmed', 'dead'].includes(currentStage) ? '' : lowValueInstruction].filter(Boolean).join('\n'),
+          additionalContext: [
+            // PREFLIGHT: verified facts extracted before main call
+            ...[preflightContext].filter(Boolean),
+            // CONVERSATION STATE: accumulated facts from prior exchanges
+            ...[conversationStateCtx].filter(Boolean),
+            // OPERATIONAL: inventory specs, schedule, vacation, blacklist
+            ...[inventoryContext, scheduleContext, vacationContext, blacklistContext].filter(Boolean),
+            // COMMERCIAL (supplementary): coupons, delivery quotes, low-value guidance
+            ...[couponContext, deliveryQuoteContext, (!isLateStage && !suppressUpsell) ? lowValueInstruction : ''].filter(Boolean),
+            // CONVERSATION: summary, urgency, welcome-back, multi-rental coordination
+            ...[conversationSummary, urgencyContext, welcomeBackContext, multiRentalContext].filter(Boolean),
+          ].join('\n'),
           rentalDates: { start: rental.start_date, end: rental.end_date },
           // Context-aware token budget: simple acks get less, complex queries get more
           maxTokens: contextLevel === 'minimal' ? 250 : (contextLevel === 'comprehensive' || (msg.imageUrls && msg.imageUrls.length > 0)) ? 800 : undefined,
@@ -2816,7 +3201,35 @@ export class AutonomousService {
           conversationStage: currentStage,
           // Pass image URLs for multimodal analysis (price match screenshots, etc.)
           imageUrls: msg.imageUrls,
+          // Tool handlers for function calling
+          toolHandlers,
         });
+
+        // POST-PROCESSING: Clean formatting artifacts before validation
+        response.content = response.content
+          .replace(/\]\]+/g, '')                 // Strip orphaned ]] brackets
+          .replace(/\n{3,}/g, '\n\n')            // Collapse 3+ newlines to 2
+          .replace(/(\*{2,}|_{2,}|#{1,})/g, '')  // Strip markdown bold/italic/headers
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Strip markdown links, keep text
+          .replace(/^\s+|\s+$/g, '')             // Trim leading/trailing whitespace
+          .replace(/  +/g, ' ');                 // Collapse double spaces
+
+        // FEATURE 3: Extract conversation state changes from this exchange (best-effort, non-blocking)
+        try {
+          const stateExtraction = await this.aiService.processExtraction(
+            `Extract conversation state from this exchange. Reply in JSON only, no markdown fences.
+Bot response: "${response.content.substring(0, 500)}"
+Renter message: "${msg.content.substring(0, 300)}"
+
+Return ONLY a JSON object with changed fields (omit unchanged):
+{"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false}`,
+            { maxTokens: 150 },
+          );
+          // Strip markdown fences if present, then parse
+          const jsonStr = stateExtraction.content.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(jsonStr);
+          await this.followUpService.mergeStructuredState(rental.id, parsed);
+        } catch { /* non-critical — state extraction is best-effort */ }
 
         // VALIDATION: Check response before sending
         const validationResult = await this.validationService.validateResponse(
@@ -2839,9 +3252,43 @@ export class AutonomousService {
           validationResult,
         );
 
-        // Send the reply on Hygglo (gated by READ_ONLY_MODE and VALIDATION)
+        // Send the reply on Hygglo (gated by READ_ONLY_MODE and VALIDATION and CONFIDENCE)
         const writeBlocked = this.isWriteBlocked(msg.rentalId);
         let actionTaken: string;
+
+        // LOW CONFIDENCE GATE: Block responses with < 40% confidence and escalate
+        // Exception: simple logistics messages ("I'm here", "on my way") naturally score low
+        const isLowConfidence = qualityScore.computedConfidence != null && qualityScore.computedConfidence < 0.4;
+        const isLogisticsMsg = /\b(i'?m here|on my way|waiting|arrived|outside|coming|here now|at the)\b/i.test(msg.content);
+        const logisticsBypass = isLogisticsMsg && ['confirmed', 'ongoing'].some(s => (rental.status || '').toLowerCase().includes(s));
+        const confidenceBlocked = isLowConfidence && !logisticsBypass;
+
+        if (confidenceBlocked && !validationResult.blocked) {
+          this.logger.warn(`BLOCKED [LOW_CONFIDENCE] Confidence ${(qualityScore.computedConfidence! * 100).toFixed(0)}% < 40% for rental ${msg.rentalId}`);
+          actionTaken = `BLOCKED - low confidence (${(qualityScore.computedConfidence! * 100).toFixed(0)}%). Draft: "${response.content.substring(0, 100)}..."`;
+
+          this.telegramService.sendDecisionPrompt({
+            type: 'escalation',
+            rentalId: String(rental.id),
+            listingId: msg.rentalId,
+            account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+            renterName: msg.sender || rental.renter_info || 'Unknown',
+            renterLastMessage: msg.content,
+            contextSummary: `Low confidence (${(qualityScore.computedConfidence! * 100).toFixed(0)}%). Draft: "${response.content.substring(0, 150)}"`,
+            displayText:
+              `\u26a0\ufe0f *LOW CONFIDENCE (${(qualityScore.computedConfidence! * 100).toFixed(0)}%)*\n\n` +
+              `\u251c \ud83d\udce6 ${rental.title}\n` +
+              `\u251c \ud83d\udc64 ${msg.sender || rental.renter_info || 'Unknown'}\n` +
+              `\u251c \ud83d\udcac "${msg.content.substring(0, 200)}"\n` +
+              `\u2514 \ud83e\udd16 Draft: "${response.content.substring(0, 150)}"`,
+            options: [
+              { label: 'Send', emoji: '\u2705', intent: 'respond', aiInstruction: '' },
+              { label: 'Ignore', emoji: '\u23ed\ufe0f', intent: 'ignore', aiInstruction: '' },
+            ],
+            holdMessageSent: false,
+            recommendedReply: response.content,
+          }).catch(err => this.logger.warn(`Failed to send low-confidence escalation: ${err.message}`));
+        } else
 
         if (validationResult.blocked && validationResult.severity === 'critical') {
           // Attempt deterministic repair before escalating
@@ -3037,6 +3484,66 @@ export class AutonomousService {
 
         if (response.memories.length > 0) {
           await this.memoryService.processAiMemories(response.memories);
+        }
+
+        // ADD_ITEM_REQUESTED detection — send listing link if available
+        try {
+          const addItemMatch = response.content.match(/<memory>ADD_ITEM_REQUESTED:item=([^<]+)<\/memory>/i);
+          if (addItemMatch) {
+            const requestedItem = addItemMatch[1].trim();
+            this.logger.log(`ADD_ITEM_REQUESTED detected: "${requestedItem}" for rental ${rental.title}`);
+
+            // Look up listing URL from recent rentals on the same account
+            const recentRentals = await this.prisma.rental.findMany({
+              where: {
+                account: rental.account || undefined,
+                listing_url: { not: '' },
+              },
+              select: { title: true, listing_url: true, updated_at: true },
+              orderBy: { updated_at: 'desc' },
+              take: 100,
+            });
+
+            const normalizedRequested = normalizeItemName(requestedItem);
+            let listingUrl: string | null = null;
+
+            // First pass: normalized contains-check on rental titles
+            for (const r of recentRentals) {
+              const normalizedTitle = normalizeItemName(r.title);
+              if (normalizedTitle.includes(normalizedRequested) || normalizedRequested.includes(normalizedTitle)) {
+                listingUrl = r.listing_url;
+                break;
+              }
+            }
+
+            // Fallback: fuzzy match via findBestMatch against rental titles
+            if (!listingUrl) {
+              const titleList = recentRentals.map(r => r.title);
+              const bestMatch = findBestMatch(requestedItem, titleList);
+              if (bestMatch) {
+                const matched = recentRentals.find(r => r.title === bestMatch);
+                if (matched) listingUrl = matched.listing_url;
+              }
+            }
+
+            if (listingUrl) {
+              const followUpMsg = `here's the link to request it: ${listingUrl}`;
+              if (!this.isWriteBlocked(msg.rentalId)) {
+                try {
+                  await this.hyggloService.sendMessage(msg.rentalId, followUpMsg);
+                  this.logger.log(`Sent add-item listing link for "${requestedItem}": ${listingUrl}`);
+                } catch (sendErr) {
+                  this.logger.warn(`Failed to send add-item link: ${sendErr.message}`);
+                }
+              } else {
+                this.logger.warn(`BLOCKED [READ_ONLY_MODE] Add-item link draft: "${followUpMsg}"`);
+              }
+            } else {
+              this.logger.debug(`No listing URL found for add-item request: "${requestedItem}"`);
+            }
+          }
+        } catch (addItemErr) {
+          this.logger.debug(`ADD_ITEM_REQUESTED detection failed: ${addItemErr.message}`);
         }
 
         // Time extraction — stage-gated via registry
@@ -3603,19 +4110,21 @@ export class AutonomousService {
 
   private async executeDecision(rental: any, aiResponse: string): Promise<string> {
     // Check if AI response contains a message to send
-    const messageMatch = aiResponse.match(/MESSAGE:\s*(.+?)(?:\n|$)/s);
+    // Capture everything after MESSAGE: to end of response (message may be on the next line)
+    const messageMatch = aiResponse.match(/MESSAGE:\s*\n?([\s\S]+)/i);
 
     if (messageMatch) {
-      const messageText = messageMatch[1].trim();
+      let messageText = messageMatch[1].trim();
+
+      // Strip any markdown bold wrappers the AI might add (authority says plain text only)
+      messageText = messageText.replace(/^\*\*(.+?)\*\*$/s, '$1').trim();
 
       // Guard: reject messages that are clearly internal AI decisions, not customer-facing text
-      // Guard: reject messages that are clearly internal AI decisions, not customer-facing text
       // Broadened patterns to catch edge cases like "None - escalate to Daniel first."
-      const internalPatterns = /^(none|n\/a|no message|escalate|flag|skip|defer|internal|notify|daniel|wait|hold|pending|approve|reject|block|analysis|recommend|action|review|check|confirm with daniel)/i;
+      const internalPatterns = /^(none|n\/a|no message|escalate|flag|skip|defer|internal|notify|wait|hold|pending|approve|reject|block|analysis|recommend|action|review|check)/i;
       const looksInternal = internalPatterns.test(messageText.trim())
         || messageText.length < 10
-        || /\b(escalate|notify daniel|flag for review|no action|no message needed)\b/i.test(messageText)
-        || /^\*\*/.test(messageText.trim()); // AI analysis formatting (starts with **)
+        || /\b(escalate|flag for review|no action|no message needed)\b/i.test(messageText);
       if (looksInternal) {
         this.logger.log(`executeDecision: Skipped non-customer message: "${messageText.substring(0, 80)}"`);
         return `Analysis completed, AI recommended: "${messageText.substring(0, 100)}"`;

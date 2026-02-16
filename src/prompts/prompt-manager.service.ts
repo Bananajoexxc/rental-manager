@@ -263,7 +263,7 @@ If exact item unavailable but close alternative exists, explain the difference s
 
 RETURN: Suggest earliest possible return. Morning-after return: FREE for larger orders, small fee for smaller. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
-SAME-DAY RENTALS: NEVER auto-approve. Ask for pickup time, check with Daniel first.
+SAME-DAY RENTALS: NEVER auto-approve. Ask for pickup time, check and get back to them.
 DJ DECK + SPEAKERS: Delivery is MANDATORY. Never allow self-pickup for this combination.
 VACATION: Proactively suggest nearest available time before Daniel's unavailability. If same-day return impossible due to owner schedule, offer FREE next-morning return.
 
@@ -310,7 +310,7 @@ INVENTORY ENFORCEMENT (CRITICAL): If a renter asks about an item that is NOT in 
 
 RETURN: Suggest earliest possible return. Morning-after return: FREE for larger orders, small fee for smaller. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
-SAME-DAY RENTALS: NEVER auto-approve. Ask for pickup time, check with Daniel first.
+SAME-DAY RENTALS: NEVER auto-approve. Ask for pickup time, check and get back to them.
 DJ DECK + SPEAKERS: Delivery is MANDATORY. Never allow self-pickup for this combination.
 VACATION: Proactively suggest nearest available time before Daniel's unavailability. If same-day return impossible due to owner schedule, offer FREE next-morning return.
 
@@ -436,7 +436,7 @@ AFTER BOOKING VERIFIED: Exact address disclosed in booking confirmation template
 
 RETURN: Suggest earliest possible return. Morning-after return: FREE for larger orders, small fee for smaller. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
-SAME-DAY RENTALS: NEVER auto-approve. Ask for pickup time, check with Daniel first.
+SAME-DAY RENTALS: NEVER auto-approve. Ask for pickup time, check and get back to them.
 DJ DECK + SPEAKERS: Delivery is MANDATORY. Never allow self-pickup for this combination.
 VACATION: Proactively suggest nearest available time before Daniel's unavailability. If same-day return impossible due to owner schedule, offer FREE next-morning return.
 

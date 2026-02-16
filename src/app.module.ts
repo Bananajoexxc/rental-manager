@@ -40,6 +40,7 @@ import { CompetitorIntelModule } from './competitor-intel/competitor-intel.modul
 import { CouponModule } from './coupon/coupon.module';
 import { ItemMatcherAiModule } from './item-matcher-ai/item-matcher-ai.module';
 import { SellRecommenderModule } from './sell-recommender/sell-recommender.module';
+import { PipelineModule } from './pipeline/pipeline.module';
 
 @Module({
   imports: [
@@ -84,6 +85,7 @@ import { SellRecommenderModule } from './sell-recommender/sell-recommender.modul
     CouponModule,
     ItemMatcherAiModule,
     SellRecommenderModule,
+    PipelineModule,
   ],
   controllers: [AppController],
   providers: [AppService],

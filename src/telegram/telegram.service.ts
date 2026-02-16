@@ -26,6 +26,7 @@ import { AutolearnService } from '../autolearn/autolearn.service';
 import { CorrectionDetectorService } from '../autolearn/correction-detector.service';
 import { HyggloAccount } from '../hygglo/hygglo.service';
 import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
+import { PipelineService } from '../pipeline/pipeline.service';
 
 // --- Consolidated rental notification types ---
 export type RentalSectionType =
@@ -172,6 +173,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     @Inject(forwardRef(() => AutolearnService)) private autolearnService: AutolearnService,
     @Inject(forwardRef(() => CorrectionDetectorService)) private correctionDetector: CorrectionDetectorService,
     private lostRevenueService: LostRevenueService,
+    private pipelineService: PipelineService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -1580,7 +1582,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     account: 'dbcinema' | 'leo' | null,
     conversationHistory: { role: 'user' | 'assistant'; content: string }[],
   ): Promise<{ replyText: string; qualityInfo: string; rawContent: string } | null> {
-    // SCAM DETECTION
+    // SCAM DETECTION (pre-pipeline gate)
     const scamResult = this.detectSimScamPattern(userText);
     if (scamResult.isScam) {
       return {
@@ -1590,509 +1592,100 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-      // CANCEL/RESCHEDULE DETECTION (from autonomous service)
-      const cancelReschedulePatterns = [
-        { pattern: /\b(cancel|cancellation)\b(?!.*\b(my other|my plans|everything else)\b)/i, type: 'cancel' as const },
-        { pattern: /\b(reschedule|change the date|move the booking|different date|postpone)\b/i, type: 'reschedule' as const },
-      ];
-      for (const { pattern, type } of cancelReschedulePatterns) {
-        if (pattern.test(userText)) {
-          const label = type === 'cancel' ? 'CANCELLATION' : 'RESCHEDULE';
-          return {
-            replyText: `Let me check on that for you - I'll get back to you shortly.`,
-            qualityInfo: `\n\n🚨 ${label} REQUEST detected — escalated to owner`,
-            rawContent: `Let me check on that for you - I'll get back to you shortly.`,
-          };
-        }
+    // CANCEL/RESCHEDULE DETECTION (pre-pipeline gate)
+    const cancelReschedulePatterns = [
+      { pattern: /\b(cancel|cancellation)\b(?!.*\b(my other|my plans|everything else)\b)/i, type: 'cancel' as const },
+      { pattern: /\b(reschedule|change the date|move the booking|different date|postpone)\b/i, type: 'reschedule' as const },
+    ];
+    for (const { pattern, type } of cancelReschedulePatterns) {
+      if (pattern.test(userText)) {
+        const label = type === 'cancel' ? 'CANCELLATION' : 'RESCHEDULE';
+        return {
+          replyText: `Let me check on that for you - I'll get back to you shortly.`,
+          qualityInfo: `\n\n🚨 ${label} REQUEST detected — escalated to owner`,
+          rawContent: `Let me check on that for you - I'll get back to you shortly.`,
+        };
       }
+    }
 
-      // BLACKLIST CHECK: Only on first message (result is session-stable)
-      const isFirstMessage = conversationHistory.length === 0;
-      if (isFirstMessage) {
-        try {
-          const blacklist = await this.blacklistService.getFormattedBlacklist();
-          if (blacklist) {
-            const blacklistLower = blacklist.toLowerCase();
-            if (blacklistLower.includes('BLOCKED')) {
-              // Blacklist data available for AI awareness
-            }
-          }
-        } catch (blErr) {
-          this.logger.debug(`Blacklist check failed: ${blErr.message}`);
-        }
-      }
+    // === PIPELINE: Unified intelligence layers 1-7 ===
+    const pipelineResult = await this.pipelineService.process({
+      message: userText,
+      account: (account || 'dbcinema') as 'dbcinema' | 'leo',
+      conversationHistory,
+      isSimulation: true,
+    });
 
-      // INTENT DETECTION: Classify message intent for conditional context loading
-      const textLower = userText.toLowerCase();
-      const pricingTerms = /\b(price|pricing|cost|how much|rate|rates|quote|charge|fee|fees|per day|daily|weekly|budget|afford|expensive|cheap|discount|deal)\b/i;
-      const deliveryTerms = /\b(deliver|delivery|courier|ship|shipping|post|postcode|send it|drop off|dropoff|bring it|transport|how far|distance|collect from|too far|can you bring|come to me)\b/i;
-      const schedulingTerms = /\b(pickup|pick up|collect|return|drop off|time|slot|morning|evening|tomorrow|today|weekend|schedule|when can)\b/i;
-      const hasPricingIntent = pricingTerms.test(userText);
-      const hasDeliveryIntent = deliveryTerms.test(userText);
-      const hasSchedulingIntent = schedulingTerms.test(userText);
-      const sameDayPatterns = /\b(today|tonight|this evening|this afternoon|asap|right now|immediately|same[\s-]?day)\b/i;
-      const hasSameDayIntent = sameDayPatterns.test(userText);
-      const onMyWayPatterns = [
-        /\bon\s+my\s+way\b/i, /\bcoming\s+now\b/i, /\bheading\s+(there|over|to\s+you)\b/i,
-        /\bomw\b/i, /\bon\s+the\s+way\b/i, /\bnearly\s+there\b/i, /\balmost\s+there\b/i,
-        /\bleaving\s+now\b/i, /\bsetting\s+off\b/i, /\bon\s+route\b/i, /\ben\s+route\b/i,
-        /\bbe\s+there\s+(in|soon)\b/i, /\b(5|10|15|20|30)\s+min(ute)?s?\s+away\b/i,
-      ];
-      const hasOnMyWayIntent = onMyWayPatterns.some(p => p.test(userText));
-
-      // Extract meaningful keywords
-      const words = userText
-        .split(/[\s,.\-!?;:()]+/)
-        .filter((w: string) => w.length > 2)
-        .slice(0, 10);
-
-      // Detect mentioned items (always needed for availability + compatibility)
-      const mentionedItems = words
-        .map((w: string) => findBestMatch(w, getInventoryItemNames()))
-        .filter(Boolean) as string[];
-
-      // Also scan conversation history for previously mentioned items
-      const historyItems: string[] = [];
-      for (const msg of conversationHistory.slice(-6)) {
-        const msgWords = msg.content.split(/[\s,.\-!?;:()]+/).filter((w: string) => w.length > 2);
-        for (const w of msgWords) {
-          const match = findBestMatch(w, getInventoryItemNames());
-          if (match && !mentionedItems.includes(match) && !historyItems.includes(match)) {
-            historyItems.push(match);
-          }
-        }
-      }
-      const allRelevantItems = [...mentionedItems, ...historyItems];
-
-      // COMPACT INVENTORY CONTEXT: AI-native — full inventory + bookings, AI reasons about availability
-      const inventoryContext = await this.calendarService.getCompactInventoryContext();
-
-      // RULES: Use compact format for routine, full for complex conversations
-      const rules = isFirstMessage || conversationHistory.length > 8
-        ? await this.rulesService.getFormattedRules()
-        : await this.rulesService.getCompactRules();
-
-      // PARALLEL FETCHES: Load always-needed + conditional data concurrently
-      const deliveryKeywords = hasDeliveryIntent ? ['Delivery Pricing Zones', 'Delivery Courier Framework', 'Delivery Rules', 'Delivery Mandatory', 'Fake Location Handling'] : [];
-
-      // Filter pricing catalog to relevant items when possible
-      const { PRICING_CATALOG } = await import('../data/pricing-catalog.js');
-      let pricingCatalogText: string;
-      if (allRelevantItems.length > 0 && !textLower.includes('what do you have') && !textLower.includes('what items') && !textLower.includes('full list')) {
-        // Filtered catalog: mentioned items + their bundles + same-category items
-        const relevantCategories = new Set<string>();
-        const relevantEntries: any[] = [];
-        for (const item of allRelevantItems) {
-          const entry = PRICING_CATALOG.find((p: any) => p.item_name.toLowerCase() === item.toLowerCase());
-          if (entry) {
-            relevantEntries.push(entry);
-            relevantCategories.add(entry.category);
-          }
-        }
-        // Add bundles containing mentioned items
-        for (const entry of PRICING_CATALOG) {
-          if (entry.is_bundle && entry.bundle_items?.some((bi: string) =>
-            allRelevantItems.some(ai => bi.toLowerCase().includes(ai.toLowerCase()) || ai.toLowerCase().includes(bi.toLowerCase()))
-          )) {
-            relevantEntries.push(entry);
-          }
-        }
-        // Add a few alternatives from same categories
-        for (const cat of relevantCategories) {
-          const catItems = PRICING_CATALOG.filter((p: any) => p.category === cat && !p.marketing_only && !relevantEntries.includes(p));
-          relevantEntries.push(...catItems.slice(0, 3));
-        }
-        // Deduplicate
-        const seen = new Set<string>();
-        const uniqueEntries = relevantEntries.filter(e => {
-          if (seen.has(e.item_name)) return false;
-          seen.add(e.item_name);
-          return true;
-        });
-        pricingCatalogText = '=== RELEVANT PRICING (filtered) ===\n' +
-          uniqueEntries.map((e: any) => {
-            const bundleTag = e.is_bundle && e.bundle_items ? ` (includes: ${e.bundle_items.join(' + ')})` : '';
-            return `${e.item_name}: £${e.daily_price_min}-${e.daily_price_max}/day${bundleTag}`;
-          }).join('\n') +
-          '\nMulti-day: 3d ~2.5x, 7d ~5x, month ~2.5 weeks. Full catalog available on request.';
-      } else {
-        pricingCatalogText = this.memoryService.getPricingCatalogContext();
-      }
-
-      const [generalMem, pricingMem, deliveryMem] = await Promise.all([
-        this.memoryService.getRelevantMemories(words, 5),
-        hasPricingIntent ? this.memoryService.getPricingMemories() : Promise.resolve(''),
-        hasDeliveryIntent ? this.memoryService.getMinimalMemories(deliveryKeywords, 3) : Promise.resolve(''),
-      ]);
-
-      // Build memories with token budget awareness (~800 token cap for general memories)
-      let memories: string = [pricingCatalogText, generalMem, pricingMem, deliveryMem].filter(Boolean).join('\n');
-
-      // COMPATIBILITY + PRODUCT SPECS context (always when items are mentioned)
-      if (allRelevantItems.length > 0) {
-        const compatContext = this.memoryService.getCompatibilityContext(allRelevantItems);
-        if (compatContext) {
-          memories = [memories, compatContext].filter(Boolean).join('\n');
-        }
-        const specsContext = this.memoryService.getItemSpecsContext(allRelevantItems);
-        if (specsContext) {
-          memories = [memories, specsContext].filter(Boolean).join('\n');
-        }
-      }
-
-      // UNIFIED RECOMMENDATIONS — use ALL relevant items (current + history), not just current message
-      const { startDate: bundleStartDate, endDate: bundleEndDate } = this.parseDateReferences(textLower);
-      let estimatedTotal = 0;
-      for (const item of allRelevantItems) {
-        const catalogEntry = PRICING_CATALOG.find(
-          (p: any) => p.item_name.toLowerCase() === item.toLowerCase(),
-        );
-        estimatedTotal += catalogEntry ? catalogEntry.daily_price_max : 25;
-      }
-      if (estimatedTotal === 0) estimatedTotal = 25;
-
-      const recommendations = await this.recommendationService.generateRecommendations({
-        message: userText,
-        mentionedItems,
-        conversationText: userText,
-        estimatedTotal,
-        hasPricingIntent,
-        startDate: bundleStartDate,
-        endDate: bundleEndDate,
-      });
-
-      if (recommendations.bundleContext) {
-        memories = [memories, recommendations.bundleContext].filter(Boolean).join('\n');
-      } else {
-        const bundleSuggestionContext = this.memoryService.getBundleSuggestionContext(userText, mentionedItems);
-        if (bundleSuggestionContext) {
-          memories = [memories, bundleSuggestionContext].filter(Boolean).join('\n');
-        }
-      }
-
-      // DEMAND DATA: Fetch once, reuse for trends + upselling (saves duplicate DB query)
-      let topDemandItems: [string, number][] = [];
-      if (conversationHistory.length <= 4) {
-        try {
-          topDemandItems = await this.demandService.getTopRequestedItems(30);
-        } catch (demandErr) {
-          this.logger.debug(`Demand fetch failed: ${demandErr.message}`);
-        }
-      }
-
-      let upsellContext = recommendations.upsellContext || '';
-
-      // Demand-based upselling — first 3 messages, reuse already-fetched data
-      if ((upsellContext || hasPricingIntent) && topDemandItems.length > 0 && conversationHistory.length <= 4) {
-        const popularNotMentioned = topDemandItems
-          .filter(([item]) => !allRelevantItems.some(m => m.toLowerCase() === item.toLowerCase()))
-          .slice(0, 3);
-        if (popularNotMentioned.length > 0) {
-          const popularSuggestions = popularNotMentioned.map(([item, count]) => `${item} (${count})`).join(', ');
-          upsellContext += `\nPopular: ${popularSuggestions}`;
-        }
-      }
-
-      // ACCOUNT TEMPLATES — only first 3 messages (establishes tone, then persona context takes over)
-      const accountName = account || 'dbcinema';
-      if (conversationHistory.length <= 4) {
-        try {
-          const accountTemplates = await this.memoryService.getAccountTemplates(accountName as 'dbcinema' | 'leo');
-          if (accountTemplates) {
-            memories = [memories, `\n--- ACCOUNT TEMPLATES ---\n${accountTemplates}`].filter(Boolean).join('\n');
-          }
-        } catch (templateErr) {
-          this.logger.debug(`Account templates fetch failed: ${templateErr.message}`);
-        }
-      }
-
-      // Demand trends — first message only (~50 tokens)
-      if (isFirstMessage && topDemandItems.length > 0) {
-        const trendLines = topDemandItems.slice(0, 3).map(([item, count]) => `${item}: ${count}`).join(', ');
-        memories = [memories, `\n--- TRENDING ---\n${trendLines}`].filter(Boolean).join('\n');
-      }
-
-      // Revenue context REMOVED — wastes tokens, no renter-facing value, AI should never share it
-
-      // Market data REMOVED from renter chats — internal owner insight only
-
-      // DELIVERY QUOTE (only when delivery is discussed — with item specs from autonomous service)
-      let deliveryQuoteContext = '';
-      if (hasDeliveryIntent) {
-        try {
-          // Search current message AND conversation history for postcodes
-          const postcodeMatch = userText.match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i);
-          const historyText = conversationHistory.map(m => m.content).join(' ');
-          const historyPostcodeMatch = !postcodeMatch ? historyText.match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i) : null;
-          const postcode = postcodeMatch?.[1] || historyPostcodeMatch?.[1];
-
-          if (postcode) {
-            const itemsForQuote = mentionedItems.length > 0 ? mentionedItems : ['camera'];
-            const quote = await this.deliveryService.calculateQuote(postcode, itemsForQuote);
-            if (quote) {
-              deliveryQuoteContext = `\n--- CALCULATED DELIVERY QUOTE ---\n` +
-                `Postcode: ${postcode.toUpperCase()}\n` +
-                `Distance: ${quote.distance_km}km from pickup point\n` +
-                `Zone: ${quote.zone}\n` +
-                `Courier type: ${quote.vehicle_display}\n` +
-                `Reason: ${quote.courier_explanation}\n` +
-                (quote.price_min > 0 ? `One-way estimate: £${quote.price_min}-${quote.price_max}\nRound-trip estimate: £${Math.round(quote.price_min * 1.8)}-${Math.round(quote.price_max * 1.8)}\n` : '') +
-                // Include item dimension breakdown (from autonomous service)
-                (quote.items?.length > 0 ? `Item specs:\n${quote.items.map((item: any) => `  - ${item.name}: size ${item.size_score}/5, ${item.weight_kg}kg${item.is_heavy_large ? ' (heavy/large)' : ''}`).join('\n')}\n` : '') +
-                (quote.notes?.length > 0 ? `Notes: ${quote.notes.join('. ')}\n` : '') +
-                `Use this CALCULATED quote — do NOT guess. Delivery estimates are usually accurate within approximately 15%.`;
-            }
-          } else {
-            const vehicleItems = mentionedItems.length > 0 ? mentionedItems : ['camera'];
-            const vehicleInfo = await this.deliveryService.determineVehicle(vehicleItems);
-            deliveryQuoteContext = `\n--- DELIVERY VEHICLE DETERMINATION ---\n` +
-              `Courier type needed: ${vehicleInfo.vehicle_display}\n` +
-              `Reason: ${vehicleInfo.courier_explanation}\n` +
-              (vehicleInfo.items?.length > 0 ? `Item specs:\n${vehicleInfo.items.map((item: any) => `  - ${item.name}: size ${item.size_score}/5, ${item.weight_kg}kg${item.is_heavy_large ? ' (heavy/large)' : ''}`).join('\n')}\n` : '') +
-              `Ask the renter for their postcode to calculate the exact delivery price.`;
-          }
-        } catch (e) {
-          this.logger.debug(`Delivery quote failed: ${e.message}`);
-        }
-      }
-
-      // SCHEDULE — only when scheduling intent AND conversation is advanced (QUALIFIED+ stage) or on-my-way
-      let scheduleContext = '';
-      if ((hasSchedulingIntent && conversationHistory.length >= 4) || hasSameDayIntent || hasOnMyWayIntent) {
-        try {
-          const schedule = await this.calendarService.getFormattedSchedule(new Date());
-          if (schedule) {
-            scheduleContext = `\n--- TODAY'S SCHEDULE ---\n${schedule}`;
-          }
-        } catch (e) {
-          this.logger.debug(`Schedule load failed: ${e.message}`);
-        }
-      }
-
-      // ON MY WAY DETECTION
-      let onMyWayContext = '';
-      if (hasOnMyWayIntent) {
-        onMyWayContext = `\n--- ON MY WAY DETECTED ---\nRenter heading to pickup. Check booking is confirmed and verified before sharing address. If not confirmed, remind them to complete booking first. Only say "Central London (Trafalgar Square area)" until confirmed.`;
-      }
-
-      // MINIMUM FEE + UPSELL CONTEXT
-      let discountContext = '';
-      const MIN_PROFIT_THRESHOLD = 30; // £30 profit minimum (≈ £47 listing price after platform fees)
-      const estimatedProfit = Math.round(estimatedTotal * 0.64);
-      if (estimatedProfit < MIN_PROFIT_THRESHOLD && allRelevantItems.length > 0) {
-        discountContext = `\n--- LOW VALUE RENTAL (est. ~£${estimatedProfit} profit) ---\nThis is below the £${MIN_PROFIT_THRESHOLD} profit minimum. Naturally suggest relevant add-ons (batteries, memory cards, lenses, mics) that complement what they're renting. NEVER mention a minimum fee or profit — just recommend useful extras.`;
-      } else if (estimatedTotal >= 500) {
-        discountContext = `\n--- DISCOUNT ---\nINTERNAL: Top-tier discount applies (auto at checkout). Do NOT reveal percentage.`;
-      } else if (estimatedTotal >= 250) {
-        discountContext = `\n--- DISCOUNT ---\nINTERNAL: Qualifies for discount, close to bigger tier. Suggest add-ons naturally.`;
-      } else if (estimatedTotal >= 225) {
-        discountContext = `\n--- DISCOUNT ---\nINTERNAL: Close to qualifying. Suggest add-ons naturally.`;
-      }
-
-      // SAME-DAY DETECTION
-      let sameDayContext = '';
-      if (hasSameDayIntent) {
-        sameDayContext = estimatedTotal >= 40
-          ? `\n--- SAME-DAY ---\nHigh-value (est. £${estimatedTotal}). Escalate to Daniel. Ask pickup time.`
-          : `\n--- SAME-DAY ---\nLower-value (est. £${estimatedTotal}). Suggest add-ons first, then escalate.`;
-      }
-
-      // ENHANCED STAGE TRACKING (8-stage funnel from autonomous service, inline detection)
-      // Check BOTH conversation history AND current message for stage signals
-      let stageContext = '';
-      const msgCount = conversationHistory.length / 2;
-      const allContent = [...conversationHistory.map(m => m.content), userText]; // Include current message
-      const hasPricingDiscussed = allContent.some(c => c && /\b(£\d|price|cost|rate|quote|how much|per day)\b/i.test(c));
-      const hasDeliveryDiscussed = allContent.some(c => c && /\b(deliver|pickup|collect|postcode)\b/i.test(c));
-      // Stage detection — tightened patterns to prevent false triggers
-      // "confirmed" must be in booking-confirmation context, not "I confirmed the price" or "item confirmed available"
-      const hasConfirmedItems = conversationHistory.some(m => m.role === 'assistant' &&
-        /\b(booking confirmed|booking is confirmed|reservation confirmed|your booking|rental confirmed)\b/i.test(m.content));
-      const hasBookingRequest = conversationHistory.some(m => m.content && /\b(send a request|booking request|book it|go ahead|let'?s do it|i'?ve booked|just booked)\b/i.test(m.content));
-      // Verification must be in identity-verification context, not just mentioning "ID" or "verify availability"
-      const hasVerificationMention = allContent.some(c => c && /\b(identity verif|id verif|verify your identity|upload.*id|passport.*verif|driving licen|verification required|needs? verif)\b/i.test(c));
-      const hasGoneQuiet = msgCount > 3 && conversationHistory.slice(-2).every(m => m.role === 'assistant');
-
-      if (hasGoneQuiet) {
-        stageContext = `\n--- STAGE: DEAD ---\nRenter has gone quiet. Do NOT send follow-ups (handled automatically). If they re-engage, welcome them back warmly.`;
-      } else if (hasConfirmedItems) {
-        stageContext = `\n--- STAGE: CONFIRMED ---\nFinal details only. Focus on pickup/return logistics.`;
-      } else if (hasVerificationMention || hasBookingRequest) {
-        stageContext = `\n--- STAGE: BOOKED ---\nBooking in progress. Guide through verification if needed, confirm details.`;
-      } else if (hasPricingDiscussed && hasDeliveryDiscussed && !hasConfirmedItems) {
-        stageContext = `\n--- STAGE: READY_TO_BOOK ---\nPricing AND delivery discussed. IMPORTANT: Guide renter to submit a booking request through Hygglo. Tell them exactly how to proceed.`;
-      } else if (hasPricingDiscussed && !hasDeliveryDiscussed && !hasConfirmedItems) {
-        stageContext = `\n--- STAGE: READY_TO_BOOK ---\nPricing discussed. Push to booking — ask about dates, pickup/delivery preference.`;
-      } else if (msgCount === 0) {
-        stageContext = `\n--- STAGE: INQUIRY ---\nFirst message. Welcome warmly, confirm needs, ask about their shoot. MUST ask what the project is for to give better recommendations.`;
-      } else if (msgCount <= 2 && !hasPricingDiscussed) {
-        stageContext = `\n--- STAGE: INTERESTED ---\nExploring options. Give pricing proactively, suggest bundles. Ask about their shoot/project.`;
-      }
-
-      // SMART CONVERSATION HISTORY: Keep first msg + last 4 exchanges + summarize middle
-      let smartHistory: { role: 'user' | 'assistant'; content: string }[] | undefined;
-      if (conversationHistory.length > 0) {
-        if (conversationHistory.length <= 10) {
-          smartHistory = conversationHistory;
-        } else {
-          const first2 = conversationHistory.slice(0, 2); // First exchange (establishes context)
-          const last8 = conversationHistory.slice(-8); // Last 4 exchanges
-          // Summarize dropped middle as context note
-          const droppedCount = conversationHistory.length - 10;
-          const summaryMsg: { role: 'user' | 'assistant'; content: string } = {
-            role: 'assistant',
-            content: `[${droppedCount} earlier messages omitted. Key topics covered: ${hasPricingDiscussed ? 'pricing, ' : ''}${hasDeliveryDiscussed ? 'delivery, ' : ''}items discussed: ${allRelevantItems.slice(0, 5).join(', ') || 'general inquiry'}]`,
-          };
-          smartHistory = [...first2, summaryMsg, ...last8];
-        }
-      }
-
-      // BUILD ADDITIONAL CONTEXT: Only dynamic, per-message data (no duplicated rules)
-      const persona = accountName === 'leo'
-        ? 'You are Leo Adams — a real person, NOT a business. OVERRIDE: The rule "Never say my gear/items/equipment" does NOT apply here. That rule is for DB Cinema only. As Leo, you MUST say "I\'ve got", "my gear", "my kit", "I can deliver". NEVER say "we" or "our". Example: "Yeah I\'ve got the FX3 available, my gear is all based in Central London." Be warm, personable, and slightly chill.'
-        : 'You are Daniel from DB Cinema Rentals. Professional, concise, human tone. Use "we" and "our" — never "my gear".';
-      const businessName = accountName === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals';
-
-      const pricingInstruction = hasPricingIntent
-        ? `The renter is asking about pricing. Reference the pricing catalog to give an accurate estimate. ` +
-          `Say "approximately £X/day based on our current listings". ` +
-          `When quoting daily prices, use the standard single-day rate (the higher rate). The lower rate only applies to multi-day discounted bookings. ` +
-          `Always quote the ONE-DAY price and mention multi-day discounts are available for longer rentals. ` +
-          `Present as ESTIMATES. If a relevant bundle exists, suggest it as better value. ` +
-          `CRITICAL: Quote INDIVIDUAL item price for single items — never confuse with bundle prices. ` +
-          `NEVER reveal owner margins or commission rates. Do NOT require a rental request just for a quote.`
-        : '';
-
-      const deliveryInstruction = hasDeliveryIntent
-        ? `The renter is asking about delivery. We only deliver within London (max 30km from our pickup point). ` +
-          `Give a delivery price estimate DIRECTLY based on the delivery pricing zones. ` +
-          `Tell them which courier type their items need (motorcycle, car, or van) and briefly explain why. ` +
-          `Ask for their postcode if not provided. Do NOT require a booking request before giving a quote. ` +
-          `Delivery estimates are usually accurate within approximately 15%.`
-        : '';
-
-      const additionalParts = [
-        inventoryContext,
-        pricingInstruction,
-        deliveryInstruction,
-        scheduleContext,
-        deliveryQuoteContext,
-        upsellContext,
-        onMyWayContext,
-        discountContext,
-        sameDayContext,
-        // CRITICAL BEHAVIORAL RULES (merged from autonomous service)
-        `CRITICAL — CONTEXTUAL RECOMMENDATIONS: Only in EARLY conversation stages (before booking confirmed), if the renter has NOT mentioned what they are shooting, ask casually what the project is for (e.g., "What's the shoot for?"). This helps recommend the right gear. Do NOT ask this during pickup logistics, time confirmations, or after booking is confirmed. Once you know the use case, suggest complementary items naturally.`,
-        `CRITICAL — NO DOWNSELLING: NEVER tell a renter they have "enough", are "set", are "all good", or "don't need" something. If they ask what else they might need, suggest relevant accessories — do NOT dismiss the question.`,
-        `CRITICAL — RETURNING RENTERS: If conversation history shows familiarity, skip generic welcome. Say "Welcome back!" and get straight to confirming items and dates.`,
-        `CRITICAL — WRITING STYLE: Keep messages concise and scannable. Use short paragraphs (2-3 sentences max). Lead with the answer, then add context. Make prices and key info easy to spot.`,
-        `CRITICAL — LOCATION EXCUSES: When LISTING_LOCATION is non-central, acknowledge their specific location by name, apologise with a varied excuse (out of stock, on a rental, in for service, maintenance, consolidating pickups, all rented out), offer central branch + 10% distance discount, ask if that works or prefer delivery. NEVER reveal all items are at the same place.`,
-        accountName === 'leo'
-          ? `CRITICAL — LANGUAGE (HIGHEST PRIORITY): You are Leo. ALWAYS use "I" and "my" — say "I've got", "my gear", "my kit", "I can". NEVER say "we" or "our". You are one person, not a business.`
-          : `CRITICAL — LANGUAGE (HIGHEST PRIORITY): You are Daniel from DB Cinema Rentals. NEVER say "my gear", "my items", "my equipment". Use "our", "the gear", "the equipment", "we have".`,
-        `CRITICAL — SUBSTITUTIONS: When an exact item is unavailable but a close alternative exists, explain the difference simply and naturally.`,
-        `CRITICAL — BUNDLE VALUE: ALWAYS check if a bundle/kit exists that includes the items the renter wants. If a bundle is CHEAPER than renting items individually, you MUST suggest it and show the savings. Example: "The Wedding Full Kit includes everything you need at £110-150/day — that's better value than renting separately." If renter mentions a use case (wedding, documentary, music video, etc.), check for matching named kits.`,
-      ].filter(Boolean).join('\n');
-
-      // DSPy disabled for renter conversations — it bypasses persona, stage tracking, and context pipeline
-      // DSPy can be re-enabled once it supports account-aware modules
-      const dspyResponse: any = null;
-
-      // Build rental context for persona + stage (uses dedicated system prompt section for stronger signal)
-      const rentalContextStr =
-        `ACTIVE ACCOUNT: ${businessName} — respond ONLY as this account.\n` +
-        `${persona}\n` +
-        `${stageContext}\n` +
-        `This is message #${msgCount + 1} in the conversation. ${conversationHistory.length > 0 ? 'IMPORTANT: Reference items and details from the conversation history above.' : ''}\n` +
-        `Reply as a direct message to the renter. Plain text only. Start with the reply text (no preamble).`;
-
-      // For Leo account, prefix the AI message with persona reminder (Haiku needs this for reliable persona switching)
-      const aiUserMessage = accountName === 'leo'
-        ? `[Respond as Leo Adams — use "I" and "my", never "we" or "our"]\n${userText}`
-        : userText;
-
-      // Adaptive token budget based on query complexity signals
-      const tokenBudget = this.calculateTokenBudget({
-        hasPricingIntent,
-        hasDeliveryIntent,
-        itemCount: allRelevantItems.length,
-        estimatedTotal,
-        messageCount: conversationHistory.length,
-      });
-
-      const response = dspyResponse?.response
-        ? { content: dspyResponse.response, memories: [], model: 'dspy-optimized', inputTokens: 0, outputTokens: 0 }
-        : await this.aiService.processRoutine(aiUserMessage, {
-        rules,
-        memories,
-        conversationHistory: smartHistory,
-        rentalContext: rentalContextStr,
-        additionalContext: additionalParts,
-        maxTokens: tokenBudget,
-      });
-
-      // Validate response before sending — pass sim context for accurate validation
-      const validationResult = await this.validationService.validateResponse(
-        response.content,
-        {
-          responseType: 'customer_message',
-          context: {
-            rental: {
-              account,
-              title: mentionedItems.join(', ') || 'Simulation',
-              items: mentionedItems,
-            },
-            message: { content: userText },
+    // POST-PIPELINE: Validation + Quality Scoring + Repair
+    const validationResult = await this.validationService.validateResponse(
+      pipelineResult.response,
+      {
+        responseType: 'customer_message',
+        context: {
+          rental: {
+            account,
+            title: pipelineResult.classification.mentionedItems.join(', ') || 'Simulation',
+            items: pipelineResult.classification.mentionedItems,
           },
+          message: { content: userText },
         },
+      },
+    );
+
+    let qualityInfo = '';
+    try {
+      const qualityScore = await this.qualityScorerService.scoreResponse(
+        pipelineResult.response,
+        {
+          account: account || undefined,
+          messageType: pipelineResult.classification.hasPricingIntent ? 'pricing'
+            : pipelineResult.classification.hasDeliveryIntent ? 'delivery' : 'message',
+          hasPricing: pipelineResult.classification.hasPricingIntent,
+        },
+        validationResult,
       );
 
-      // QUALITY SCORING: Compute quality metrics for sim feedback
-      let qualityInfo = '';
-      try {
-        const qualityScore = await this.qualityScorerService.scoreResponse(
-          response.content,
-          {
-            account: account || undefined,
-            messageType: hasPricingIntent ? 'pricing' : hasDeliveryIntent ? 'delivery' : 'message',
-            hasPricing: hasPricingIntent,
-          },
-          validationResult,
+      const emoji = qualityScore.overallQuality >= 0.85 ? '🟢' : qualityScore.overallQuality >= 0.7 ? '🟡' : '🔴';
+      qualityInfo = `\n\n${emoji} Quality: ${(qualityScore.overallQuality * 100).toFixed(0)}% | Compliance: ${(qualityScore.ruleCompliance * 100).toFixed(0)}% | Tone: ${(qualityScore.toneMatch * 100).toFixed(0)}% | Concise: ${(qualityScore.conciseness * 100).toFixed(0)}%` +
+        (qualityScore.pricingAccuracy !== undefined ? ` | Pricing: ${(qualityScore.pricingAccuracy * 100).toFixed(0)}%` : '') +
+        ` | Confidence: ${(qualityScore.computedConfidence * 100).toFixed(0)}%`;
+
+      // Pipeline metadata
+      const dna = pipelineResult.classification.renterDNA;
+      const verifyStatus = pipelineResult.verification.passed ? 'PASS' : `FAIL(${pipelineResult.verification.issues.length})`;
+      qualityInfo += `\n🧠 Pipeline: ${pipelineResult.classification.intent} | DNA: ${dna.style}/${dna.expertise}/${dna.driver} | Verify: ${verifyStatus}`;
+      if (pipelineResult.innerMonologue) {
+        qualityInfo += `\n💭 Goal: ${pipelineResult.innerMonologue.goal}`;
+      }
+      qualityInfo += ` | Tokens: ${pipelineResult.inputTokens}→${pipelineResult.outputTokens}`;
+    } catch (qualityErr) {
+      this.logger.debug(`Quality scoring failed in sim: ${qualityErr.message}`);
+    }
+
+    let replyText = pipelineResult.response;
+    if (validationResult.blocked) {
+      const repairResult = this.repairService.attemptRepair(pipelineResult.response, validationResult, { account: account || undefined });
+      if (repairResult.repaired) {
+        const revalidation = await this.validationService.validateResponse(
+          repairResult.content, { responseType: 'customer_message', context: { rental: { account }, message: { content: userText } } },
         );
-
-        const emoji = qualityScore.overallQuality >= 0.85 ? '🟢' : qualityScore.overallQuality >= 0.7 ? '🟡' : '🔴';
-        qualityInfo = `\n\n${emoji} Quality: ${(qualityScore.overallQuality * 100).toFixed(0)}% | Compliance: ${(qualityScore.ruleCompliance * 100).toFixed(0)}% | Tone: ${(qualityScore.toneMatch * 100).toFixed(0)}% | Concise: ${(qualityScore.conciseness * 100).toFixed(0)}%` +
-          (qualityScore.pricingAccuracy !== undefined ? ` | Pricing: ${(qualityScore.pricingAccuracy * 100).toFixed(0)}%` : '') +
-          ` | Confidence: ${(qualityScore.computedConfidence * 100).toFixed(0)}%`;
-      } catch (qualityErr) {
-        this.logger.debug(`Quality scoring failed in sim: ${qualityErr.message}`);
+        if (!revalidation.blocked) {
+          replyText = repairResult.content;
+          validationResult.blocked = false;
+        }
       }
-
-      let replyText = response.content;
       if (validationResult.blocked) {
-        // Attempt deterministic repair
-        const repairResult = this.repairService.attemptRepair(response.content, validationResult, { account: account || undefined });
-        if (repairResult.repaired) {
-          const revalidation = await this.validationService.validateResponse(
-            repairResult.content, { responseType: 'customer_message', context: { rental: { account }, message: { content: userText } } },
-          );
-          if (!revalidation.blocked) {
-            replyText = repairResult.content;
-            validationResult.blocked = false;
-          }
-        }
-        if (validationResult.blocked) {
-          replyText = `[BLOCKED by validation: ${validationResult.violations.join(', ')}]\n\nOriginal: ${response.content}`;
-        }
+        replyText = `[BLOCKED by validation: ${validationResult.violations.join(', ')}]\n\nOriginal: ${pipelineResult.response}`;
       }
+    }
 
-      // Track conversation history for multi-turn awareness
-      conversationHistory.push(
-        { role: 'user', content: userText },
-        { role: 'assistant', content: response.content },
-      );
+    // Track conversation history for multi-turn awareness
+    conversationHistory.push(
+      { role: 'user', content: userText },
+      { role: 'assistant', content: pipelineResult.response },
+    );
 
-      return { replyText, qualityInfo, rawContent: response.content };
+    return { replyText, qualityInfo, rawContent: pipelineResult.response };
   }
 
   /**

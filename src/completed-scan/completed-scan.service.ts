@@ -50,6 +50,9 @@ export class CompletedScanService {
     if (totalActioned > 0) {
       this.logger.log(`Completed rental sweep: ${totalActioned} action(s) taken`);
     }
+
+    // Auto-send review nudges for completed rentals with good returns
+    await this.sendPendingReviewNudges();
   }
 
   /**
@@ -357,6 +360,76 @@ export class CompletedScanService {
       this.logger.log(`Daily reconciliation: cancelled ${cancelled} phantom revenue entries`);
     } else {
       this.logger.log('Daily reconciliation: no phantom entries found');
+    }
+  }
+
+  /**
+   * Auto-send thank you + review nudge for completed rentals with good returns.
+   * Targets: outcome='good', not blacklisted/flagged, thank_you not yet sent,
+   * processed 24h–7d ago. Capped at 3 per run to avoid spam bursts.
+   */
+  private async sendPendingReviewNudges(): Promise<void> {
+    try {
+      const now = Date.now();
+      const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+
+      const pending = await this.prisma.return_processing.findMany({
+        where: {
+          outcome: 'good',
+          thank_you_sent: false,
+          blacklisted: false,
+          flagged: false,
+          processed_at: {
+            gte: sevenDaysAgo,
+            lte: oneDayAgo,
+          },
+        },
+        take: 3, // Cap per run
+      });
+
+      if (pending.length === 0) return;
+
+      this.logger.log(`Review nudge: ${pending.length} pending thank-you message(s) to send`);
+
+      for (const rp of pending) {
+        // Look up rental data separately (no Prisma relation on return_processing)
+        const rental = await this.prisma.rental.findUnique({
+          where: { id: rp.rental_id },
+          select: { id: true, listing_id: true, title: true, account: true, renter_info: true },
+        });
+        if (!rental?.listing_id) continue;
+
+        try {
+          const account = (rental.account || 'dbcinema') as 'dbcinema' | 'leo';
+          const reviewRequest = `\n\nIf you enjoyed the experience, we'd really appreciate a quick review on Hygglo — it helps us a lot!`;
+          const message = account === 'leo'
+            ? `Hey! Thanks so much for renting with me, really appreciate it! Hope the gear worked out great for your project. If you'd like to rent again, use code db15off for 15% off your next booking. Cheers!` + reviewRequest
+            : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production. As a thank you, here's 15% off your next rental — just use code db15off when booking. Looking forward to working with you again!` + reviewRequest;
+
+          const sent = await this.hyggloService.sendMessage(rental.listing_id, message, true);
+
+          if (sent) {
+            await this.prisma.return_processing.update({
+              where: { id: rp.id },
+              data: { thank_you_sent: true, thank_you_text: message },
+            });
+
+            this.logger.log(`Auto-sent review nudge for "${rental.title}"`);
+            this.telegramService.sendRentalUpdate('system', {
+              type: 'info',
+              priority: 'normal',
+              data: { message: `Auto-sent review nudge for "${rental.title}" (${account})` },
+            });
+          } else {
+            this.logger.warn(`Review nudge send failed for "${rental.title}" — message not delivered`);
+          }
+        } catch (sendErr) {
+          this.logger.warn(`Review nudge failed for rental ${rp.rental_id}: ${sendErr.message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`Review nudge sweep failed: ${err.message}`);
     }
   }
 

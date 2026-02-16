@@ -1234,6 +1234,11 @@ export class HyggloService implements OnModuleInit {
 
           let lastCheckTime = this.lastMessageCheckTime.get(rental.listingId);
 
+          // RACE CONDITION FIX: Update lastMessageCheckTime IMMEDIATELY after reading messages,
+          // BEFORE processing them. This prevents concurrent scan cycles from seeing the same
+          // messages as "new" while the first scan is still processing.
+          this.lastMessageCheckTime.set(rental.listingId, Date.now());
+
           // On first check after startup, only treat messages from a recent window as "new"
           // to avoid re-processing the entire chat history on every restart
           if (lastCheckTime === undefined) {
@@ -1270,9 +1275,6 @@ export class HyggloService implements OnModuleInit {
               });
             }
           }
-
-          // Update last check time
-          this.lastMessageCheckTime.set(rental.listingId, Date.now());
         } catch (error) {
           this.logger.debug(`checkNewMessages: error reading messages for ${rental.listingId}: ${error.message}`);
         }

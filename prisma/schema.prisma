@@ -524,6 +524,7 @@ model follow_up_state {
   times_auto_assigned_at   DateTime?
   conversation_summary     String?   @db.Text
   rejected_suggestions     String?   // comma-separated list of items the renter declined
+  structured_state         Json?     // { confirmedItems, agreedTimes, questionsAsked, etc. }
   status                String    @default("active") // 'active', 'completed', 'paused', 'auto_accepted'
   created_at            DateTime  @default(now())
   updated_at            DateTime  @updatedAt

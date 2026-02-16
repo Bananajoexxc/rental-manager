@@ -11,6 +11,13 @@ export interface AiResponse {
   outputTokens: number;
 }
 
+export interface ToolHandlers {
+  checkAvailability?: (itemName: string, startDate: string, endDate: string) => Promise<string>;
+  lookupPricing?: (itemName: string, days: number) => Promise<string>;
+  checkCompatibility?: (items: string[]) => Promise<string>;
+  getRentalDetails?: (rentalId: string) => Promise<string>;
+}
+
 export interface AiContext {
   rules?: string;
   memories?: string;
@@ -25,6 +32,8 @@ export interface AiContext {
   conversationStage?: string;
   /** Image URLs attached to the current renter message (for multimodal analysis) */
   imageUrls?: string[];
+  /** Tool handlers for function calling — AI can request real-time data */
+  toolHandlers?: ToolHandlers;
 }
 
 @Injectable()
@@ -49,6 +58,82 @@ export class AiService {
     this.modelLightweight = this.configService.get<string>('CLAUDE_MODEL_LIGHTWEIGHT') || 'claude-3-haiku-20240307';
   }
 
+  /** Tool schemas for Claude function calling */
+  private readonly TOOLS: Anthropic.Tool[] = [
+    {
+      name: 'check_availability',
+      description: 'Check if a specific item is available for given dates',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          item_name: { type: 'string', description: 'Equipment name' },
+          start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
+          end_date: { type: 'string', description: 'End date YYYY-MM-DD' },
+        },
+        required: ['item_name', 'start_date', 'end_date'],
+      },
+    },
+    {
+      name: 'lookup_pricing',
+      description: 'Get pricing for a specific item for a number of days',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          item_name: { type: 'string', description: 'Equipment name' },
+          days: { type: 'number', description: 'Number of rental days' },
+        },
+        required: ['item_name', 'days'],
+      },
+    },
+    {
+      name: 'check_compatibility',
+      description: 'Check if items are compatible with each other (mount, batteries, cards)',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          items: { type: 'array', items: { type: 'string' }, description: 'List of equipment names' },
+        },
+        required: ['items'],
+      },
+    },
+    {
+      name: 'get_rental_details',
+      description: 'Get current rental booking details (status, dates, price)',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          rental_id: { type: 'string', description: 'Rental ID' },
+        },
+        required: ['rental_id'],
+      },
+    },
+  ];
+
+  /** Execute a single tool call and return the result string */
+  private async executeToolCall(
+    name: string,
+    input: any,
+    handlers: ToolHandlers,
+  ): Promise<string> {
+    try {
+      switch (name) {
+        case 'check_availability':
+          return handlers.checkAvailability?.(input.item_name, input.start_date, input.end_date)
+            ?? 'Tool not available';
+        case 'lookup_pricing':
+          return handlers.lookupPricing?.(input.item_name, input.days) ?? 'Tool not available';
+        case 'check_compatibility':
+          return handlers.checkCompatibility?.(input.items) ?? 'Tool not available';
+        case 'get_rental_details':
+          return handlers.getRentalDetails?.(input.rental_id) ?? 'Tool not available';
+        default:
+          return `Unknown tool: ${name}`;
+      }
+    } catch (err) {
+      return `Tool error: ${err.message}`;
+    }
+  }
+
   private enrichContext(context: AiContext): { context: AiContext; temporalBlock: string } {
     const now = new Date();
 
@@ -61,13 +146,8 @@ export class AiService {
       `Tomorrow: ${tomorrow.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}\n` +
       `When a renter mentions a relative date, resolve it and state the actual date in your reply.`;
 
-    // 2. Timestamp conversation messages
-    const enrichedHistory = context.conversationHistory?.map(msg => {
-      if (!msg.timestamp) return msg;
-      const ts = new Date(msg.timestamp);
-      const prefix = `[${ts.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} ${ts.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}]`;
-      return { ...msg, content: `${prefix} ${msg.content}` };
-    });
+    // 2. Conversation history — strip timestamps to prevent AI from mimicking [timestamp] prefix format
+    const enrichedHistory = context.conversationHistory;
 
     // 3. Rental countdown
     let enrichedRentalContext = context.rentalContext;
@@ -137,10 +217,10 @@ export class AiService {
       '- Guide renters through identity verification when needed\n' +
       '- Mention that longer rentals work out cheaper (without revealing thresholds)\n' +
       '- Say "we don\'t currently stock that" for items not in MASTER_INVENTORY\n' +
-      '- Handle first-time rental discounts — ONLY when the context above contains "FIRST-TIME RENTER" (the system verifies this from their Hygglo profile):\n' +
+      '- Handle first-time rental discounts — but ONLY if the context above contains a "--- FIRST-TIME RENTER" section. The system verifies first-time status from their Hygglo profile before adding this section. If this section is ABSENT from the context, you MUST NOT offer any first-time discount regardless of profit amount:\n' +
       '  → PROACTIVE (context says "PROACTIVE DISCOUNT"): Offer the £15 discount naturally in your response without them asking. Work it in casually. Add <memory>FIRST_TIME_DISCOUNT_ACCEPTED</memory> in your response.\n' +
       '  → REACTIVE (context says "FIRST-TIME RENTER" without "PROACTIVE"): Only offer if they ask about first-time discounts/vouchers. Say the voucher feature isn\'t working but you can manually knock £15 off. If they accept, confirm and add <memory>FIRST_TIME_DISCOUNT_ACCEPTED</memory>.\n' +
-      '  → NO CONTEXT / under £120: If they ask about first-time discounts but there is no "FIRST-TIME RENTER" section in context, say "the first-time discount isn\'t available at the moment unfortunately". Keep it brief.\n' +
+      '  → NO "FIRST-TIME RENTER" SECTION IN CONTEXT: If they ask about first-time discounts but there is NO "--- FIRST-TIME RENTER" section anywhere in the context above, you CANNOT offer any discount. Just say "the first-time discount isn\'t available at the moment unfortunately". Do NOT offer £15 off. Do NOT mention any amount. Keep it brief.\n' +
       '- PRICE MATCH: If a renter sends a screenshot or link showing the same item cheaper elsewhere, verify ALL of these:\n' +
       '  1. SAME ITEM: The competitor listing must be for the SAME item(s) or equivalent bundle. Different models/brands don\'t count.\n' +
       '  2. LOCATION: The competitor\'s rental location must be in London Zone 1 or Zone 2 (central London, inner boroughs like Camden, Islington, Hackney, Brixton, Peckham, Shoreditch, etc.). If the location is Zone 3+ or outside London, the price match does NOT apply.\n' +
@@ -150,9 +230,14 @@ export class AiService {
       '  - Wrong item: "that\'s a different model so the price match wouldn\'t apply here"\n' +
       '  - Outside Zone 1-2: "our price match only covers central London (Zone 1-2) rentals"\n' +
       '  - Price not visible: "I can\'t quite make out the price — could you send a clearer screenshot?"\n' +
-      '  - No screenshot/proof: "if you send me a screenshot of the listing I can check if we can match it"\n\n' +
+      '  - No screenshot/proof: "if you send me a screenshot of the listing I can check if we can match it"\n' +
+      '- ADD ITEM TO EXISTING BOOKING: If a renter with a CONFIRMED booking asks to add an item (e.g. "can I also get a tripod?", "I\'d like to add a lens"), ' +
+      'tell them they\'ll need to send a new separate rental request on the platform for the additional item. ' +
+      'Keep it casual: "for adding extra items I\'d need you to send a new request on the platform for [item] — that way I can confirm availability and get it sorted for you". ' +
+      'Add <memory>ADD_ITEM_REQUESTED:item=ITEM_NAME</memory> with the specific item they asked about. ' +
+      'This ONLY applies when they already have a confirmed/accepted booking — during inquiry stage, just handle it as part of the normal conversation.\n\n' +
 
-      'THINGS YOU MUST ESCALATE TO DANIEL (say "Let me check with Daniel and get back to you"):\n' +
+      'THINGS YOU MUST ESCALATE (say "let me check and get back to you"):\n' +
       '- ANY price negotiation or "too expensive" complaint (EXCEPT first-time discount and price match handled above)\n' +
       '- ANY request for free items, compensation, or fee waiver\n' +
       '- Same-day rental approval\n' +
@@ -160,6 +245,7 @@ export class AiService {
       '- Technical specs you don\'t have data for\n\n' +
 
       'THINGS YOU CANNOT DO (hard constraints — violation = system block):\n' +
+      '- Offer first-time discounts or £15 off UNLESS the context above contains "--- FIRST-TIME RENTER". If that section is missing, the renter is NOT verified as first-time. Say "not available at the moment" and move on. NEVER offer money off based on your own judgement.\n' +
       '- Fabricate facts: NO made-up specs, runtimes, distances, prices, or item names\n' +
       '- Break lens mount physics: Sony cameras = Sony E-mount ONLY. Blackmagic = Canon EF ONLY. These are physically incompatible.\n' +
       '- Mention platform fees, service fees, Hygglo, or any platform name — not even to deny them\n' +
@@ -170,7 +256,9 @@ export class AiService {
       '- Use markdown formatting (bold, bullets, headers) — plain text only, like texting\n' +
       '- Add signatures, sign-offs, or "Cheers, Daniel" — just end naturally\n' +
       '- Downsell: never say renter has "enough" or "doesn\'t need" something\n' +
-      '- Offer distance discount when the renter is NOT being redirected from a non-central listing. The discount is an apology for redirecting from a distant listing location (Hackney, Shoreditch, Croydon, etc.) to central. It does NOT apply for central-zone listings (SE1, SW1, WC2, EC1, W1, E1 areas) where Trafalgar Square is already nearby.\n',
+      '- Offer distance discount when the renter is NOT being redirected from a non-central listing. The discount is an apology for redirecting from a distant listing location (Hackney, Shoreditch, Croydon, etc.) to central. It does NOT apply for central-zone listings (SE1, SW1, WC2, EC1, W1, E1 areas) where Trafalgar Square is already nearby.\n' +
+      '- Promise actions you cannot perform: you CANNOT "add items to a booking", "update pickup times in the system", "send payment links", or "check and get back later". You can only draft messages. Say "I\'ll pass that on" or "Daniel will sort that" instead of "I\'ll do X".\n' +
+      '- Guess technical specs (battery life, exact weight, firmware versions, flare colors) unless the data is in your context. Say "I\'d need to double-check that" rather than guessing.\n',
     );
 
     return parts.join('\n');
@@ -299,6 +387,49 @@ export class AiService {
   }
 
   /**
+   * Preflight reasoning: extract verified facts before the main AI call.
+   * Forces the model to "think before speaking" — prevents hallucinated items/prices/status.
+   * Uses Haiku (~150 input + ~100 output tokens). Cost: ~$0.00005/message.
+   */
+  async preflightReasoning(
+    renterMessage: string,
+    rentalTitle: string,
+    rentalStatus: string,
+    extractedItems: string[],
+    rentalDates: { start?: Date; end?: Date },
+  ): Promise<{ listingItem: string; renterIntent: string; status: string; warnings: string[] }> {
+    const startStr = rentalDates.start ? new Date(rentalDates.start).toLocaleDateString('en-GB') : 'TBC';
+    const endStr = rentalDates.end ? new Date(rentalDates.end).toLocaleDateString('en-GB') : 'TBC';
+
+    const prompt = `Given this rental context, extract verified facts. Be precise — do NOT guess.
+
+Listing title: "${rentalTitle}"
+Verified inventory item(s): ${extractedItems.length > 0 ? extractedItems.join(', ') : 'unknown — use listing title carefully'}
+Rental status: ${rentalStatus}
+Dates: ${startStr} to ${endStr}
+
+Renter message: "${renterMessage}"
+
+Reply in this exact format:
+ITEM: [the actual equipment this rental is about — NOT SEO keywords]
+INTENT: [what the renter is asking/requesting in 1 sentence]
+STATUS: [current rental status in plain English]
+WARNINGS: [any issues — e.g. "renter may be confused about which item" or "none"]`;
+
+    const result = await this.processExtraction(prompt, { maxTokens: 150 });
+
+    const lines = result.content.split('\n');
+    const get = (prefix: string) => lines.find(l => l.startsWith(prefix))?.replace(prefix, '').trim() || '';
+
+    return {
+      listingItem: get('ITEM:') || extractedItems[0] || rentalTitle,
+      renterIntent: get('INTENT:'),
+      status: get('STATUS:') || rentalStatus,
+      warnings: get('WARNINGS:') === 'none' ? [] : [get('WARNINGS:')].filter(Boolean),
+    };
+  }
+
+  /**
    * Lightweight extraction/classification — uses Claude 3 Haiku (4x cheaper).
    * For structured data extraction, intent classification, summaries — NOT renter-facing.
    */
@@ -406,7 +537,7 @@ export class AiService {
       const maxTokens = context.maxTokens || (model === this.modelComplex ? 800 : 500);
 
       // Use prompt caching for the static system prompt portion
-      const response = await this.client.messages.create({
+      const createParams: any = {
         model,
         max_tokens: maxTokens,
         system: [
@@ -417,7 +548,43 @@ export class AiService {
           },
         ],
         messages,
-      });
+      };
+
+      // Add tools if handlers are provided
+      if (context.toolHandlers) {
+        createParams.tools = this.TOOLS;
+      }
+
+      let response = await this.client.messages.create(createParams);
+      let totalInput = response.usage.input_tokens;
+      let totalOutput = response.usage.output_tokens;
+
+      // Tool-use loop: max 3 iterations to prevent infinite loops
+      let iterations = 0;
+      while (response.stop_reason === 'tool_use' && context.toolHandlers && iterations < 3) {
+        iterations++;
+        const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
+        const toolResultContent: any[] = [];
+
+        for (const block of toolUseBlocks) {
+          const toolBlock = block as Anthropic.ToolUseBlock;
+          const result = await this.executeToolCall(toolBlock.name, toolBlock.input, context.toolHandlers);
+          this.logger.debug(`Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input)}) → ${result.substring(0, 100)}`);
+          toolResultContent.push({
+            type: 'tool_result',
+            tool_use_id: toolBlock.id,
+            content: result,
+          });
+        }
+
+        // Continue conversation with tool results
+        messages.push({ role: 'assistant', content: response.content as any });
+        messages.push({ role: 'user', content: toolResultContent });
+
+        response = await this.client.messages.create({ ...createParams, messages });
+        totalInput += response.usage.input_tokens;
+        totalOutput += response.usage.output_tokens;
+      }
 
       const rawContent = response.content
         .filter((block) => block.type === 'text')
@@ -428,15 +595,15 @@ export class AiService {
       const cleanContent = this.stripMemoryTags(rawContent);
 
       this.logger.log(
-        `Claude response: ${model}, in=${response.usage.input_tokens}, out=${response.usage.output_tokens}, memories=${memories.length}`,
+        `Claude response: ${model}, in=${totalInput}, out=${totalOutput}${iterations > 0 ? `, tools=${iterations}` : ''}, memories=${memories.length}`,
       );
 
       return {
         content: cleanContent,
         model,
         memories,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        inputTokens: totalInput,
+        outputTokens: totalOutput,
       };
     } catch (error) {
       this.logger.error(`Claude API error: ${error.message}`);

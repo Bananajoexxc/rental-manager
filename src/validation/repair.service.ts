@@ -68,21 +68,21 @@ export class RepairService {
       }
     }
 
-    // Address disclosure → replace with safe text
+    // Address disclosure → replace with safe text (no template-sounding language)
     if (violation.includes('address disclosed') || violation.includes('Exact pickup address')) {
       let repaired = text;
-      // Replace specific known addresses
-      repaired = repaired.replace(/11\s*Trafalgar\s*Square/gi, 'Central London (exact address shared after booking confirmed)');
-      repaired = repaired.replace(/5\s*Pall\s*Mall\s*East/gi, 'Central London (exact address shared after booking confirmed)');
+      // Replace specific known addresses with natural-sounding locations
+      repaired = repaired.replace(/11\s*Trafalgar\s*Square/gi, 'Central London, near Charing Cross');
+      repaired = repaired.replace(/5\s*Pall\s*Mall\s*East/gi, 'Central London, near Charing Cross');
       repaired = repaired.replace(/WC2N\s*5DN/gi, 'Central London');
       repaired = repaired.replace(/SW1Y\s*5BF/gi, 'Central London');
-      repaired = repaired.replace(/Statue\s*of\s*James\s*(II|the\s*Second)?/gi, 'Central London (Trafalgar Square area)');
+      repaired = repaired.replace(/Statue\s*of\s*James\s*(II|the\s*Second)?/gi, 'Central London');
       // Replace map links
-      repaired = repaired.replace(/https?:\/\/maps\.[^\s)]+/gi, '[map link shared after booking confirmed]');
+      repaired = repaired.replace(/https?:\/\/maps\.[^\s)]+/gi, '[shared after booking confirmed]');
       // Generic address pattern: number + street name + postcode
       repaired = repaired.replace(
         /\b\d+\s+[A-Z][a-z]+\s+(Street|Road|Square|Mall)\b[^.]*\b[A-Z]{2}\d{1,2}\s*\d[A-Z]{2}\b/gi,
-        'Central London (exact address shared after booking confirmed)',
+        'Central London, near Charing Cross',
       );
       if (repaired !== text) {
         return { content: repaired, description: 'Replaced address with safe location reference' };
@@ -100,6 +100,18 @@ export class RepairService {
       const repaired = cleaned.join(' ');
       if (repaired !== text) {
         return { content: repaired, description: 'Removed dual-account reference' };
+      }
+    }
+
+    // Internal escalation annotation leak → strip asterisk-wrapped internal text
+    // Catches AI hallucinations like "*Immediately informs Daniel via Telegram: '...'"*"
+    if (violation.includes('internal') || violation.includes('escalation') || violation.includes('annotation')) {
+      const repaired = text.replace(
+        /\*[^*]*(?:Daniel|Telegram|escalat|internal|notify|alert)[^*]*\*/gi,
+        '',
+      ).replace(/\s{2,}/g, ' ').trim();
+      if (repaired !== text) {
+        return { content: repaired, description: 'Stripped internal escalation annotation' };
       }
     }
 

@@ -11,6 +11,8 @@
  * All items referenced must exist in MASTER_INVENTORY (item-matcher.ts) for availability.
  */
 
+import { normalizeItemName } from '../utils/item-matcher';
+
 export interface CompatibilityEntry {
   item_name: string;
   battery_type: string;                // The actual battery model used
@@ -1063,6 +1065,127 @@ export function getCompatibleMainItems(accessoryName: string): string[] {
       c.compatible_accessories.some((b) => b.toLowerCase().includes(lower) || lower.includes(b.toLowerCase())),
     )
     .map((c) => c.item_name);
+}
+
+/** Find the best-matching compatibility entry for a given item name using fuzzy normalization */
+function findCompatEntry(name: string): CompatibilityEntry | undefined {
+  const norm = normalizeItemName(name);
+  return ITEM_COMPATIBILITY.find((c) => {
+    const cNorm = normalizeItemName(c.item_name);
+    return cNorm === norm || cNorm.includes(norm) || norm.includes(cNorm);
+  });
+}
+
+/** Check if a compatibility entry represents a camera (has a lens mount that accepts interchangeable lenses) */
+function isCamera(entry: CompatibilityEntry): boolean {
+  return entry.compatible_lenses.length > 0;
+}
+
+/** Check if a compatibility entry represents a lens */
+function isLens(entry: CompatibilityEntry): boolean {
+  return entry.battery_type === 'N/A (lens)';
+}
+
+/**
+ * Check for compatibility conflicts between items mentioned together.
+ * Detects lens mount mismatches and card type conflicts.
+ */
+export function checkCompatibilityConflicts(items: string[]): { conflicts: { camera: string; item: string; reason: string }[] } {
+  const conflicts: { camera: string; item: string; reason: string }[] = [];
+  if (items.length < 2) return { conflicts };
+
+  // Resolve each mentioned item to its compatibility entry
+  const resolved = items.map((name) => ({ name, entry: findCompatEntry(name) })).filter((r) => r.entry);
+
+  const cameras = resolved.filter((r) => r.entry && isCamera(r.entry));
+  const lenses = resolved.filter((r) => r.entry && isLens(r.entry));
+
+  for (const cam of cameras) {
+    const camEntry = cam.entry!;
+    const compatibleLensNorms = camEntry.compatible_lenses.map((l) => normalizeItemName(l));
+
+    for (const lens of lenses) {
+      const lensNorm = normalizeItemName(lens.name);
+      // Check if this lens is in the camera's compatible list
+      const isCompatible = compatibleLensNorms.some(
+        (cl) => cl === lensNorm || cl.includes(lensNorm) || lensNorm.includes(cl),
+      );
+
+      if (!isCompatible) {
+        conflicts.push({
+          camera: cam.name,
+          item: lens.name,
+          reason: `${cam.name} uses ${camEntry.lens_mount} — ${lens.name} uses ${lens.entry!.lens_mount}. These are NOT compatible.`,
+        });
+      }
+    }
+
+    // Check card type conflicts (e.g., CFexpress Type A card with a camera that only takes SD)
+    const cards = resolved.filter((r) => r.entry && r.entry.card_type !== 'N/A' && !isCamera(r.entry) && !isLens(r.entry) && r.entry.card_type.includes('CFexpress'));
+    for (const card of cards) {
+      if (!camEntry.card_type.includes('CFexpress') && card.entry!.card_type.includes('CFexpress')) {
+        conflicts.push({
+          camera: cam.name,
+          item: card.name,
+          reason: `${cam.name} uses ${camEntry.card_type} — ${card.name} (${card.entry!.card_type}) may not be compatible.`,
+        });
+      }
+    }
+  }
+
+  return { conflicts };
+}
+
+/**
+ * Detect missing essential companion items (e.g., camera without a lens).
+ * Returns suggestions from the compatibility matrix.
+ */
+export function detectMissingEssentials(items: string[]): { missing: { camera: string; category: string; suggestions: string[] }[] } {
+  const missing: { camera: string; category: string; suggestions: string[] }[] = [];
+  if (items.length === 0) return { missing };
+
+  const resolved = items.map((name) => ({ name, entry: findCompatEntry(name) })).filter((r) => r.entry);
+
+  const cameras = resolved.filter((r) => r.entry && isCamera(r.entry));
+  const lenses = resolved.filter((r) => r.entry && isLens(r.entry));
+  const allNorms = items.map((i) => normalizeItemName(i));
+
+  for (const cam of cameras) {
+    const camEntry = cam.entry!;
+
+    // Check if any compatible lens is mentioned
+    const hasLens = lenses.length > 0 || camEntry.compatible_lenses.some((cl) => {
+      const clNorm = normalizeItemName(cl);
+      return allNorms.some((n) => n === clNorm || n.includes(clNorm) || clNorm.includes(n));
+    });
+
+    if (!hasLens && camEntry.compatible_lenses.length > 0) {
+      // Suggest top 3 most popular compatible lenses (prefer zoom lenses first)
+      const suggestions = camEntry.compatible_lenses
+        .filter((l) => !l.includes('Anamorphic')) // Prefer standard lenses as suggestions
+        .slice(0, 3);
+      missing.push({
+        camera: cam.name,
+        category: 'lens',
+        suggestions: suggestions.length > 0 ? suggestions : camEntry.compatible_lenses.slice(0, 3),
+      });
+    }
+
+    // Check if camera needs specific cards not included and not mentioned
+    const includedStr = camEntry.included_with_rental.join(' ').toLowerCase();
+    if (camEntry.card_type.includes('CFexpress') && !includedStr.includes('cfexpress')) {
+      const hasCfCard = allNorms.some((n) => n.includes('cf express') || n.includes('cfexpress'));
+      if (!hasCfCard && camEntry.compatible_cards.some((c) => c.includes('CF Express'))) {
+        missing.push({
+          camera: cam.name,
+          category: 'card',
+          suggestions: camEntry.compatible_cards.filter((c) => c.includes('CF Express')),
+        });
+      }
+    }
+  }
+
+  return { missing };
 }
 
 /** Format compatibility info for AI context */

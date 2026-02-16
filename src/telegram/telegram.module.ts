@@ -19,6 +19,7 @@ import { ConversationStageModule } from '../conversation-tree/conversation-stage
 import { RecommendationModule } from '../recommendations/recommendation.module';
 import { AutolearnModule } from '../autolearn/autolearn.module';
 import { LostRevenueModule } from '../lost-revenue/lost-revenue.module';
+import { PipelineModule } from '../pipeline/pipeline.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { LostRevenueModule } from '../lost-revenue/lost-revenue.module';
     RecommendationModule,
     forwardRef(() => AutolearnModule),
     LostRevenueModule,
+    PipelineModule,
   ],
   providers: [TelegramService],
   exports: [TelegramService],

@@ -117,6 +117,31 @@ function scanForViolations(response: string, rental: any, scenario: string): Vio
     violations.push({ type: 'SYSTEM_ARCH', severity: 'critical', detail: 'Mentions system architecture', response });
   }
 
+  // 13. Hygglo platform name leak (audit fix 2c)
+  if (/\bHygglo\b/i.test(response)) {
+    violations.push({ type: 'PLATFORM_LEAK', severity: 'warning', detail: 'Mentions "Hygglo" platform name', response });
+  }
+
+  // 14. Timestamp prefix mimicking (audit fix 2d)
+  if (/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{1,2}\s+\w{3}\s+\d{2}:\d{2}\]/m.test(response)) {
+    violations.push({ type: 'TIMESTAMP_PREFIX', severity: 'warning', detail: 'Response starts with timestamp prefix', response });
+  }
+
+  // 15. Internal annotation leak — *...Daniel/Telegram...* (audit fix 1c)
+  if (/\*[^*]*(?:Daniel|Telegram|escalat|internal|notify)[^*]*\*/i.test(response)) {
+    violations.push({ type: 'INTERNAL_ANNOTATION', severity: 'critical', detail: 'Internal annotation leaked to renter', response });
+  }
+
+  // 16. Location placeholder leak (audit fix 2e)
+  if (/exact address shared after booking confirmed/i.test(response)) {
+    violations.push({ type: 'LOCATION_PLACEHOLDER', severity: 'warning', detail: 'Template location placeholder leaked', response });
+  }
+
+  // 17. Formatting artifacts — ]], triple newlines, markdown (audit fix 3d)
+  if (/\]\]/.test(response)) {
+    violations.push({ type: 'FORMAT_ARTIFACT', severity: 'warning', detail: 'Contains ]] bracket artifact', response });
+  }
+
   return violations;
 }
 

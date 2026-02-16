@@ -166,18 +166,22 @@ export class RenterProfileService {
    */
   async linkRentalToProfile(rentalId: string, profileId: string): Promise<void> {
     try {
-      await this.prisma.rental_renter_link.upsert({
+      // Check if link already exists — avoid double-incrementing total_rentals
+      const existing = await this.prisma.rental_renter_link.findUnique({
         where: {
           rental_id_renter_profile_id: {
             rental_id: rentalId,
             renter_profile_id: profileId,
           },
         },
-        create: {
+      });
+      if (existing) return; // Already linked, skip
+
+      await this.prisma.rental_renter_link.create({
+        data: {
           rental_id: rentalId,
           renter_profile_id: profileId,
         },
-        update: {},
       });
 
       // Get rental price to track total spend
@@ -204,14 +208,16 @@ export class RenterProfileService {
   }
 
   /**
-   * Check if a renter is returning (has previous rentals).
+   * Check if a renter is returning (has previous CONFIRMED rentals).
+   * Only counts rentals that actually happened (upcoming/ongoing/completed),
+   * not pending requests, rejections, or cancellations.
    */
   async isReturningRenter(renterName: string, currentRentalId: string): Promise<{
     isReturning: boolean;
     previousRentalCount: number;
     profileId?: string;
   }> {
-    // Find profile
+    // Find profile by hygglo_user_id first (most reliable), then name
     const profile = await this.prisma.renter_profile.findFirst({
       where: {
         OR: [
@@ -221,7 +227,7 @@ export class RenterProfileService {
       },
       include: {
         renter_links: {
-          include: { rental: true },
+          include: { rental: { select: { id: true, status: true } } },
         },
       },
     });
@@ -230,16 +236,67 @@ export class RenterProfileService {
       return { isReturning: false, previousRentalCount: 0 };
     }
 
-    // Count previous rentals (excluding current)
-    const previousRentals = profile.renter_links.filter(
-      (link) => link.rental_id !== currentRentalId,
+    // Only count rentals that actually happened — not pending requests or rejections
+    const CONFIRMED_STATUSES = ['upcoming', 'ongoing', 'completed', 'confirmed'];
+    const previousConfirmed = profile.renter_links.filter(
+      (link) =>
+        link.rental_id !== currentRentalId &&
+        CONFIRMED_STATUSES.some(s => (link.rental?.status || '').toLowerCase().includes(s)),
     );
 
     return {
-      isReturning: previousRentals.length > 0,
-      previousRentalCount: previousRentals.length,
+      isReturning: previousConfirmed.length > 0,
+      previousRentalCount: previousConfirmed.length,
       profileId: profile.id,
     };
+  }
+
+  /**
+   * Get active (upcoming/ongoing/confirmed) rentals for a profile, excluding a specific rental.
+   * Used for detecting additions/extensions when a returning renter sends a new request.
+   */
+  async getActiveRentalsForProfile(profileId: string, excludeRentalId: string): Promise<{
+    id: string;
+    title: string;
+    status: string;
+    start_date: Date | null;
+    end_date: Date | null;
+    listing_url: string;
+    account: string | null;
+  }[]> {
+    const ACTIVE_STATUSES = ['upcoming', 'ongoing', 'confirmed'];
+
+    const profile = await this.prisma.renter_profile.findUnique({
+      where: { id: profileId },
+      include: {
+        renter_links: {
+          include: {
+            rental: {
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                start_date: true,
+                end_date: true,
+                listing_url: true,
+                account: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!profile) return [];
+
+    return profile.renter_links
+      .filter(
+        (link) =>
+          link.rental_id !== excludeRentalId &&
+          ACTIVE_STATUSES.some(s => (link.rental?.status || '').toLowerCase().includes(s)),
+      )
+      .map((link) => link.rental)
+      .filter(Boolean) as any[];
   }
 
   /**

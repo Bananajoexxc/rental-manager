@@ -472,6 +472,70 @@ export function validateListingAgainstInventory(listingTitle: string): {
 }
 
 /**
+ * Multi-item listing validation. Splits combo titles (e.g. "FX3 + 28-70mm lens")
+ * into parts and validates each independently. Handles the case where the full title
+ * doesn't match but individual components do.
+ */
+export function validateListingItems(listingTitle: string): {
+  items: { name: string; matched: boolean; inventoryItem: string | null; maxQuantity: number }[];
+  allMatched: boolean;
+  someMatched: boolean;
+  noneMatched: boolean;
+  isComboListing: boolean;
+} {
+  const inventoryNames = getInventoryItemNames();
+
+  // First try the full title as a single match
+  const fullMatch = findBestMatch(listingTitle, inventoryNames);
+  if (fullMatch) {
+    return {
+      items: [{ name: listingTitle, matched: true, inventoryItem: fullMatch, maxQuantity: MASTER_INVENTORY[fullMatch] }],
+      allMatched: true,
+      someMatched: true,
+      noneMatched: false,
+      isComboListing: false,
+    };
+  }
+
+  // Split on combo separators: +, &, "and", "with", commas
+  const parts = listingTitle
+    .split(/\s*(?:\+|&|,)\s*|\s+(?:and|with)\s+/i)
+    .map(p => p.trim())
+    .filter(p => p.length > 2);
+
+  // If no meaningful split, treat as single unmatched item
+  if (parts.length <= 1) {
+    return {
+      items: [{ name: listingTitle, matched: false, inventoryItem: null, maxQuantity: 0 }],
+      allMatched: false,
+      someMatched: false,
+      noneMatched: true,
+      isComboListing: false,
+    };
+  }
+
+  // Validate each part independently
+  const items = parts.map(part => {
+    const match = findBestMatch(part, inventoryNames);
+    return {
+      name: part,
+      matched: !!match,
+      inventoryItem: match || null,
+      maxQuantity: match ? MASTER_INVENTORY[match] : 0,
+    };
+  });
+
+  const matchedCount = items.filter(i => i.matched).length;
+  return {
+    items,
+    allMatched: matchedCount === items.length,
+    someMatched: matchedCount > 0 && matchedCount < items.length,
+    noneMatched: matchedCount === 0,
+    isComboListing: true,
+  };
+}
+
+/**
  * Extract the requested quantity from a listing title (e.g. "4x Anker F2000" → 4).
  * Returns 1 if no quantity prefix is found.
  */

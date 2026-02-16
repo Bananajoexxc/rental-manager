@@ -45,6 +45,7 @@ export class ValidationService {
       this.checkPricingAccuracy(responseText, context),
       this.checkTemplateFidelity(responseText, context),
       this.checkInventoryHallucination(responseText),
+      this.checkInternalAnnotationLeak(responseText),
     ]);
 
     // Aggregate results
@@ -390,6 +391,34 @@ export class ValidationService {
       violations,
       severity: violations.length > 0 ? 'medium' : 'low',
       blocked: false, // Don't block, but flag for review
+    };
+  }
+
+  /**
+   * Validator 7: Internal Annotation Leak Detector
+   * Catches AI hallucinations like "*Immediately informs Daniel via Telegram*"
+   * and platform name leaks ("Hygglo")
+   */
+  private async checkInternalAnnotationLeak(text: string): Promise<ValidationResult> {
+    const violations: string[] = [];
+
+    // Asterisk-wrapped internal annotations with keywords
+    const internalPattern = /\*[^*]*(?:Daniel|Telegram|escalat|internal|notify owner|alert owner)[^*]*\*/gi;
+    const internalMatches = text.match(internalPattern);
+    if (internalMatches) {
+      violations.push(`Internal annotation leaked to renter: "${internalMatches[0].substring(0, 80)}"`);
+    }
+
+    // Platform name leak — "Hygglo" should never appear in renter-facing text
+    if (/\bHygglo\b/i.test(text)) {
+      violations.push(`Platform name "Hygglo" leaked — should say "the platform" or "the booking system"`);
+    }
+
+    return {
+      passed: violations.length === 0,
+      violations,
+      severity: violations.length > 0 ? 'high' : 'low',
+      blocked: violations.some(v => v.includes('Internal annotation')), // Block annotations, warn on Hygglo
     };
   }
 

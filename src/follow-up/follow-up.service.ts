@@ -10,6 +10,18 @@ import { ConversationStageService } from '../conversation-tree/conversation-stag
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
+export interface ConversationState {
+  confirmedItems?: string[];        // Items renter confirmed interest in
+  agreedPickupTime?: string;        // e.g. "Friday 2pm"
+  agreedReturnTime?: string;
+  renterShootType?: string;         // e.g. "wedding", "corporate"
+  questionsAsked?: string[];        // Questions bot has already asked (avoid repeating)
+  upsellAttempted?: boolean;        // Whether we've already tried upselling
+  upsellItems?: string[];           // What was upsold
+  priceQuoted?: number;             // Last price quoted
+  deliveryDiscussed?: boolean;
+}
+
 @Injectable()
 export class FollowUpService {
   private readonly logger = new Logger(FollowUpService.name);
@@ -46,6 +58,39 @@ export class FollowUpService {
     });
 
     this.logger.debug(`Initialized follow-up state for rental ${rentalId}`);
+  }
+
+  /**
+   * Get the structured conversation state for a rental.
+   */
+  async getStructuredState(rentalId: string): Promise<ConversationState> {
+    const state = await this.prisma.follow_up_state.findUnique({
+      where: { rental_id: rentalId },
+      select: { structured_state: true },
+    });
+    return (state?.structured_state as ConversationState) || {};
+  }
+
+  /**
+   * Merge partial state changes into the existing structured state.
+   * Array fields (confirmedItems, questionsAsked, upsellItems) are appended (deduplicated), not replaced.
+   */
+  async mergeStructuredState(rentalId: string, changes: Partial<ConversationState>): Promise<void> {
+    const current = await this.getStructuredState(rentalId);
+    const merged = { ...current, ...changes };
+    // Array fields: merge (append unique), don't replace
+    const arrayFields: (keyof ConversationState)[] = ['confirmedItems', 'questionsAsked', 'upsellItems'];
+    for (const field of arrayFields) {
+      const currentArr = current[field] as string[] | undefined;
+      const changesArr = changes[field] as string[] | undefined;
+      if (changesArr && currentArr) {
+        (merged as any)[field] = [...new Set([...currentArr, ...changesArr])];
+      }
+    }
+    await this.prisma.follow_up_state.update({
+      where: { rental_id: rentalId },
+      data: { structured_state: merged },
+    });
   }
 
   /**
@@ -272,7 +317,7 @@ export class FollowUpService {
         followUpMessage = `Hey, just wanted to let you know — if you've seen the ${itemName} listed for less anywhere in central London (Zone 1-2), I can actually beat that price by 5%. Just send me a screenshot of the listing showing the item, price, and location and I'll sort it out!`;
         this.logger.log(`Price match offer sent for ${rental?.title} (pricing objection detected in conversation)`);
       } else {
-        followUpMessage = `Just checking in - let me know if you had any other questions about the ${itemName}!`;
+        followUpMessage = `Just checking in - let me know if you had any other questions about the ${itemName}! By the way, if getting to the pickup spot is tricky, I can also arrange delivery.`;
       }
     } else {
       followUpMessage = `Still interested in the ${itemName}? Happy to hold it for you if needed.`;
