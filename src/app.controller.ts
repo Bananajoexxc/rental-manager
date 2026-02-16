@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query, Param, Res, Header, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Query, Param, Res, Header, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Prisma } from '@prisma/client';
@@ -1667,6 +1667,40 @@ export class AppController {
   @ApiResponse({ status: 200, description: 'Total inventory resale value with per-item breakdown' })
   async getInventoryValuation() {
     return await this.sellRecommenderService.getInventoryValuation();
+  }
+
+  // --- Insurance Claims ---
+
+  @Get('insurance/claims')
+  @ApiTags('Insurance')
+  @ApiOperation({ summary: 'List all insurance claims + total for new claims' })
+  @ApiResponse({ status: 200, description: 'Claims list with total' })
+  async getInsuranceClaims() {
+    return await this.appService.getInsuranceClaims();
+  }
+
+  @Post('insurance/claims')
+  @ApiTags('Insurance')
+  @ApiOperation({ summary: 'Create a new insurance claim' })
+  @ApiResponse({ status: 201, description: 'Claim created' })
+  async createInsuranceClaim(@Body() body: { amount: number; item: string; damage: string; notes?: string; is_new: boolean }) {
+    if (!body.amount || !body.item || !body.damage || body.is_new === undefined) {
+      return { error: 'amount, item, damage, and is_new are required' };
+    }
+    return await this.appService.createInsuranceClaim(body);
+  }
+
+  @Delete('insurance/claims/:id')
+  @ApiTags('Insurance')
+  @ApiOperation({ summary: 'Delete an insurance claim' })
+  @ApiResponse({ status: 200, description: 'Claim deleted' })
+  async deleteInsuranceClaim(@Param('id') id: string) {
+    try {
+      await this.appService.deleteInsuranceClaim(id);
+      return { success: true };
+    } catch {
+      return { error: 'Claim not found' };
+    }
   }
 
   @Get('dashboard')

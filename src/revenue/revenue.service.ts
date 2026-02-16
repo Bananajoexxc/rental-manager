@@ -499,6 +499,31 @@ export class RevenueService {
       cumulative = cumulativeAdj;
     }
 
+    // Merge DB-backed insurance claims (is_new=true) into damageRevenue per month
+    try {
+      const dbClaims = await this.prisma.insurance_claim.findMany({
+        where: { is_new: true },
+      });
+      if (dbClaims.length > 0) {
+        const claimsByMonth = new Map<string, number>();
+        for (const c of dbClaims) {
+          const m = c.claim_date.toISOString().substring(0, 7);
+          claimsByMonth.set(m, (claimsByMonth.get(m) || 0) + c.amount);
+        }
+        let recalcCumulative = 0;
+        for (const entry of results) {
+          const dbAmount = claimsByMonth.get(entry.month) || 0;
+          if (dbAmount > 0) {
+            entry.damageRevenue += dbAmount;
+            entry.revenue += dbAmount;
+          }
+          recalcCumulative += entry.revenue;
+          entry.cumulative = Math.round(recalcCumulative * 100) / 100;
+        }
+        cumulative = recalcCumulative;
+      }
+    } catch { /* DB claims optional */ }
+
     // Compute stats: avg monthly, strongest month, weakest month
     // Exclude current month from "worst" — it's always incomplete and would always win
     // Exclude first 12 months — early revenue is not representative of mature performance
@@ -2827,7 +2852,7 @@ export class RevenueService {
     // Gross rental revenue (this is already Daniel's earnings after ~36% platform fees)
     const grossRevenue = taxYearRentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
 
-    // Insurance/damage payouts from historical data (these months in the tax year)
+    // Insurance/damage payouts from historical data + DB claims (these months in the tax year)
     let insurancePayouts = 0;
     const taxYearStartMonth = `${taxYear.start.getFullYear()}-${String(taxYear.start.getMonth() + 1).padStart(2, '0')}`;
     const nowMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -2836,6 +2861,15 @@ export class RevenueService {
         insurancePayouts += hist.damageCosts;
       }
     }
+    // Also add DB-backed insurance claims (is_new=true) for this tax year
+    try {
+      const dbClaimsForTax = await this.prisma.insurance_claim.findMany({
+        where: { is_new: true, claim_date: { gte: taxYear.start, lte: now } },
+      });
+      for (const c of dbClaimsForTax) {
+        insurancePayouts += c.amount;
+      }
+    } catch { /* DB claims optional */ }
 
     // Revenue excluding insurance
     const revenueExInsurance = grossRevenue;

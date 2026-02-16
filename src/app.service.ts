@@ -588,49 +588,65 @@ export class AppService {
   }
 
   async getBookingsByStage(account?: string) {
-    // Active pipeline only — conversations that are actually live or recently finished
-    // Excludes old completed/cancelled/obsolete rentals
-    const twoWeeksAgo = new Date();
-    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // Conversation funnel: derive state from ACTUAL rental data (status, order_step, messages).
+    // Rolling 7-day window. Funnel state derived from ground truth, not AI-set conversation_stage.
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const twoDaysAgo = new Date();
-    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-    const where: any = {
-      status: 'active',
-      rental: {
-        OR: [
-          { status: 'pending', start_date: { gte: todayStart } }, // Pending with future start date only
-          { status: { in: ['upcoming', 'ongoing'] } },            // Accepted/active rentals
-          { end_date: { gte: twoDaysAgo }, status: { in: ['completed', 'ongoing'] } }, // Drop 48h after end
-        ],
-        ...(account ? { account } : {}),
+    const acctFilter = account ? { account } : {};
+    const seen = new Set<string>();
+    const counts: Record<string, number> = {};
+
+    const classify = (r: any) => {
+      if (seen.has(r.id)) return;
+      seen.add(r.id);
+      const fus = r.follow_up_state;
+      let stage: string;
+
+      if (r.status === 'upcoming' || r.status === 'ongoing') {
+        stage = 'confirmed';
+      } else if (r.status === 'completed') {
+        stage = 'completed';
+      } else if (r.status === 'cancelled' || fus?.conversation_stage === 'dead') {
+        stage = 'dead';
+      } else if (r.order_step === 'VERIFIED' || r.order_step === 'BOOKED_AFTER_VERIFIED') {
+        stage = 'pending'; // platform verifying
+      } else if (fus?.last_renter_message_at) {
+        stage = 'interested'; // renter engaged in conversation
+      } else {
+        stage = 'inquiry'; // request received, no renter messages yet
+      }
+
+      counts[stage] = (counts[stage] || 0) + 1;
+    };
+
+    const select = {
+      id: true, status: true, order_step: true,
+      follow_up_state: {
+        select: { conversation_stage: true, last_renter_message_at: true },
       },
     };
 
-    const states = await this.prisma.follow_up_state.findMany({
-      where,
-      select: { conversation_stage: true },
+    // 1. All rentals created in the last 7 days (the pipeline)
+    const recent = await this.prisma.rental.findMany({
+      where: { created_at: { gte: sevenDaysAgo }, ...acctFilter },
+      select,
     });
+    for (const r of recent) classify(r);
 
-    const counts: Record<string, number> = {};
-    for (const s of states) {
-      const stage = s.conversation_stage || 'inquiry';
-      counts[stage] = (counts[stage] || 0) + 1;
-    }
-
-    // "Pending" = owner accepted on Hygglo but platform verifying renter (order_step='VERIFIED').
-    // Scoped to active/future rentals only — old expired verifications don't inflate the count.
-    const pendingVerCount = await this.prisma.rental.count({
-      where: {
-        order_step: 'VERIFIED',
-        start_date: { gte: todayStart },
-        status: { notIn: ['completed', 'cancelled', 'obsolete'] },
-        ...(account ? { account } : {}),
-      },
+    // 2. Upcoming/ongoing rentals regardless of creation date
+    const active = await this.prisma.rental.findMany({
+      where: { status: { in: ['upcoming', 'ongoing'] }, ...acctFilter },
+      select,
     });
-    counts['pending'] = pendingVerCount;
+    for (const r of active) classify(r);
+
+    // 3. Rentals that completed (end_date) in the last 7 days
+    const recentlyCompleted = await this.prisma.rental.findMany({
+      where: { status: 'completed', end_date: { gte: sevenDaysAgo }, ...acctFilter },
+      select,
+    });
+    for (const r of recentlyCompleted) classify(r);
 
     return counts;
   }
@@ -1017,5 +1033,42 @@ export class AppService {
     }
 
     return { success: sent, message: sent ? 'Thank you sent' : 'Failed to send' };
+  }
+
+  /**
+   * Get all insurance claims + total for new claims.
+   */
+  async getInsuranceClaims() {
+    const claims = await this.prisma.insurance_claim.findMany({
+      orderBy: { claim_date: 'desc' },
+    });
+
+    const total = claims
+      .filter(c => c.is_new)
+      .reduce((sum, c) => sum + c.amount, 0);
+
+    return { total: Math.round(total * 100) / 100, claims };
+  }
+
+  /**
+   * Create a new insurance claim.
+   */
+  async createInsuranceClaim(data: { amount: number; item: string; damage: string; notes?: string; is_new: boolean }) {
+    return await this.prisma.insurance_claim.create({
+      data: {
+        amount: data.amount,
+        item: data.item,
+        damage: data.damage,
+        notes: data.notes || null,
+        is_new: data.is_new,
+      },
+    });
+  }
+
+  /**
+   * Delete an insurance claim by ID.
+   */
+  async deleteInsuranceClaim(id: string) {
+    return await this.prisma.insurance_claim.delete({ where: { id } });
   }
 }

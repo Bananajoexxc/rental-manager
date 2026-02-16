@@ -1372,6 +1372,168 @@
     </div>
     </div>
 
+    <!-- Insurance Claims Panel -->
+    <div class="panel-wrapper" data-panel="insurance" data-panel-label="Insurance Claims">
+    <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Insurance Claims</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header">
+        <span>Insurance Claims <span id="insuranceTotal" style="font-size:14px;color:#22c55e;font-weight:700;"></span></span>
+        <button onclick="openInsuranceModal()" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;">+ Add</button>
+      </div>
+      <div class="section-body padded" id="insuranceBody">
+        <div class="loading"><div class="spinner"></div><br>Loading claims...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Insurance Add Modal -->
+    <div id="insuranceModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:rgba(18,21,32,0.95);border-radius:14px;border:1px solid rgba(255,255,255,0.1);padding:24px;max-width:460px;width:90%;margin:auto;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);backdrop-filter:blur(20px);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h3 style="margin:0;font-size:16px;">Add Insurance Claim</h3>
+          <button onclick="closeInsuranceModal()" style="background:none;border:none;color:#8b8fa3;font-size:20px;cursor:pointer;">&times;</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="font-size:11px;color:#8b8fa3;display:block;margin-bottom:4px;">Item</label>
+            <select id="insuranceItem" style="width:100%;padding:8px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;box-sizing:border-box;appearance:auto;">
+              <option value="" disabled selected>Select item...</option>
+              <optgroup label="Camera Bodies">
+                <option>Sony FX3</option>
+                <option>Sony A7 III</option>
+                <option>Sony A7 II</option>
+                <option>Fujifilm X100 VI</option>
+                <option>BMPCC 6K Pro</option>
+                <option>BMPCC 6K Full Frame</option>
+              </optgroup>
+              <optgroup label="Anamorphic Lenses">
+                <option>Anamorphic Blazar Remus 33mm</option>
+                <option>Anamorphic Blazar Remus 45mm</option>
+                <option>Anamorphic Blazar Remus 65mm</option>
+                <option>Anamorphic Blazar Remus 100mm</option>
+                <option>Anamorphic Great Joy lens 35mm</option>
+                <option>Anamorphic Great Joy lens 50mm</option>
+                <option>Anamorphic Great Joy lens 85mm</option>
+              </optgroup>
+              <optgroup label="Sony Lenses">
+                <option>Sony GM 24-70mm f2.8</option>
+                <option>Sony GM 16-35mm f2.8</option>
+                <option>Sony GM 70-200mm f2.8</option>
+                <option>Sony GM 90mm f2.8</option>
+                <option>Sony 28-70mm</option>
+                <option>Sony 11mm f2.8 fisheye</option>
+              </optgroup>
+              <optgroup label="Canon Lenses">
+                <option>Canon EF 24-105mm f4</option>
+                <option>Canon EF 16-35mm f2.8</option>
+              </optgroup>
+              <optgroup label="Lights &amp; Modifiers">
+                <option>Softbox 85cm</option>
+                <option>LED light panels RGB</option>
+                <option>Nanlite Forza 300</option>
+                <option>Nanlite Pavotube 30x II</option>
+                <option>Nanlite 500B</option>
+                <option>Ambitful RGB light tubes 2x set</option>
+                <option>5-in-1 reflector panel</option>
+                <option>Camera flash</option>
+              </optgroup>
+              <optgroup label="Support &amp; Gimbals">
+                <option>C-stand</option>
+                <option>Small rig tripod</option>
+                <option>Sirui tripod</option>
+                <option>DJI RS3 Pro gimbal</option>
+                <option>Motorized slider</option>
+                <option>Tilta Nucleus Nano 2 follow focus</option>
+                <option>Tilta shoulder rig</option>
+                <option>Monopod arm support</option>
+              </optgroup>
+              <optgroup label="Monitors &amp; Transmitters">
+                <option>Atomos Ninja V</option>
+                <option>Hollyland Mars 4K transmitter</option>
+                <option>Hollyland Pyro S transmitter</option>
+                <option>Hollyland 7-inch monitor</option>
+              </optgroup>
+              <optgroup label="Audio">
+                <option>Rode Video Mic Go</option>
+                <option>Rode Wireless Mic Pro set</option>
+                <option>Rode Video Mic Pro Plus</option>
+                <option>Audio boom mic Sennheiser</option>
+                <option>DJI Wireless Mics</option>
+                <option>DJI Mic 2 wireless</option>
+                <option>JBL wireless microphones</option>
+              </optgroup>
+              <optgroup label="Drones &amp; Action Cameras">
+                <option>DJI Mavic 3 Pro</option>
+                <option>DJI Mini 4 Pro</option>
+                <option>DJI Osmo Action Pro 5</option>
+                <option>GoPro 12 Hero</option>
+              </optgroup>
+              <optgroup label="DJ &amp; Speakers">
+                <option>DJ RX3 Pioneer controller</option>
+                <option>JBL Club 120 speaker</option>
+              </optgroup>
+              <optgroup label="Smoke &amp; Effects">
+                <option>Smoke machine fogger</option>
+                <option>Smoke Ninja Pro hazer</option>
+                <option>Smoke Ninja</option>
+              </optgroup>
+              <optgroup label="Power &amp; Batteries">
+                <option>V-mount 95mAh</option>
+                <option>V-mount 150mAh</option>
+                <option>Sony NPF 970 batteries 2x sets</option>
+                <option>DJI gimbal battery</option>
+                <option>Anker Power Station F2000</option>
+              </optgroup>
+              <optgroup label="Filters &amp; Accessories">
+                <option>ND filter</option>
+                <option>Cinebloom filter mist</option>
+                <option>256GB card</option>
+                <option>CF Express Type A card</option>
+                <option>Suction cups</option>
+                <option>PL to Sony E mount</option>
+                <option>PL to EF mount</option>
+                <option>PL to RF mount</option>
+                <option>PL to L mount</option>
+              </optgroup>
+              <optgroup label="Retired / Sold">
+                <option>Sony A7S III</option>
+                <option>V-mount battery</option>
+                <option>DJI Mavic 3 Classic</option>
+                <option>DJI Mini 3 Pro</option>
+                <option>Sony NP-FZ100 battery</option>
+                <option>DZO Vespid Prime 16mm T2.1</option>
+                <option>DZO Vespid Prime 25mm T2.1</option>
+                <option>DZO Vespid Prime 50mm T2.1</option>
+                <option>DZO Vespid Prime 75mm T2.1</option>
+                <option>DZO Vespid Prime 100mm T2.1</option>
+                <option>DZO Vespid Prime 125mm T2.1</option>
+              </optgroup>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8b8fa3;display:block;margin-bottom:4px;">Damage Description</label>
+            <input type="text" id="insuranceDamage" placeholder="e.g. Scratched sensor" style="width:100%;padding:8px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8b8fa3;display:block;margin-bottom:4px;">Amount (£)</label>
+            <input type="number" id="insuranceAmount" placeholder="0" min="0" step="0.01" style="width:100%;padding:8px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8b8fa3;display:block;margin-bottom:4px;">Notes <span style="color:#555;">(optional)</span></label>
+            <textarea id="insuranceNotes" rows="2" placeholder="e.g. Renter liable, claim ref #12345" style="width:100%;padding:8px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8b8fa3;display:block;margin-bottom:4px;">Type</label>
+            <div style="display:flex;gap:0;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);">
+              <button id="insuranceNewBtn" onclick="setInsuranceType(true)" style="flex:1;padding:8px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:#3b82f6;color:#fff;">New (counts in revenue)</button>
+              <button id="insuranceOldBtn" onclick="setInsuranceType(false)" style="flex:1;padding:8px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:rgba(255,255,255,0.06);color:#8b8fa3;">Old (log only)</button>
+            </div>
+          </div>
+          <button onclick="saveInsuranceClaim()" id="insuranceSaveBtn" style="background:#22c55e;color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-size:13px;font-weight:600;margin-top:4px;">Save Claim</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Health Panel -->
     <div class="panel-wrapper" data-panel="health" data-panel-label="Health & Scanner">
     <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Health & Scanner</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
@@ -2188,7 +2350,6 @@
     var funnelRows = [
       { key: 'inquiry',    label: 'inquiry',     color: '#6ea8fe', stages: ['inquiry'] },
       { key: 'interested', label: 'interested',  color: '#818cf8', stages: ['interested'] },
-      { key: 'ready',      label: 'ready to book', color: '#a78bfa', stages: ['ready_to_book'] },
       { key: 'verifying',  label: 'verifying',   color: '#f472b6', stages: ['booked', 'pending'] },
       { key: 'confirmed',  label: 'confirmed',   color: '#22c55e', stages: ['confirmed'] },
       { key: 'completed',  label: 'completed',   color: '#10b981', stages: ['completed'] },
@@ -2232,13 +2393,12 @@
       var dead = data.dead || 0;
 
       var converted = confirmed + completed;
-      var pipeline = booked + pending + confirmed + completed; // everyone who reached booking+
-      var engaged = interested + readyToBook + pipeline + dead; // everyone past inquiry
+      var activePipeline = interested + readyToBook + booked + pending; // all active conversations in progress
+      var resolved = converted + dead; // conversations that reached a terminal state
       var convRate = total > 0 ? ((converted / total) * 100).toFixed(1) : '0.0';
-      var engageRate = inq > 0 ? ((engaged / inq) * 100).toFixed(0) : '0';
-      var bookRate = engaged > 0 ? ((pipeline / engaged) * 100).toFixed(0) : '0';
+      var progressRate = total > 0 ? (((total - inq - dead) / total) * 100).toFixed(0) : '0'; // % that progressed past inquiry
+      var closeRate = resolved > 0 ? ((converted / resolved) * 100).toFixed(1) : '0.0'; // of resolved, how many converted
       var dropOff = total > 0 ? ((dead / total) * 100).toFixed(0) : '0';
-      var activePipeline = booked + pending;
 
       html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">';
       // Row 1: Conversion rate (hero metric)
@@ -2248,15 +2408,15 @@
       html += '</div>';
       // Row 2: Metric grid
       html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">';
-      // Engagement rate
+      // Progress rate (% that moved past inquiry)
       html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
-      html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">' + engageRate + '%</div>';
-      html += '<div style="font-size:9px;color:#6b6f82;">engage rate</div>';
+      html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">' + progressRate + '%</div>';
+      html += '<div style="font-size:9px;color:#6b6f82;">progress</div>';
       html += '</div>';
-      // Booking rate
+      // Close rate (of resolved conversations, % that converted)
       html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
-      html += '<div style="font-size:14px;font-weight:700;color:#c084fc;">' + bookRate + '%</div>';
-      html += '<div style="font-size:9px;color:#6b6f82;">book rate</div>';
+      html += '<div style="font-size:14px;font-weight:700;color:#c084fc;">' + closeRate + '%</div>';
+      html += '<div style="font-size:9px;color:#6b6f82;">close rate</div>';
       html += '</div>';
       // Drop-off
       html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
@@ -4860,13 +5020,112 @@
     // ESC key closes modal and celebration
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
-        if (document.getElementById('celebrationOverlay').classList.contains('open')) {
+        if (document.getElementById('insuranceModalOverlay').style.display !== 'none') {
+          closeInsuranceModal();
+        } else if (document.getElementById('celebrationOverlay').classList.contains('open')) {
           closeCelebration();
         } else if (document.getElementById('returnModalOverlay').classList.contains('open')) {
           closeReturnModal();
         }
       }
     });
+
+    // ---- Insurance Claims ----
+    var insuranceIsNew = true;
+
+    function loadInsuranceClaims() {
+      return fetchJSON('/insurance/claims').then(renderInsuranceClaims).catch(function() {});
+    }
+
+    function renderInsuranceClaims(data) {
+      var el = document.getElementById('insuranceBody');
+      var totalEl = document.getElementById('insuranceTotal');
+      if (!data || !data.claims) { el.innerHTML = '<div style="color:#8b8fa3;font-size:13px;">No claims yet</div>'; return; }
+      totalEl.textContent = '£' + data.total.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      if (data.claims.length === 0) {
+        el.innerHTML = '<div style="color:#8b8fa3;font-size:13px;">No claims yet. Click + Add to create one.</div>';
+        return;
+      }
+      var html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+      data.claims.forEach(function(c) {
+        var d = new Date(c.claim_date);
+        var dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        var badge = c.is_new
+          ? '<span style="background:#22c55e22;color:#22c55e;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">NEW</span>'
+          : '<span style="background:#8b8fa322;color:#8b8fa3;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">OLD</span>';
+        var notesHtml = c.notes ? '<div style="margin-top:4px;font-size:11px;color:#6b7080;font-style:italic;">' + c.notes.replace(/</g,'&lt;') + '</div>' : '';
+        html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;position:relative;">'
+          + '<button onclick="deleteInsuranceClaim(\'' + c.id + '\')" style="position:absolute;top:8px;right:8px;background:none;border:none;color:#555;cursor:pointer;font-size:15px;line-height:1;padding:2px 5px;border-radius:4px;" onmouseover="this.style.color=\'#ef4444\';this.style.background=\'rgba(239,68,68,0.1)\'" onmouseout="this.style.color=\'#555\';this.style.background=\'none\'">&times;</button>'
+          + '<div style="font-weight:600;font-size:13px;color:#e2e4ec;padding-right:24px;">' + c.item + ' — ' + c.damage + '</div>'
+          + notesHtml
+          + '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px;color:#8b8fa3;">'
+          + '<span style="color:#22c55e;font-weight:700;">£' + c.amount.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + '</span>'
+          + '<span>·</span><span>' + dateStr + '</span>'
+          + '<span>·</span>' + badge
+          + '</div></div>';
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    }
+
+    function openInsuranceModal() {
+      insuranceIsNew = true;
+      document.getElementById('insuranceItem').selectedIndex = 0;
+      document.getElementById('insuranceDamage').value = '';
+      document.getElementById('insuranceAmount').value = '';
+      document.getElementById('insuranceNotes').value = '';
+      setInsuranceType(true);
+      document.getElementById('insuranceModalOverlay').style.display = 'block';
+    }
+
+    function closeInsuranceModal() {
+      document.getElementById('insuranceModalOverlay').style.display = 'none';
+    }
+
+    function setInsuranceType(isNew) {
+      insuranceIsNew = isNew;
+      var newBtn = document.getElementById('insuranceNewBtn');
+      var oldBtn = document.getElementById('insuranceOldBtn');
+      if (isNew) {
+        newBtn.style.background = '#3b82f6'; newBtn.style.color = '#fff';
+        oldBtn.style.background = 'rgba(255,255,255,0.06)'; oldBtn.style.color = '#8b8fa3';
+      } else {
+        oldBtn.style.background = '#3b82f6'; oldBtn.style.color = '#fff';
+        newBtn.style.background = 'rgba(255,255,255,0.06)'; newBtn.style.color = '#8b8fa3';
+      }
+    }
+
+    function deleteInsuranceClaim(id) {
+      if (!confirm('Delete this claim?')) return;
+      fetch('/insurance/claims/' + id, { method: 'DELETE' })
+        .then(function(r) { return r.json(); })
+        .then(function() { loadInsuranceClaims(); loadLifetimeChart(); })
+        .catch(function(e) { alert('Failed to delete: ' + e.message); });
+    }
+
+    function saveInsuranceClaim() {
+      var item = document.getElementById('insuranceItem').value.trim();
+      var damage = document.getElementById('insuranceDamage').value.trim();
+      var amount = parseFloat(document.getElementById('insuranceAmount').value);
+      var notes = document.getElementById('insuranceNotes').value.trim();
+      if (!item || !damage || !amount || amount <= 0) { alert('Please fill in all fields'); return; }
+      var btn = document.getElementById('insuranceSaveBtn');
+      btn.disabled = true; btn.textContent = 'Saving...';
+      var payload = { amount: amount, item: item, damage: damage, is_new: insuranceIsNew };
+      if (notes) payload.notes = notes;
+      fetch('/insurance/claims', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(function(r) { return r.json(); })
+        .then(function() {
+          closeInsuranceModal();
+          loadInsuranceClaims();
+          loadLifetimeChart();
+        })
+        .catch(function(e) { alert('Failed to save: ' + e.message); })
+        .finally(function() { btn.disabled = false; btn.textContent = 'Save Claim'; });
+    }
 
     // ---- Sell Recommender ----
     var sellRecoData = null;
@@ -5118,6 +5377,7 @@
         loadReturnHub(),
         loadSellReco(),
         loadInventoryWorth(),
+        loadInsuranceClaims(),
       ]).then(function(results) {
         if (results[0].status === 'rejected') {
           document.getElementById('statusDot').className = 'status-dot unhealthy';

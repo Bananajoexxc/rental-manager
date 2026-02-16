@@ -814,6 +814,21 @@ model bundle_revenue_snapshot {
   @@index([bundle_key])
 }
 
+// === Insurance Claims ===
+
+model insurance_claim {
+  id          String   @id @default(uuid())
+  amount      Float                        // payout amount in GBP
+  item        String                        // what item was damaged
+  damage      String   @db.Text            // damage description
+  notes       String?  @db.Text            // optional extra notes
+  is_new      Boolean  @default(true)      // new=count in revenue, old=log only
+  claim_date  DateTime @default(now())     // when the claim was made
+  created_at  DateTime @default(now())
+  @@index([is_new])
+  @@index([claim_date])
+}
+
 // === eBay Price Cache (Sell Recommender) ===
 
 model ebay_price_cache {
