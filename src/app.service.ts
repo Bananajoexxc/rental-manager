@@ -464,7 +464,7 @@ export class AppService {
 
       const existing = rentalMap.get(key);
       if (existing) {
-        if (!isAccessoryItem(b.item_name)) existing.items.push(b.item_name);
+        existing.items.push(b.item_name);
         existing.earnings += b.revenue || 0;
         if (b.start_date.toISOString() < existing.startDate) existing.startDate = b.start_date.toISOString();
         if (b.end_date.toISOString() > existing.endDate) existing.endDate = b.end_date.toISOString();
@@ -497,7 +497,7 @@ export class AppService {
         rentalMap.set(key, {
           renter: b.renter_name,
           account: b.account,
-          items: isAccessoryItem(b.item_name) ? [] : [b.item_name],
+          items: [b.item_name],
           pendingItems: [],
           startDate: b.start_date.toISOString(),
           endDate: b.end_date.toISOString(),
@@ -557,7 +557,9 @@ export class AppService {
       // "Anamorphic Great Joy lens 35mm" both resolve to the same inventory item
       const mergedItems: string[] = [];
       const seenInventory = new Set<string>();
-      for (const item of [...(r.notes.allItems || []), ...r.items]) {
+      // Source of truth = confirmed booking item_names (r.items)
+      // notes.allItems is a stale creation-time snapshot that can contain wrong items
+      for (const item of r.items) {
         const matched = findBestMatch(item, inventoryNames);
         const key = matched || item; // use inventory name if matched, else raw
         if (!seenInventory.has(key)) {

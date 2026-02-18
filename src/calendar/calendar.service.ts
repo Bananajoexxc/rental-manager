@@ -623,6 +623,87 @@ export class CalendarService implements OnModuleInit {
     return updated;
   }
 
+  /**
+   * Filter extracted items to only those relevant to the listing title.
+   * Prevents photo-extracted items from stock/promo images creating wrong bookings.
+   * E.g., a "V-mount battery" listing with a stock DJI photo shouldn't book an FX3.
+   */
+  private filterByListingRelevance(
+    items: { name: string; quantity: number }[],
+    listingTitle: string,
+  ): { name: string; quantity: number }[] {
+    if (!listingTitle || items.length <= 1) return items;
+
+    const title = listingTitle.toLowerCase();
+
+    // Bundle/kit/set listings: extracted items are expected to be diverse
+    if (/\b(kit|set|bundle|combo|package|film|ultimate|short\s*film)\b/i.test(title)) return items;
+
+    // Map item names and title to broad equipment categories
+    const CATEGORY_RULES: [RegExp, RegExp][] = [
+      // [item name pattern, title pattern that makes this category relevant]
+      [/sony (fx|a7|a\d)|bmpcc|canon c\d|red\s/i, /camera|sony|bmpcc|blackmagic|canon\s*c|fx\d|a7|cinema/i],
+      [/\d+mm|lens|anamorphic|fisheye|great\s*joy/i, /\d+mm|lens|anamorphic|fisheye|f\/?\d|zoom|gm\b/i],
+      [/gimbal|rs\d|ronin/i, /gimbal|rs\d|ronin|stabiliz/i],
+      [/tripod/i, /tripod|stand/i],
+      [/slider|dolly/i, /slider|dolly|motoriz/i],
+      [/v-mount|npf|battery/i, /batter|v[\s-]?mount|charger|wah|mah|power\b|npf/i],
+      [/nanlite|pavotube|led.*panel|ambitful|light\s*panel/i, /light|nanlite|pavotube|led|tube|rgb/i],
+      [/mic|rode|sennheiser|boom/i, /mic|rode|sennheiser|boom|audio|wireless\s+(mic|pro)/i],
+      [/drone|mavic|osmo|action\s*\d/i, /drone|mavic|dji.*action|osmo/i],
+      [/monitor|atomos|ninja/i, /monitor|atomos|ninja/i],
+      [/filter|cinebloom/i, /filter|cinebloom|nd\b/i],
+      [/transmitter|hollyland|mars/i, /transmitter|hollyland|wireless\s*video/i],
+      [/power\s*station|anker/i, /power\s*station|anker|generator/i],
+      [/partybox|speaker/i, /partybox|speaker|party/i],
+    ];
+
+    const relevant = items.filter(item => {
+      const name = item.name.toLowerCase();
+      const titleNorm = title.replace(/[^a-z0-9\s-]/g, ' ');
+
+      // Focal length conflict: "90mm" item vs "24-70mm" title = different product
+      const itemFocals = name.match(/\d+(?:-\d+)?mm/g) || [];
+      const titleFocals = titleNorm.match(/\d+(?:\s*-\s*\d+)?\s*mm/g)?.map(s => s.replace(/\s/g, '')) || [];
+      if (itemFocals.length > 0 && titleFocals.length > 0) {
+        const focalOverlap = itemFocals.some(f => titleFocals.includes(f));
+        if (!focalOverlap) return false; // Different focal lengths = different lens/product
+      }
+
+      // Direct token overlap: item name shares meaningful tokens with title
+      // Exclude brand-only matches (too generic) — require non-brand token overlap
+      const BRAND_TOKENS = new Set(['sony', 'dji', 'canon', 'rode', 'sennheiser', 'nanlite', 'blackmagic', 'hollyland', 'anker', 'atomos', 'sirui', 'smallrig']);
+      const itemTokens = name.split(/[\s\-]+/).filter(t => t.length >= 3 && !/^(pro|set|the|and|for|with)$/.test(t));
+      const nonBrandOverlap = itemTokens.filter(t => !BRAND_TOKENS.has(t) && titleNorm.includes(t));
+      if (nonBrandOverlap.length >= 1) return true;
+
+      // Brand overlap is allowed only if no conflicting specifics (focal length already checked above)
+      const brandOverlap = itemTokens.filter(t => BRAND_TOKENS.has(t) && titleNorm.includes(t));
+      if (brandOverlap.length > 0 && itemTokens.length <= 2) return true; // very short item name with brand match
+
+      // Category match: item's category is mentioned in the title
+      for (const [itemPattern, titlePattern] of CATEGORY_RULES) {
+        if (itemPattern.test(name)) {
+          return titlePattern.test(title);
+        }
+      }
+
+      // Unknown category: allow by default (don't filter what we don't understand)
+      return true;
+    });
+
+    if (relevant.length > 0 && relevant.length < items.length) {
+      const filtered = items.filter(i => !relevant.includes(i));
+      this.logger.warn(
+        `Listing relevance filter removed ${filtered.length} item(s) not matching "${listingTitle}": ` +
+        filtered.map(i => i.name).join(', '),
+      );
+      return relevant;
+    }
+
+    return items;
+  }
+
   async createBookingsFromRental(
     rental: {
       id: string;
@@ -658,19 +739,32 @@ export class CalendarService implements OnModuleInit {
       matchedItems.push({ name: matched, quantity: 1 });
     }
 
+    // Filter items that are irrelevant to the listing title (e.g., stock photo misidentification)
+    const filteredItems = this.filterByListingRelevance(matchedItems, rental.title || '');
+    matchedItems.length = 0;
+    matchedItems.push(...filteredItems);
+
     // Separate main items from accessories — accessories don't get their own bookings
     const mainItems = matchedItems.filter(i => !isAccessoryItem(i.name));
     const accessoryItems = matchedItems.filter(i => isAccessoryItem(i.name));
+
+    // If only accessories matched, promote them to main items — the listing IS for those items
+    // (e.g., a listing for "V-mount batteries" should create battery bookings)
+    if (mainItems.length === 0 && accessoryItems.length > 0) {
+      this.logger.log(`Promoting ${accessoryItems.length} accessory item(s) to main items (accessory-only listing): ${accessoryItems.map(i => i.name).join(', ')}`);
+      mainItems.push(...accessoryItems);
+      accessoryItems.length = 0;
+    }
 
     if (accessoryItems.length > 0) {
       this.logger.log(`Filtered ${accessoryItems.length} accessory item(s) from booking creation: ${accessoryItems.map(i => i.name).join(', ')}`);
     }
 
-    // If only accessories matched (no main items), fall back to rental title match
+    // If no items matched at all, fall back to rental title match
     if (mainItems.length === 0) {
       const matched = findBestMatch(rental.title, getInventoryItemNames());
-      if (!matched || isAccessoryItem(matched)) {
-        this.logger.warn(`Cannot create bookings for rental ${rental.id}: title "${rental.title}" does not match any main inventory item`);
+      if (!matched) {
+        this.logger.warn(`Cannot create bookings for rental ${rental.id}: title "${rental.title}" does not match any inventory item`);
         return [];
       }
       mainItems.push({ name: matched, quantity: 1 });
