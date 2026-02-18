@@ -17,7 +17,7 @@
  * 10. STATE — Update conversation memory
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { RulesService } from '../rules/rules.service';
@@ -28,6 +28,7 @@ import { RecommendationService } from '../recommendations/recommendation.service
 import { DemandService } from '../demand/demand.service';
 import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
+import { ContentionService } from '../contention/contention.service';
 
 import { PipelineInput, PipelineResult, InnerMonologue, RenterDNA, DEFAULT_RENTER_DNA } from './types';
 import { classifyMessage, profileRenter, shouldSuppressUpsell } from './classify';
@@ -54,6 +55,7 @@ export class PipelineService {
     private demandService: DemandService,
     private conversationStageService: ConversationStageService,
     private followUpService: FollowUpService,
+    @Optional() private contentionService?: ContentionService,
   ) {}
 
   /**
@@ -171,6 +173,7 @@ export class PipelineService {
       demandService: this.demandService,
       conversationStageService: this.conversationStageService,
       followUpService: this.followUpService,
+      contentionService: this.contentionService,
       prisma: this.prisma,
     };
 

@@ -22,6 +22,7 @@ import { RevenueModule } from '../revenue/revenue.module';
 import { MarketModule } from '../market/market.module';
 import { CouponModule } from '../coupon/coupon.module';
 import { PlaywrightModule } from '../playwright/playwright.module';
+import { ContentionModule } from '../contention/contention.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { PlaywrightModule } from '../playwright/playwright.module';
     MarketModule,
     CouponModule,
     PlaywrightModule,
+    ContentionModule,
   ],
   providers: [AutonomousService],
   exports: [AutonomousService],

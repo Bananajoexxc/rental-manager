@@ -11,6 +11,7 @@ import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
 import { VerificationService } from '../verification/verification.service';
 import { TitleParserService } from '../revenue/title-parser.service';
+import { ContentionService } from '../contention/contention.service';
 
 @Injectable()
 export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
@@ -40,6 +41,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     private followUpService: FollowUpService,
     private verificationService: VerificationService,
     @Optional() @Inject(forwardRef(() => TitleParserService)) private titleParserService: TitleParserService,
+    private contentionService: ContentionService,
   ) {
     // Load configuration from environment variables
     this.INITIAL_SCAN_INTERVAL = this.parseIntOrDefault(process.env.INITIAL_SCAN_INTERVAL_MS, 60000);
@@ -295,6 +297,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           // Cascade to bookings
           try {
             await this.calendarService.cascadeRentalStatusToBookings(rental.id, 'completed', 'ongoing');
+            try { await this.contentionService.onRentalStatusChange(rental.id, 'completed'); } catch { /* non-critical */ }
           } catch (err) {
             this.logger.warn(`Cascade failed for auto-completed rental ${rental.id}: ${err.message}`);
           }
@@ -413,6 +416,11 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           } catch (err) {
             this.logger.warn(`Cascade status failed for rental ${existingRental.id}: ${err.message}`);
           }
+
+          // Contention: check if status change resolves or triggers contention
+          try {
+            await this.contentionService.onRentalStatusChange(existingRental.id, reconciledStatus, rental.orderStep);
+          } catch { /* non-critical */ }
 
           // Rental just became confirmed (pending → upcoming/ongoing)
           const wasUnconfirmed = ['pending', 'requested'].includes(existingRental.status);

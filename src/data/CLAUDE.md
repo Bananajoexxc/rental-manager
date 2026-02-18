@@ -7,6 +7,12 @@
 |----|------|---|-------|------|
 | #132 | 11:49 PM | 🔵 | Pricing Catalog Contains Comprehensive Item and Bundle Pricing Data | ~420 |
 
+### Feb 6, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #313 | 7:12 PM | 🔵 | DJI Mavic 3 Pro Inventory and Pricing Configuration | ~441 |
+
 ### Feb 7, 2026
 
 | ID | Time | T | Title | Read |
@@ -19,6 +25,7 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1159 | 1:49 PM | 🔵 | Aputure Lights in Pricing Catalog | ~347 |
 | #1102 | 12:27 PM | 🔵 | Acquisition Cost Database for Equipment Investment ROI Analysis | ~711 |
 | #1101 | " | 🔵 | Comprehensive Delivery Specifications with Courier Type Classification | ~731 |
 | #1100 | 12:26 PM | 🔵 | Bundle Suggestion Engine with Keyword Triggers and Use Case Matching | ~738 |

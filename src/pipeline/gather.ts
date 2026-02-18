@@ -50,6 +50,9 @@ export interface GatherServices {
   followUpService: {
     getStructuredState(rentalId: string): Promise<Record<string, any>>;
   };
+  contentionService?: {
+    getActiveContentionsForRental(rentalId: string): Promise<any[]>;
+  };
   prisma: any;
 }
 
@@ -404,6 +407,23 @@ export async function gatherFacts(
           const convState = await services.conversationStageService.getConversationState(rental.id);
           if (convState) {
             facts.stageGuidance = services.conversationStageService.getStagePromptFromState(convState);
+          }
+        } catch { /* non-critical */ }
+      })(),
+    );
+  }
+
+  // Contention urgency context (production only, favored rental)
+  if (rental && services.contentionService) {
+    fetchPromises.push(
+      (async () => {
+        try {
+          const contentions = await services.contentionService!.getActiveContentionsForRental(rental.id);
+          if (contentions.length > 0) {
+            const items = contentions.map(c => c.item_name).join(', ');
+            facts.urgency = `HIGH DEMAND: The ${items} is in high demand for these dates. ` +
+              `Other renters are also interested. Subtly convey scarcity and encourage the renter to confirm soon, ` +
+              `but do NOT be pushy or mention specific competitors.`;
           }
         } catch { /* non-critical */ }
       })(),

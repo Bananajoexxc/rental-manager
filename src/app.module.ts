@@ -41,6 +41,7 @@ import { CouponModule } from './coupon/coupon.module';
 import { ItemMatcherAiModule } from './item-matcher-ai/item-matcher-ai.module';
 import { SellRecommenderModule } from './sell-recommender/sell-recommender.module';
 import { PipelineModule } from './pipeline/pipeline.module';
+import { ContentionModule } from './contention/contention.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { PipelineModule } from './pipeline/pipeline.module';
     ItemMatcherAiModule,
     SellRecommenderModule,
     PipelineModule,
+    ContentionModule,
   ],
   controllers: [AppController],
   providers: [AppService],

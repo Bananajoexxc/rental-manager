@@ -919,6 +919,41 @@ export class CalendarService implements OnModuleInit {
   }
 
   /**
+   * Add included extras (small items approved by owner) to booking notes.
+   * Merges with existing includedExtras using Set dedup.
+   */
+  async addIncludedExtrasToBookings(rentalId: string, items: string[]): Promise<number> {
+    const bookings = await this.prisma.booking.findMany({
+      where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
+      select: { id: true, notes: true },
+    });
+
+    if (bookings.length === 0) {
+      this.logger.warn(`No bookings found for rental ${rentalId} when adding included extras`);
+      return 0;
+    }
+
+    let updated = 0;
+    for (const booking of bookings) {
+      let notesObj: any = {};
+      try { notesObj = booking.notes ? JSON.parse(booking.notes) : {}; } catch { notesObj = {}; }
+
+      const existing = Array.isArray(notesObj.includedExtras) ? notesObj.includedExtras : [];
+      const merged = [...new Set([...existing, ...items])];
+      notesObj.includedExtras = merged;
+      notesObj.includedExtrasApprovedAt = new Date().toISOString();
+
+      await this.prisma.booking.update({
+        where: { id: booking.id },
+        data: { notes: JSON.stringify(notesObj) },
+      });
+      updated++;
+    }
+    this.logger.log(`Added ${items.length} included extras to ${updated} booking(s) for rental ${rentalId}`);
+    return updated;
+  }
+
+  /**
    * Cascade rental status changes to related bookings.
    * When a rental goes from pending → accepted (upcoming/ongoing), promote bookings to confirmed.
    * When a rental goes to cancelled/obsolete, cancel bookings.

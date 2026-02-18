@@ -29,6 +29,7 @@ import { MarketService } from '../market/market.service';
 import { DspyService } from '../dspy/dspy.service';
 import { CouponService } from '../coupon/coupon.service';
 import { PlaywrightService } from '../playwright/playwright.service';
+import { ContentionService } from '../contention/contention.service';
 
 export interface HyggloMessage {
   rentalId: string;
@@ -79,6 +80,7 @@ export class AutonomousService {
     private dspyService: DspyService,
     private couponService: CouponService,
     private playwrightService: PlaywrightService,
+    private contentionService: ContentionService,
   ) {}
 
   /**
@@ -492,6 +494,58 @@ export class AutonomousService {
     }
 
     return null;
+  }
+
+  /**
+   * Detect if renter is requesting extra small items to be included with the rental.
+   * Uses inclusion-language patterns with false-positive guards.
+   */
+  private detectExtraItemsRequest(message: string): boolean {
+    const text = message.toLowerCase();
+
+    const inclusionPatterns = [
+      /\b(can|could)\s+you\s+(include|bring|add|throw\s+in)\b/i,
+      /\b(is\s+it\s+possible\s+to\s+(include|add|bring))\b/i,
+      /\bdo\s+you\s+have\s+(a\s+)?(spare|extra)\b/i,
+      /\b(any\s+chance|would\s+it\s+be\s+possible)\s+(to\s+)?(include|add|bring|throw\s+in)\b/i,
+      /\bthrow\s+in\s+(a|an|some|a\s+couple)\b/i,
+      /\binclude\s+(a|an|some|a\s+couple|a\s+few)\b/i,
+      /\b(also|additionally)\s+(bring|include|add)\b/i,
+      /\bspare\s+(sd|memory|cf)\s*card/i,
+      /\bextra\s+(battery|batteries|card|cable|charger|cover|strap|filter|adapter|mount|holder|sleeve)/i,
+    ];
+
+    const falsePositivePatterns = [
+      /\b(invoice|receipt|contract|document|proof|confirmation)\b/i,
+      /\binclude\s+(the\s+)?(price|cost|fee|total|amount|vat|tax)\b/i,
+    ];
+
+    if (falsePositivePatterns.some(p => p.test(text))) return false;
+    return inclusionPatterns.some(p => p.test(message));
+  }
+
+  /**
+   * Extract specific extra item names from renter's message using Haiku.
+   * Returns an array of item descriptions (e.g. ["SD cards x2", "rain cover"]).
+   */
+  private async extractExtraItemsViaAI(message: string, rentalTitle: string): Promise<string[]> {
+    try {
+      const response = await this.aiService.processExtraction(
+        `Extract the extra items the renter is asking to include with their "${rentalTitle}" rental.\n\nMessage: "${message}"\n\nReturn ONLY a JSON array of item descriptions. Include quantities if mentioned. Example: ["SD cards x2", "rain cover"]\nIf no items found, return []`,
+        { maxTokens: 80 },
+      );
+      const match = response.content.match(/\[.*\]/s);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((item: any) => String(item).trim()).filter(Boolean);
+        }
+      }
+      return [];
+    } catch (err) {
+      this.logger.debug(`Extra items AI extraction failed: ${err.message}`);
+      return [];
+    }
   }
 
   /**
@@ -1103,6 +1157,11 @@ export class AutonomousService {
           // Non-critical
         }
       }
+
+      // Evaluate inventory contention for this new rental
+      try {
+        await this.contentionService.evaluateContention(rental.id);
+      } catch { /* non-critical */ }
 
       // First-time renter check for onNewRental (proactive discount on high-value)
       let onNewRentalFirstTimeCtx = '';
@@ -2003,6 +2062,30 @@ export class AutonomousService {
           return;
         }
 
+        // Contention hold gate — check if this rental is being held for a higher-value competitor
+        const contentionHold = await this.contentionService.isHeld(rental.id);
+        if (contentionHold.held) {
+          // Send one-time hold message, then absorb silently
+          await this.contentionService.sendHoldMessageIfNeeded(rental.id, contentionHold.contentionId!);
+          // Store message in conversation history (so context is preserved on release)
+          await this.prisma.conversation.create({
+            data: { chat_id: rental.listing_id, role: 'user', content: msg.content },
+          });
+          await this.prisma.ai_decision.create({
+            data: {
+              rental_id: rental.id,
+              decision_type: 'message',
+              input_summary: `[CONTENTION HOLD] ${msg.content.substring(0, 200)}`,
+              output_summary: 'Message absorbed — rental held for higher-value contention',
+              confidence: 1.0,
+              action_taken: 'contention_hold_absorb',
+              was_sent: false,
+            },
+          });
+          this.logger.log(`Contention hold: absorbed message from ${msg.sender} on rental ${rental.listing_id}`);
+          return;
+        }
+
         // Scam detection on incoming message (with scoring)
         const scamCheck = this.detectScamPattern(msg.content);
         if (scamCheck.isScam) {
@@ -2254,6 +2337,61 @@ export class AutonomousService {
           }
         } catch (acqErr) {
           this.logger.debug(`Acquisition opportunity check failed: ${acqErr.message}`);
+        }
+
+        // EXTRA ITEMS REQUEST: Renter asks for small extras not in inventory → escalate to owner
+        try {
+          if (this.detectExtraItemsRequest(msg.content)) {
+            const extraItems = await this.extractExtraItemsViaAI(msg.content, rental.title || '');
+            if (extraItems.length > 0) {
+              const extraLabel = extraItems.join(', ');
+
+              // Send hold message to renter
+              try {
+                if (!this.isWriteBlocked(rental.id)) {
+                  const holdMsg = `Let me check on that — I'll get back to you shortly!`;
+                  await this.hyggloService.sendMessage(msg.rentalId, holdMsg);
+                  await this.memoryService.storeConversation(chatId, 'assistant', holdMsg, { model: 'system' });
+                }
+              } catch (holdErr) {
+                this.logger.debug(`Extra items hold message failed: ${holdErr.message}`);
+              }
+
+              // Generate recommended approval reply
+              const extraRecommendedReply = await this.generateRecommendedReply(
+                rental, rental.renter_info || msg.sender || 'Unknown', msg.content,
+                `The renter asked about including ${extraLabel} with their rental. Draft a friendly confirmation that you'll include these items.`,
+              );
+
+              await this.telegramService.sendDecisionPrompt({
+                type: 'extra_items',
+                rentalId: String(rental.id),
+                listingId: msg.rentalId,
+                account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+                renterName: rental.renter_info || msg.sender || 'Unknown',
+                renterLastMessage: msg.content,
+                contextSummary: `Extra items request: ${extraLabel}. Renter: ${msg.sender}. Rental: ${rental.title}`,
+                displayText:
+                  `📦 *EXTRA ITEMS REQUEST*\n\n` +
+                  `├ 🛒 Items: *${extraLabel}*\n` +
+                  `├ 👤 ${rental.renter_info || msg.sender || 'Unknown'}\n` +
+                  `├ 📋 ${rental.title || 'Unknown listing'}\n` +
+                  `└ 💬 Renter told: "Let me check on that"`,
+                options: [
+                  { label: 'Include them', emoji: '✅', intent: 'approve', aiInstruction: `Daniel confirms the extra items (${extraLabel}) can be included with this rental. Draft a warm message telling the renter great news — you'll include the requested items. Keep it brief.` },
+                  { label: "Don't have them", emoji: '❌', intent: 'decline', aiInstruction: `Daniel doesn't have the requested items (${extraLabel}). Draft a polite, apologetic message explaining that unfortunately you don't have these available at the moment. Suggest they're welcome to bring their own if needed.` },
+                ],
+                holdMessageSent: true,
+                recommendedReply: extraRecommendedReply || undefined,
+                requestedItems: extraItems,
+              });
+
+              this.logger.log(`EXTRA ITEMS REQUEST: ${extraLabel} — escalated to owner for rental ${rental.id}`);
+              return; // Skip normal AI response — owner will decide
+            }
+          }
+        } catch (extraErr) {
+          this.logger.debug(`Extra items request check failed: ${extraErr.message}`);
         }
 
         // Always load business rules (no context-level gating)

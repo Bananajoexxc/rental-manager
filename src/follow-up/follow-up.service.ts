@@ -7,6 +7,7 @@ import { HyggloService } from '../hygglo/hygglo.service';
 import { AiService } from '../ai/ai.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
+import { ContentionService } from '../contention/contention.service';
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
@@ -34,6 +35,7 @@ export class FollowUpService {
     private aiService: AiService,
     private calendarService: CalendarService,
     private conversationStageService: ConversationStageService,
+    private contentionService: ContentionService,
   ) {}
 
   /**
@@ -103,6 +105,14 @@ export class FollowUpService {
     const hour = new Date().getHours();
     if (hour >= 2 && hour < 7) {
       return;
+    }
+
+    // Contention urgency + timeout checks (piggyback on follow-up cron)
+    try {
+      await this.contentionService.evaluateUrgency();
+      await this.contentionService.checkTimeouts();
+    } catch (err) {
+      this.logger.error(`Contention check error: ${err.message}`);
     }
 
     try {
@@ -179,6 +189,12 @@ export class FollowUpService {
     } catch (tfErr) {
       this.logger.debug(`Time follow-up check failed: ${tfErr.message}`);
     }
+
+    // 1b. Contention hold: if rental is held, skip all follow-ups
+    try {
+      const holdCheck = await this.contentionService.isHeld(state.rental_id);
+      if (holdCheck.held) return;
+    } catch { /* non-critical */ }
 
     // 2. Paused until: if set and future -> skip
     if (state.paused_until) {

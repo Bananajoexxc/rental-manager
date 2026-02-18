@@ -34,7 +34,8 @@ export type RentalSectionType =
   | 'availability_conflict' | 'same_day_block' | 'verification_block'
   | 'review_block' | 'availability_block' | 'auto_accept_failed'
   | 'blacklist' | 'scam' | 'damage' | 'verification_failure'
-  | 'pipeline_error' | 'info';
+  | 'pipeline_error' | 'info'
+  | 'contention_detected' | 'contention_resolved';
 
 export interface RentalNotificationSection {
   type: RentalSectionType;
@@ -66,7 +67,7 @@ export interface DecisionOption {
 }
 
 export interface DecisionPromptConfig {
-  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag';
+  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag' | 'extra_items';
   rentalId: string;
   listingId: string;
   account: HyggloAccount;
@@ -77,11 +78,12 @@ export interface DecisionPromptConfig {
   options: DecisionOption[];
   holdMessageSent: boolean;
   recommendedReply?: string;
+  requestedItems?: string[];
 }
 
 interface PendingDecision {
   id: string;
-  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag';
+  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag' | 'extra_items';
   telegramMessageId: number;
   rentalId: string;
   listingId: string;
@@ -95,6 +97,7 @@ interface PendingDecision {
   resolved: boolean;
   holdMessageSent: boolean;
   recommendedReply?: string;
+  requestedItems?: string[];
 }
 
 @Injectable()
@@ -345,7 +348,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async sendRentalNotification(rental: any, _aiAnalysis: string, _actionTaken: string) {
+  async sendRentalNotification(rental: any, aiAnalysis: string, actionTaken: string) {
     // Dedup guard: prevent duplicate notifications for the same rental
     const rentalId = rental.id;
     if (rentalId) {
@@ -367,9 +370,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     const meta = await this.buildRentalMeta(rental);
 
+    // Extract AI draft from analysis (MESSAGE: line) and blocked status
+    const data: Record<string, any> = {};
+    const msgMatch = aiAnalysis.match(/MESSAGE:\s*\n?([\s\S]+)/i);
+    if (msgMatch) {
+      data.botDraft = msgMatch[1].trim().substring(0, 500);
+    }
+    if (actionTaken.startsWith('BLOCKED')) {
+      data.blocked = true;
+      // Extract the draft from the BLOCKED action string
+      const draftMatch = actionTaken.match(/Draft was:\s*"(.+?)\.\.\.?"$/s);
+      if (draftMatch && !data.botDraft) {
+        data.botDraft = draftMatch[1].trim();
+      }
+    }
+
     await this.sendRentalUpdate(
       rental.id || rental.listing_id,
-      { type: 'new_rental', priority: 'normal', data: {} },
+      { type: 'new_rental', priority: 'normal', data },
       meta,
     );
   }
@@ -600,6 +618,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       verification_block: 7, review_block: 8, auto_accept_failed: 9,
       pipeline_error: 10, verification_failure: 11, damage: 12, info: 13,
       blacklist: 14, scam: 15,
+      contention_detected: 16, contention_resolved: 17,
     };
     const sorted = [...entry.sections].sort((a, b) => (displayOrder[a.type] ?? 99) - (displayOrder[b.type] ?? 99));
 
@@ -609,6 +628,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         case 'new_rental':
           // Header already covers this — only add extra info if present
           if (d.extraInfo) lines.push(`ℹ️ ${d.extraInfo}`);
+          if (d.botDraft) {
+            const prefix = d.blocked ? '🤖 Draft (not sent)' : '🤖';
+            lines.push(`${prefix}: ${String(d.botDraft).substring(0, 400)}`);
+          }
           break;
 
         case 'message_processed': {
@@ -712,6 +735,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         case 'info':
           lines.push(`ℹ️ ${d.text || ''}`);
           break;
+
+        case 'contention_detected': {
+          lines.push(`⚔️ INVENTORY CONTENTION`);
+          lines.push(`Item: ${d.itemName} (${d.maxQty} units, ${d.totalDemand} demand)`);
+          if (d.dateStart && d.dateEnd) {
+            const ds = new Date(d.dateStart).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+            const de = new Date(d.dateEnd).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+            lines.push(`Dates: ${ds} - ${de}`);
+          }
+          lines.push(`FAVORED (£${d.favoredRevenue || 0}):`);
+          lines.push(`  "${d.favoredTitle}" by ${d.favoredRenter} | ${d.favoredStage}`);
+          lines.push(`  → Urgency messaging active`);
+          if (d.heldCount > 0) {
+            lines.push(`HELD (${d.heldCount}):`);
+            lines.push(`${d.heldSummary || '  (details unavailable)'}`);
+          }
+          break;
+        }
+
+        case 'contention_resolved':
+          lines.push(`✅ CONTENTION RESOLVED — ${d.statusLabel || 'UNKNOWN'}`);
+          lines.push(`${d.itemName} contention ended.`);
+          lines.push(`Reason: ${d.reason || 'n/a'}`);
+          break;
       }
     }
 
@@ -799,6 +846,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       resolved: false,
       holdMessageSent: config.holdMessageSent,
       recommendedReply: config.recommendedReply,
+      requestedItems: config.requestedItems,
     };
 
     this.pendingDecisions.set(id, decision);
@@ -1013,6 +1061,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           // 'ignore' intent = "Wait & monitor" — keep escalation in place, auto-accept stays blocked
         } catch (reviewResErr) {
           this.logger.warn(`Failed to process review_flag resolution: ${reviewResErr.message}`);
+        }
+      }
+
+      // extra_items: write includedExtras to booking notes on approval
+      if (decision.type === 'extra_items' && decision.rentalId && decision.requestedItems?.length) {
+        try {
+          if (chosenOption.intent === 'approve') {
+            const count = await this.calendarService.addIncludedExtrasToBookings(decision.rentalId, decision.requestedItems);
+            this.logger.log(`Added ${decision.requestedItems.length} included extras to ${count} booking(s) for rental ${decision.rentalId}`);
+          }
+        } catch (extrasErr) {
+          this.logger.warn(`Failed to write included extras to bookings: ${extrasErr.message}`);
         }
       }
     } catch (error) {

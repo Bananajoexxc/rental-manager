@@ -829,6 +829,44 @@ model insurance_claim {
   @@index([claim_date])
 }
 
+// === Inventory Contention (Yield-Optimized Conflict Resolution) ===
+
+model inventory_contention {
+  id                     String    @id @default(uuid())
+
+  // Scarce resource
+  item_name              String    // MASTER_INVENTORY canonical name
+  date_start             DateTime  // Overlap window start
+  date_end               DateTime  // Overlap window end
+
+  // Competing rentals
+  favored_rental_id      String    // Highest revenue (PUSHED with urgency)
+  held_rental_ids        String[]  // Lower revenue (HELD, paused)
+
+  // Revenue snapshot (immutable at detection time)
+  favored_revenue        Float     // rental_price of favored
+  held_revenues          Float[]   // rental_price of each held (parallel to held_rental_ids)
+
+  // Urgency tracking for favored rental
+  urgency_count          Int       @default(0)
+  last_urgency_at        DateTime?
+
+  // Hold tracking for held rentals
+  hold_message_sent_to   String[]  @default([]) // rental IDs that got the one-time hold message
+
+  // Lifecycle
+  status                 String    @default("active") // active | resolved_booked | resolved_timeout | resolved_cancelled
+  resolution_reason      String?
+  resolved_at            DateTime?
+
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  @@index([status])
+  @@index([favored_rental_id])
+  @@index([item_name, status])
+}
+
 // === eBay Price Cache (Sell Recommender) ===
 
 model ebay_price_cache {

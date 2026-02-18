@@ -8,6 +8,7 @@ import { HyggloModule } from '../hygglo/hygglo.module';
 import { AiModule } from '../ai/ai.module';
 import { CalendarModule } from '../calendar/calendar.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
+import { ContentionModule } from '../contention/contention.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ConversationStageModule } from '../conversation-tree/conversation-stage
     AiModule,
     CalendarModule,
     ConversationStageModule,
+    ContentionModule,
   ],
   providers: [FollowUpService],
   exports: [FollowUpService],

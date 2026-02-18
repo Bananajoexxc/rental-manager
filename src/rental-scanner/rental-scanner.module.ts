@@ -10,6 +10,7 @@ import { RenterProfileModule } from '../renter-profile/renter-profile.module';
 import { FollowUpModule } from '../follow-up/follow-up.module';
 import { VerificationModule } from '../verification/verification.module';
 import { RevenueModule } from '../revenue/revenue.module';
+import { ContentionModule } from '../contention/contention.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { RevenueModule } from '../revenue/revenue.module';
     FollowUpModule,
     VerificationModule,
     RevenueModule,
+    ContentionModule,
   ],
   providers: [RentalScannerService],
   exports: [RentalScannerService],

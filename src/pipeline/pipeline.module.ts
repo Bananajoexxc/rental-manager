@@ -10,6 +10,7 @@ import { RecommendationModule } from '../recommendations/recommendation.module';
 import { DemandModule } from '../demand/demand.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 import { FollowUpModule } from '../follow-up/follow-up.module';
+import { ContentionModule } from '../contention/contention.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { FollowUpModule } from '../follow-up/follow-up.module';
     DemandModule,
     ConversationStageModule,
     FollowUpModule,
+    ContentionModule,
   ],
   providers: [PipelineService],
   exports: [PipelineService],
