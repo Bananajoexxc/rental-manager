@@ -210,24 +210,21 @@ export class RemindersService {
     return this.calendarService.getFormattedSchedule(new Date());
   }
 
-  // Hourly: auto-assign missing pickup/return times for bookings starting tomorrow
+  // Hourly: auto-assign missing pickup/return times — only after follow-ups triggered and ≤16h before rental
   @Cron('0 * * * *')
   async autoAssignMissingTimes() {
     try {
       const now = new Date();
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
-      const tomorrowEnd = new Date(tomorrow);
-      tomorrowEnd.setHours(23, 59, 59, 999);
+      // Expanded window: bookings starting within next 24h OR currently ongoing
+      const next24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-      // Find confirmed bookings starting tomorrow OR currently ongoing with missing times
+      // Find confirmed bookings starting soon OR currently ongoing with missing times
       const bookingsNoTimes = await this.prisma.booking.findMany({
         where: {
           status: 'confirmed',
           OR: [
-            // Starting tomorrow (original scope)
-            { start_date: { gte: tomorrow, lte: tomorrowEnd } },
+            // Starting within next 24h
+            { start_date: { gte: now, lte: next24h } },
             // Currently ongoing (expanded: start <= now AND end >= now)
             { start_date: { lte: now }, end_date: { gte: now } },
           ],
@@ -245,23 +242,41 @@ export class RemindersService {
 
       if (bookingsNoTimes.length === 0) return;
 
-      // Stage gate: auto_assign_times only at 'confirmed' (see STAGE_ACTION_MAP in conversation-stage.service.ts)
+      // Stage gate: auto_assign_times only at 'confirmed' + follow-ups must have been triggered
       const rentalIds = [...new Set(bookingsNoTimes.map(b => b.rental_id).filter(Boolean))] as string[];
       const followUpStates = await this.prisma.follow_up_state.findMany({
         where: {
           rental_id: { in: rentalIds },
           conversation_stage: 'confirmed',
           times_auto_assigned: false,
+          // GATE: follow-ups must have been triggered (at least one time follow-up sent)
+          time_followup_count: { gte: 1 },
         },
       });
-      const eligibleRentalIds = new Set(followUpStates.map(s => s.rental_id));
 
-      // Get ALL bookings for tomorrow + ongoing (with times) for trip optimization
-      const allTomorrowBookings = await this.prisma.booking.findMany({
+      // Additional gate: only auto-assign if ≤16h before rental start (or already ongoing)
+      const eligibleRentalIds = new Set<string>();
+      for (const state of followUpStates) {
+        const booking = bookingsNoTimes.find(b => b.rental_id === state.rental_id);
+        if (!booking) continue;
+
+        const hoursUntilStart = (booking.start_date.getTime() - now.getTime()) / (1000 * 60 * 60);
+        // Already ongoing (past start) or within 16 hours of start
+        if (hoursUntilStart <= 16) {
+          eligibleRentalIds.add(state.rental_id);
+        } else {
+          this.logger.debug(
+            `Skipping auto-assign for rental ${state.rental_id}: ${hoursUntilStart.toFixed(1)}h until start (need ≤16h)`,
+          );
+        }
+      }
+
+      // Get ALL bookings starting within next 24h + ongoing (with times) for trip optimization
+      const allUpcomingBookings = await this.prisma.booking.findMany({
         where: {
           status: 'confirmed',
           OR: [
-            { start_date: { gte: tomorrow, lte: tomorrowEnd } },
+            { start_date: { gte: now, lte: next24h } },
             { start_date: { lte: now }, end_date: { gte: now } },
           ],
         },
@@ -270,7 +285,7 @@ export class RemindersService {
       // Find the most popular pickup time cluster
       const pickupClusters = new Map<string, number>();
       const returnClusters = new Map<string, number>();
-      for (const b of allTomorrowBookings) {
+      for (const b of allUpcomingBookings) {
         if (b.pickup_time) pickupClusters.set(b.pickup_time, (pickupClusters.get(b.pickup_time) || 0) + 1);
         if (b.return_time) returnClusters.set(b.return_time, (returnClusters.get(b.return_time) || 0) + 1);
       }
@@ -332,10 +347,11 @@ export class RemindersService {
             if (assignPickup) assignedParts.push(`pickup at ${pickupTime}`);
             if (assignReturn) assignedParts.push(`return at ${returnTime}`);
             const assignedText = assignedParts.join(' and ');
-            await this.hyggloService.sendMessage(
-              booking.rental.listing_id,
-              `Just a heads up — since we hadn't heard back on times after a few reminders, I've gone ahead and assigned ${assignedText} for your rental starting tomorrow. If those times don't work for you, just let me know and we can adjust!`,
-            );
+            const autoAssignMsg = `Just a heads up — since we hadn't heard back on times after a few reminders, I've gone ahead and assigned ${assignedText} for your rental starting tomorrow. If those times don't work for you, just let me know and we can adjust!`;
+            await this.hyggloService.sendMessage(booking.rental.listing_id, autoAssignMsg);
+            if (booking.rental_id) {
+              await this.memoryService.storeConversation(`rental:${booking.rental_id}`, 'assistant', autoAssignMsg, { model: 'auto-assign' });
+            }
           } catch (sendErr) {
             this.logger.warn(`Failed to notify renter about auto-assigned times: ${sendErr.message}`);
           }
@@ -480,6 +496,14 @@ export class RemindersService {
     try {
       this.logger.log(`Sending arrival check: ${phase} #${messageNum} for booking ${bookingId} via listing ${listingId}`);
       const sent = await this.hyggloService.sendMessage(listingId, message);
+
+      // Store in conversation history so bot has context for renter replies
+      try {
+        const booking = await this.prisma.booking.findUnique({ where: { id: bookingId }, select: { rental_id: true } });
+        if (booking?.rental_id) {
+          await this.memoryService.storeConversation(`rental:${booking.rental_id}`, 'assistant', message, { model: 'arrival-check' });
+        }
+      } catch { /* non-critical */ }
 
       // Update state: mark as sent so we don't re-send.
       // In READ_ONLY_MODE, sendMessage returns false — still update state to prevent retry spam.

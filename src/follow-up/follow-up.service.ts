@@ -8,6 +8,7 @@ import { AiService } from '../ai/ai.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
 import { ContentionService } from '../contention/contention.service';
+import { MemoryService } from '../memory/memory.service';
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
@@ -36,6 +37,7 @@ export class FollowUpService {
     private calendarService: CalendarService,
     private conversationStageService: ConversationStageService,
     private contentionService: ContentionService,
+    private memoryService: MemoryService,
   ) {}
 
   /**
@@ -329,9 +331,20 @@ export class FollowUpService {
         // Non-critical — fall through to generic template
       }
 
+      // Check if listing is non-central → offer travel discount as recovery incentive
+      let isNonCentral = false;
+      if (rental?.listing_location) {
+        const centralLocations = ['trafalgar', 'whitehall', 'central london', 'charing cross', 'pall mall', 'national gallery', 'westminster', 'covent garden'];
+        const loc = rental.listing_location.toLowerCase();
+        isNonCentral = !centralLocations.some(c => loc.includes(c));
+      }
+
       if (hasPricingObjection) {
         followUpMessage = `Hey, just wanted to let you know — if you've seen the ${itemName} listed for less anywhere in central London (Zone 1-2), I can actually beat that price by 5%. Just send me a screenshot of the listing showing the item, price, and location and I'll sort it out!`;
         this.logger.log(`Price match offer sent for ${rental?.title} (pricing objection detected in conversation)`);
+      } else if (isNonCentral) {
+        followUpMessage = `Just checking in about the ${itemName}! By the way, since you'd be coming from the ${rental.listing_location} area, you'd get a 10% discount on this rental. Let me know if you'd like to go ahead or if you have any questions.`;
+        this.logger.log(`Travel discount recovery sent for ${rental?.title} (non-central listing: ${rental.listing_location})`);
       } else {
         followUpMessage = `Just checking in - let me know if you had any other questions about the ${itemName}! By the way, if getting to the pickup spot is tricky, I can also arrange delivery.`;
       }
@@ -342,6 +355,7 @@ export class FollowUpService {
     // Send via Hygglo (sendMessage handles READ_ONLY_MODE with per-rental exceptions)
     try {
       await this.hyggloService.sendMessage(rental.listing_id, followUpMessage);
+      await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', followUpMessage, { model: 'follow-up' });
     } catch (error) {
       this.logger.warn(`Failed to send follow-up for ${rental.title}: ${error.message}`);
     }
@@ -417,6 +431,7 @@ export class FollowUpService {
     // Send via Hygglo
     try {
       await this.hyggloService.sendMessage(rental.listing_id, saveMessage);
+      await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', saveMessage, { model: 'follow-up' });
     } catch (error) {
       this.logger.warn(`Failed to send save attempt for ${rental?.title}: ${error.message}`);
     }
@@ -577,6 +592,7 @@ export class FollowUpService {
 
       try {
         await this.hyggloService.sendMessage(rental.listing_id, confirmMessage);
+        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', confirmMessage, { model: 'follow-up' });
       } catch {
         // Silent failure - confirmation is best-effort
       }
@@ -1113,6 +1129,7 @@ export class FollowUpService {
     // sendMessage handles READ_ONLY_MODE with per-rental exceptions
     try {
       await this.hyggloService.sendMessage(rental.listing_id, tcsMessage);
+      await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', tcsMessage, { model: 'follow-up' });
     } catch (sendErr) {
       this.logger.warn(`Failed to send delivery T&Cs: ${sendErr.message}`);
     }
@@ -1221,6 +1238,7 @@ export class FollowUpService {
 
     try {
       await this.hyggloService.sendMessage(rental.listing_id, message);
+      await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', message, { model: 'time-followup' });
     } catch (error) {
       this.logger.warn(`Failed to send time follow-up for ${rental?.title}: ${error.message}`);
     }

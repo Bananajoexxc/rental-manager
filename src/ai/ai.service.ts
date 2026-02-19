@@ -516,8 +516,13 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
 
       // Add current user message (multimodal if images present)
       if (context.imageUrls && context.imageUrls.length > 0) {
+        // Inject rental context so Vision can connect the photo to the actual rental items
+        let imageContextPrefix = '';
+        if (enriched.rentalContext) {
+          imageContextPrefix = `[RENTAL CONTEXT FOR PHOTO ANALYSIS: ${enriched.rentalContext}]\n\n`;
+        }
         const contentBlocks: Anthropic.ContentBlockParam[] = [
-          { type: 'text', text: userMessage },
+          { type: 'text', text: imageContextPrefix + userMessage },
         ];
         for (const imageUrl of context.imageUrls) {
           contentBlocks.push({
@@ -526,7 +531,7 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
           } as any);
         }
         messages.push({ role: 'user', content: contentBlocks });
-        this.logger.log(`Multimodal message: ${context.imageUrls.length} image(s) attached`);
+        this.logger.log(`Multimodal message: ${context.imageUrls.length} image(s) attached, rental context injected`);
       } else {
         messages.push({ role: 'user', content: userMessage });
       }

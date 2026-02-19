@@ -6,6 +6,14 @@ import { PlaywrightService } from './playwright/playwright.service';
 import { HyggloService } from './hygglo/hygglo.service';
 import { isAccessoryItem, findBestMatch, getInventoryItemNames } from './utils/item-matcher';
 
+/** Filter photos_urls to only product images (exclude renter profile avatars) */
+function getProductPhoto(photosUrls: string[] | null | undefined): string | null {
+  if (!photosUrls || photosUrls.length === 0) return null;
+  // Product photos contain /products/ or /fat-llama/products/; profile pics contain /profiles/
+  const product = photosUrls.find(u => u.includes('/products/'));
+  return product || null;
+}
+
 interface BookingRow {
   id: string;
   item_name: string;
@@ -277,7 +285,7 @@ export class AppService {
         startDate: grouped.startDate,
         endDate: grouped.endDate,
         account: grouped.account,
-        photo: detail?.photos_urls?.[0] || null,
+        photo: getProductPhoto(detail?.photos_urls) || null,
       };
     };
 
@@ -314,7 +322,7 @@ export class AppService {
         if (r.end_date && (!existing.endDate || r.end_date > existing.endDate)) {
           existing.endDate = r.end_date;
         }
-        if (!existing.photo && r.photos_urls?.[0]) existing.photo = r.photos_urls[0];
+        if (!existing.photo) { const pp = getProductPhoto(r.photos_urls); if (pp) existing.photo = pp; }
       } else {
         pendingVisitMap.set(key, {
           renter: r.renter_info || 'Unknown',
@@ -322,7 +330,7 @@ export class AppService {
           startDate: r.start_date!,
           endDate: r.end_date!,
           account: r.account || 'dbcinema',
-          photo: r.photos_urls?.[0] || null,
+          photo: getProductPhoto(r.photos_urls) || null,
           earnings: r.rental_price || 0,
         });
       }

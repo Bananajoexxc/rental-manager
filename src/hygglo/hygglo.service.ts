@@ -551,9 +551,8 @@ export class HyggloService implements OnModuleInit {
           if (item.image?.fullSizeUrl) photosUrls.push(item.image.fullSizeUrl);
         }
       }
-      if (order.otherPartsProfileImage) {
-        photosUrls.unshift(order.otherPartsProfileImage);
-      }
+      // NOTE: order.otherPartsProfileImage is the RENTER's avatar — do NOT mix into product photos.
+      // It was previously unshifted here, causing renter faces to appear as item thumbnails.
 
       // Listing URL from first item slug
       let listingUrl = '';
@@ -1054,47 +1053,63 @@ export class HyggloService implements OnModuleInit {
     const activities: any[] = detail.activities || [];
     const otherPartName = detail.users?.otherPart?.name || detail.labels?.otherPart || 'Renter';
 
-    const chatMessages = activities
-      .filter((a: any) => a.chatMessage?.text?.content || a.chatMessage?.images?.length > 0 || a.chatMessage?.attachments?.length > 0)
-      .map((a: any) => {
-        // Always label from the OWNER's perspective:
-        // "Owner" = the listing owner, renterName = the person renting
+    const allMessages: { sender: string; content: string; timestamp: string; imageUrls?: string[] }[] = [];
+
+    for (const a of activities) {
+      let timestamp = new Date().toISOString();
+      if (a.createdAtLabel) {
+        const parsed = this.parseCreatedAtLabel(a.createdAtLabel);
+        if (parsed) timestamp = parsed.toISOString();
+      }
+
+      // Chat messages (renter ↔ owner)
+      if (a.chatMessage?.text?.content || a.chatMessage?.images?.length > 0 || a.chatMessage?.attachments?.length > 0) {
         let sender: string;
         if (isOwnerPerspective) {
           sender = a.chatMessage.byMe ? 'Owner' : otherPartName;
         } else {
-          // Viewing as renter: byMe=true means renter sent it, byMe=false means owner sent it
           sender = a.chatMessage.byMe ? otherPartName : 'Owner';
         }
 
-        let timestamp = new Date().toISOString();
-        if (a.createdAtLabel) {
-          const parsed = this.parseCreatedAtLabel(a.createdAtLabel);
-          if (parsed) timestamp = parsed.toISOString();
-        }
-
-        // Extract image URLs from multiple possible Hygglo API fields
         const imageUrls: string[] = [];
         const imgs = a.chatMessage?.images || a.chatMessage?.attachments || a.chatMessage?.media || a.chatMessage?.files || [];
         for (const img of imgs) {
           const url = typeof img === 'string' ? img : (img?.url || img?.src || img?.href || img?.imageUrl || '');
           if (url) imageUrls.push(url);
         }
-        // Also check for single image field
         if (a.chatMessage?.image) {
           const singleUrl = typeof a.chatMessage.image === 'string' ? a.chatMessage.image : (a.chatMessage.image?.url || '');
           if (singleUrl) imageUrls.push(singleUrl);
         }
 
         const content = a.chatMessage?.text?.content || (imageUrls.length > 0 ? '[Image sent]' : '');
+        allMessages.push({ sender, content, timestamp, ...(imageUrls.length > 0 ? { imageUrls } : {}) });
+        continue;
+      }
 
-        return { sender, content, timestamp, ...(imageUrls.length > 0 ? { imageUrls } : {}) };
-      });
-
-    if (chatMessages.length > 0) {
-      this.logger.log(`readMessages(${detail.id}) found ${chatMessages.length} chat messages from order detail for ${accountName} (role: ${isOwnerPerspective ? 'owner' : 'customer'})`);
+      // Platform/system status messages (Hygglo blue status updates)
+      // These appear in the chat as status notifications but are NOT chatMessages
+      const statusText = a.text?.content || a.text || a.description || a.label || a.title || '';
+      const statusContent = typeof statusText === 'string' ? statusText.trim() : '';
+      if (statusContent && !a.chatMessage) {
+        // Skip generic activity types that aren't useful for conversation context
+        const skipPatterns = /^(order created|listing published|listing updated)$/i;
+        if (!skipPatterns.test(statusContent)) {
+          allMessages.push({
+            sender: 'Hygglo System',
+            content: `[Platform notification] ${statusContent}`,
+            timestamp,
+          });
+        }
+      }
     }
-    return chatMessages;
+
+    if (allMessages.length > 0) {
+      const chatCount = allMessages.filter(m => m.sender !== 'Hygglo System').length;
+      const systemCount = allMessages.filter(m => m.sender === 'Hygglo System').length;
+      this.logger.log(`readMessages(${detail.id}) found ${chatCount} chat + ${systemCount} system messages for ${accountName} (role: ${isOwnerPerspective ? 'owner' : 'customer'})`);
+    }
+    return allMessages;
   }
 
   private isWriteEnabledRental(rentalId: string): boolean {

@@ -13,6 +13,9 @@ export enum Intent {
   NEGOTIATION = 'negotiation',
   ACKNOWLEDGMENT = 'acknowledgment',
   COMPLAINT = 'complaint',
+  CANCELLATION = 'cancellation',
+  DAMAGE_REPORT = 'damage_report',
+  RETURN_CONFIRMATION = 'return_confirmation',
   GOODBYE = 'goodbye',
   GENERAL = 'general',
 }

@@ -9,6 +9,7 @@ import { AiModule } from '../ai/ai.module';
 import { CalendarModule } from '../calendar/calendar.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 import { ContentionModule } from '../contention/contention.module';
+import { MemoryModule } from '../memory/memory.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ContentionModule } from '../contention/contention.module';
     CalendarModule,
     ConversationStageModule,
     ContentionModule,
+    MemoryModule,
   ],
   providers: [FollowUpService],
   exports: [FollowUpService],

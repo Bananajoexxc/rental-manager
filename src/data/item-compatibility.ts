@@ -1004,7 +1004,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: ['DJ RX3 Pioneer controller', 'JBL wireless microphones'],
     included_with_rental: ['Speaker', 'Power cable', 'AUX cable'],
-    notes: '160W portable Bluetooth party speaker. Can pair 2 speakers for stereo. Mic + guitar inputs. Great for events, wrap parties. Pairs with Pioneer DJ RX3. Heavy (12kg each) — car/van delivery required.',
+    notes: '160W portable Bluetooth party speaker. Can pair 2 speakers for stereo. Mic + guitar inputs. Great for events, wrap parties. Pairs with Pioneer DJ RX3. Heavy (12kg each) — self-pickup OK, but if delivery requested needs car/van. Delivery only MANDATORY when booked together with DJ deck.',
   },
   {
     item_name: 'DJ RX3 Pioneer controller',
@@ -1016,7 +1016,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: ['JBL Club 120 speaker'],
     included_with_rental: ['Controller', 'Power cable', 'USB cable', 'RCA to 3.5mm cable'],
-    notes: 'Pioneer DDJ-RX3 DJ controller. Works with Rekordbox/Serato. Connect to JBL speakers via RCA or 3.5mm. Renter needs laptop with DJ software. Heavy + bulky — van delivery required with speakers.',
+    notes: 'Pioneer DDJ-RX3 DJ controller. Works with Rekordbox/Serato. Connect to JBL speakers via RCA or 3.5mm. Renter needs laptop with DJ software. Heavy + bulky — self-pickup OK for controller alone. Delivery only MANDATORY when booked together with speakers.',
   },
   {
     item_name: 'Nanlite Pavotube 4x set',
@@ -1204,5 +1204,5 @@ export function formatCompatibilityForAI(itemNames: string[]): string {
     );
   }
   if (parts.length === 0) return '';
-  return `=== ITEM COMPATIBILITY (use this to recommend correct accessories) ===\n${parts.join('\n\n')}`;
+  return `=== ITEM COMPATIBILITY (reference data — use ONLY to answer renter questions) ===\nIMPORTANT: This data is for YOUR reference. NEVER volunteer compatibility info the renter didn't ask about. NEVER assume or mention what camera/equipment the renter owns unless THEY explicitly said it. Only use this to answer direct questions (e.g. "is this compatible with my A7 IV?").\n${parts.join('\n\n')}`;
 }

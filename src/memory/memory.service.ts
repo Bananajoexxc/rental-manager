@@ -106,7 +106,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'Delivery Mandatory Items',
-        content: 'Delivery for DJ deck + speakers booked together is MANDATORY due to weight and size. Orders with more than one large light should recommend delivery. For all other items delivery is optional and only discussed when renter asks.',
+        content: 'Delivery is MANDATORY ONLY when DJ deck + speakers are booked TOGETHER. Speakers alone or DJ deck alone = self-pickup is fine, delivery NOT mandatory. Orders with more than one large light should recommend delivery. For all other items delivery is optional and only discussed when renter asks.',
         importance: 8,
       },
 
@@ -520,7 +520,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 4 - Unavailable Item Alternatives',
-        content: 'If an item is not or never available, go through listings and check what items ARE available that fit the renters needs. Recommend the next best closest alternative and try to upsell kindly. If they agree, change the requested items to the available ones and ask them to confirm. If no request sent yet, tell them to send one first so you can change items.',
+        content: 'If an item is not or never available, go through listings and check what items ARE available that fit the renters needs. Recommend the next best closest alternative and try to upsell kindly. PRICING: When offering a slight upgrade or downgrade, quote the MIDPOINT price between the requested item and the alternative (e.g. requested £30/day + alternative £40/day = quote £35/day). This only applies to the substituted item — other items in the order stay at normal price. If they agree, change the requested items to the available ones and ask them to confirm. If no request sent yet, tell them to send one first so you can change items.',
         importance: 10,
       },
       {
@@ -628,7 +628,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE - Delivery Rules',
-        content: 'If delivery is required or requested, ask for full postcode and inform Daniel. Orders with more than one light = recommend delivery. DJ deck + speakers together = delivery is MANDATORY due to weight/size, inform renters. If renter booked delivery and has paid and verified, inform Daniel that he needs to book the courier.',
+        content: 'If delivery is required or requested, ask for full postcode and inform Daniel. Orders with more than one light = recommend delivery. DJ deck + speakers TOGETHER = delivery is MANDATORY due to weight/size, inform renters. Speakers alone or DJ deck alone = self-pickup OK, delivery NOT mandatory. If renter booked delivery and has paid and verified, inform Daniel that he needs to book the courier.',
         importance: 10,
       },
 
@@ -710,7 +710,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DB Cinema Rentals - Individual Item Prices (Speakers & DJ)',
-        content: 'DB Cinema listing prices (per day). SPEAKERS & DJ: 2x JBL Club 120 speakers £39-49/day. Pioneer DJ RX3 controller £40-55/day. NOTE: DJ deck + speakers ALWAYS requires delivery (mandatory). Estimates from real listings.',
+        content: 'DB Cinema listing prices (per day). SPEAKERS & DJ: 2x JBL Club 120 speakers £39-49/day. Pioneer DJ RX3 controller £40-55/day. NOTE: Delivery MANDATORY only when DJ deck + speakers booked TOGETHER. Speakers alone = self-pickup OK. Estimates from real listings.',
         importance: 8,
       },
       {
@@ -941,6 +941,24 @@ export class MemoryService implements OnModuleInit {
     // Extract quantity mentions
     const qtyMatch = allText.match(/\b(\d+)\s*(?:units?|cameras?|bodies|lenses|lights?|mics?|kits?|sets?|pairs?)\b/gi);
     if (qtyMatch) qtyMatch.slice(0, 3).forEach(q => facts.add(`Quantity: ${q}`));
+
+    // DECISIONS & OFFERS: Preserve conditional statements and commitments verbatim
+    // These are critical for context and lose meaning when extracted as bare facts
+    for (const m of older) {
+      if (m.role === 'assistant') {
+        // Conditional offers: "if you add X, I'll give you Y"
+        const conditionalOffers = m.content.match(/if\s+you\s+(?:add|book|take|rent|extend|include).{10,80}(?:discount|off|free|£\d+|percent|%)/gi);
+        if (conditionalOffers) conditionalOffers.slice(0, 2).forEach(o => facts.add(`Offer made: "${o.trim()}"`));
+        // Quoted prices with context
+        const pricedOffers = m.content.match(/(?:total|quote|come to|looking at|that'?s|would be)\s+[^.]*£\d+[^.]{0,40}/gi);
+        if (pricedOffers) pricedOffers.slice(0, 2).forEach(o => facts.add(`Quote: "${o.trim()}"`));
+      }
+      if (m.role === 'user') {
+        // Renter commitments/decisions
+        const decisions = m.content.match(/(?:I'?ll take|I want|I'?d like|let'?s go with|I'?ll go for|I prefer|I need|not interested in|don'?t need|skip the).{5,60}/gi);
+        if (decisions) decisions.slice(0, 2).forEach(d => facts.add(`Renter decision: "${d.trim()}"`));
+      }
+    }
 
     const factsLine = facts.size > 0
       ? `[CONTEXT from ${older.length} earlier messages] ${Array.from(facts).join('. ')}`

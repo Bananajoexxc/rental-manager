@@ -4402,8 +4402,11 @@
             var renters = item.currentRenters && item.currentRenters.length > 0
               ? item.currentRenters.map(function(r) { return r.length > 18 ? r.substring(0, 18) + '\u2026' : r; }).map(escapeHtml).join(', ')
               : '';
+            var imgHtml = item.imageUrl
+              ? '<img src="' + escapeHtml(item.imageUrl) + '" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0;border:1px solid #3d1f2a;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" /><div style="width:32px;height:32px;border-radius:6px;background:#1e1215;border:1px solid #3d1f2a;display:none;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">\u274C</div>'
+              : '<div style="width:32px;height:32px;border-radius:6px;background:#1e1215;border:1px solid #3d1f2a;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">\u274C</div>';
             return '<div class="stat-rental-row">' +
-              '<div style="width:32px;height:32px;border-radius:6px;background:#1e1215;border:1px solid #3d1f2a;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">\u274C</div>' +
+              imgHtml +
               '<div class="stat-rental-info">' +
                 '<div class="stat-rental-name" style="color:#ef4444;">' + escapeHtml(item.item) + '</div>' +
                 '<div class="stat-rental-items">' + item.totalStock + ' unit' + (item.totalStock > 1 ? 's' : '') + ' out' + (renters ? ' \u00B7 ' + renters : '') + '</div>' +
@@ -4424,13 +4427,17 @@
       section.style.display = '';
       var html = '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
       data.forEach(function(item) {
-        html += '<div style="background:#1e1215;border:1px solid #3d1f2a;border-radius:8px;padding:10px 14px;flex:1;min-width:200px;">';
+        html += '<div style="background:#1e1215;border:1px solid #3d1f2a;border-radius:8px;padding:10px 14px;flex:1;min-width:200px;display:flex;gap:10px;align-items:center;">';
+        if (item.imageUrl) {
+          html += '<img src="' + escapeHtml(item.imageUrl) + '" style="width:44px;height:44px;border-radius:6px;object-fit:cover;flex-shrink:0;" onerror="this.style.display=\'none\'" />';
+        }
+        html += '<div>';
         html += '<div style="color:#ef4444;font-weight:600;font-size:13px;">' + escapeHtml(item.item) + '</div>';
         html += '<div style="color:#8b8fa3;font-size:11px;margin-top:2px;">All ' + item.totalStock + ' unit' + (item.totalStock > 1 ? 's' : '') + ' out until <span style="color:#f59e0b;">' + item.bookedUntil + '</span></div>';
         if (item.currentRenters && item.currentRenters.length > 0) {
           html += '<div style="color:#6b6f82;font-size:10px;margin-top:2px;">With: ' + item.currentRenters.map(escapeHtml).join(', ') + '</div>';
         }
-        html += '</div>';
+        html += '</div></div>';
       });
       html += '</div>';
       body.innerHTML = html;
@@ -4631,8 +4638,9 @@
       var html = '';
       for (var i = 0; i < rentals.length; i++) {
         var r = rentals[i];
-        var photo = r.photos && r.photos.length > 0
-          ? '<img class="return-card-photo" src="' + escapeHtml(r.photos[0]) + '" alt="">'
+        var productPhotos = (r.photos || []).filter(function(p) { return p.indexOf('/products/') >= 0; });
+        var photo = productPhotos.length > 0
+          ? '<img class="return-card-photo" src="' + escapeHtml(productPhotos[0]) + '" alt="">'
           : '<div class="return-card-placeholder">&#128247;</div>';
 
         var items = (r.items || []).slice(0, 3).join(', ');

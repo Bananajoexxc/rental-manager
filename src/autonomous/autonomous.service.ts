@@ -129,6 +129,20 @@ export class AutonomousService {
    */
   private determineContextLevel(message: string): 'minimal' | 'standard' | 'comprehensive' {
     const lowerMessage = message.toLowerCase();
+    const trimmed = message.trim();
+
+    // Social message detection (greetings, thanks, small talk — no business pivot needed)
+    const socialTriggers = [
+      /^(happy new year|happy christmas|merry christmas|happy birthday|happy easter|seasons greetings)[\s!.]*$/i,
+      /^(haha|lol|lmao|😂|🤣|😅)+[\s!]*$/i,
+      /^(you'?re the best|legend|amazing service|so helpful|really appreciate it|thanks so much you'?re)[\s!.]*$/i,
+      /^(have a good|have a great|enjoy your|good luck|take care|all the best)[\s\w!.]*$/i,
+    ];
+    for (const trigger of socialTriggers) {
+      if (trigger.test(trimmed)) {
+        return 'minimal'; // Social messages get minimal + prompt rule handles warm response
+      }
+    }
 
     // Minimal context triggers (simple responses)
     const minimalTriggers = [
@@ -137,7 +151,7 @@ export class AutonomousService {
     ];
 
     for (const trigger of minimalTriggers) {
-      if (trigger.test(message.trim())) {
+      if (trigger.test(trimmed)) {
         return 'minimal';
       }
     }
@@ -1145,6 +1159,7 @@ export class AutonomousService {
               onNewRentalInventoryWarning =
                 `\n\nWARNING — VISIBILITY LISTING: "${rental.title}" is a visibility/SEO listing for an item we do NOT carry. ` +
                 `This item is "currently unavailable". Check if we have a similar alternative and recommend it naturally. ` +
+                `If the listing title mentions a KIT or SET with multiple components (camera + lenses + accessories), suggest alternatives for ALL components — not just the camera body. ` +
                 `NEVER say "we don't stock this" or "visibility listing". Frame as temporary unavailability.`;
               photoRefHandled = true;
             } else {
@@ -1172,6 +1187,8 @@ export class AutonomousService {
                 `\n\nWARNING — LISTING_INVENTORY_MISMATCH: The listing "${rental.title}" does not match any item in our physical inventory. ` +
                 `Do NOT confirm this item as available. ` +
                 `Closest real item: "${altMatch}" (${MASTER_INVENTORY[altMatch]} units). Offer this as an alternative. ` +
+                `If the listing title mentions a KIT or SET with multiple components (camera + lenses + accessories), suggest alternatives for ALL components — not just the main item. Check the pricing catalog for compatible lenses/accessories to recommend alongside the camera alternative. ` +
+                `SUBSTITUTION PRICING: Quote the MIDPOINT price between the requested item and the alternative (only for this substituted item, not other items in the order). ` +
                 `IMPORTANT FRAMING: Say this specific item is "currently unavailable" and suggest the alternative. ` +
                 `NEVER say "we don't stock this" or "not in our lineup". NEVER invent reasons for unavailability.`;
             } else {
@@ -1596,7 +1613,7 @@ export class AutonomousService {
   private async getConversationSummariesForRenter(
     profileId: string,
     excludeRentalId: string,
-    maxAgeDays: number = 7,
+    maxAgeDays: number = 90,
   ): Promise<{ rentalTitle: string; status: string; summary: string; dates: string }[]> {
     const results: { rentalTitle: string; status: string; summary: string; dates: string }[] = [];
     try {
@@ -2533,11 +2550,18 @@ export class AutonomousService {
         }
 
         // CONTEXT OPTIMIZATION: Determine context level needed
-        const contextLevel = this.determineContextLevel(msg.content);
+        let contextLevel = this.determineContextLevel(msg.content);
 
         // MINIMAL CONTEXT: For simple acks ("hi", "thanks", "ok"), skip heavy context loading
+        // BUT: if the bot's last message was a question, upgrade to standard — the renter is likely answering it
         if (contextLevel === 'minimal' && conversationHistory.length >= 2) {
-          this.logger.debug(`Minimal context for simple message: "${msg.content.substring(0, 50)}"`);
+          const lastAssistant = [...conversationHistory].reverse().find(m => m.role === 'assistant');
+          if (lastAssistant && lastAssistant.content.trim().endsWith('?')) {
+            contextLevel = 'standard';
+            this.logger.debug(`Upgraded minimal→standard: bot's last message was a question`);
+          } else {
+            this.logger.debug(`Minimal context for simple message: "${msg.content.substring(0, 50)}"`);
+          }
         }
 
         // Extract meaningful keywords from the message
@@ -2990,11 +3014,11 @@ export class AutonomousService {
           if (missing.length > 0) {
             const missingLines = missing.map((m) => {
               if (m.category === 'lens') {
-                return `The renter requested ${m.camera} but hasn't mentioned a lens. Compatible options: ${m.suggestions.join(', ')}. Casually mention they'll need one.`;
+                return `${m.camera} needs a lens to work. Compatible options we rent: ${m.suggestions.join(', ')}. Only mention if the renter hasn't already said they have their own lens.`;
               }
-              return `The renter's ${m.camera} can use ${m.suggestions.join(', ')} for best performance. Worth mentioning if relevant.`;
+              return `${m.camera} works well with ${m.suggestions.join(', ')}. Only mention if the renter asks about accessories.`;
             });
-            memories = [memories, `\n--- MISSING ESSENTIALS ---\n${missingLines.join('\n')}`].filter(Boolean).join('\n');
+            memories = [memories, `\n--- MISSING ESSENTIALS (only mention if renter asks or context is natural) ---\n${missingLines.join('\n')}`].filter(Boolean).join('\n');
             this.logger.log(`MISSING ESSENTIALS: ${missing.length} gap(s) for ${mentionedItems.join(', ')}`);
           }
         }
@@ -3186,6 +3210,8 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
                   `\n--- LISTING_INVENTORY_MISMATCH ---\n` +
                   `This listing item "${rental.title}" is not currently available.\n` +
                   `Closest alternative in stock: "${altMatch}" (${MASTER_INVENTORY[altMatch]} unit(s)). Offer this instead.\n` +
+                  `If the listing title mentions a KIT or SET with multiple components (camera + lenses + accessories), suggest alternatives for ALL components — not just the main item. Check the pricing catalog for compatible lenses/accessories to recommend alongside the camera alternative.\n` +
+                  `SUBSTITUTION PRICING: Quote the MIDPOINT price between the requested item and the alternative (only for this substituted item, not other items in the order).\n` +
                   `Say this specific item is "currently unavailable" and suggest the alternative.\n` +
                   `NEVER say "we don't stock this" or "not in our lineup". Frame as temporary.\n`;
               } else {
@@ -3603,6 +3629,17 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           },
         };
 
+        // TIME REFERENCE CONTEXT: When renter mentions relative times, inject rental dates for accurate resolution
+        let timeReferenceContext = '';
+        const timeWords = /\b(tomorrow|today|tonight|this weekend|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening|later|soon|asap)\b/i;
+        if (timeWords.test(msg.content)) {
+          const now = new Date();
+          const startStr = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'TBC';
+          const endStr = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'TBC';
+          const todayStr = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+          timeReferenceContext = `TIME REFERENCE CONTEXT: Today is ${todayStr}. This rental runs from ${startStr} to ${endStr}. When the renter says a relative time (e.g. "tomorrow", "Friday", "this weekend"), resolve it to the actual date and CONFIRM it back to them (e.g. "So that's Friday 21st Feb — works for me!").`;
+        }
+
         const response = dspyResponse?.response
           ? { content: dspyResponse.response, memories: [], model: 'dspy-optimized', inputTokens: 0, outputTokens: 0 }
           : await this.aiService.processAdaptive(messagePrompt, {
@@ -3621,6 +3658,8 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
             ...[couponContext, deliveryQuoteContext, (!isLateStage && !suppressUpsell) ? lowValueInstruction : ''].filter(Boolean),
             // CONVERSATION: summary, urgency, welcome-back, multi-rental coordination
             ...[conversationSummary, urgencyContext, welcomeBackContext, multiRentalContext].filter(Boolean),
+            // TIME REFERENCES: help AI resolve relative times against rental dates
+            ...[timeReferenceContext].filter(Boolean),
           ].join('\n'),
           rentalDates: { start: rental.start_date, end: rental.end_date },
           // Context-aware token budget: simple acks get less, complex queries get more

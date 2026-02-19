@@ -63,9 +63,30 @@ const INTENT_PATTERNS: { intent: Intent; patterns: RegExp[]; weight: number }[] 
   {
     intent: Intent.COMPLAINT,
     patterns: [
-      /\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund|compensat|escalat|annoying|ridiculous|issue|problem|wrong)\b/i,
+      /\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund|compensat|escalat|annoying|ridiculous)\b/i,
     ],
     weight: 2,
+  },
+  {
+    intent: Intent.CANCELLATION,
+    patterns: [
+      /\b(cancel|cancellation|don'?t need it|won'?t need|no longer need|plans changed|something came up|not going ahead|pull out|back out)\b/i,
+    ],
+    weight: 2,
+  },
+  {
+    intent: Intent.DAMAGE_REPORT,
+    patterns: [
+      /\b(scratched|broke|broken|cracked|dropped|damaged|dent|bent|won'?t turn on|not working|stopped working|fell|smashed|chipped)\b/i,
+    ],
+    weight: 3,
+  },
+  {
+    intent: Intent.RETURN_CONFIRMATION,
+    patterns: [
+      /\b(returned|left it|dropped it off|left at|put it back|gave it back|it'?s back|brought it back|left the|returned the)\b/i,
+    ],
+    weight: 1,
   },
   {
     intent: Intent.GOODBYE,
@@ -133,6 +154,11 @@ function assessComplexity(message: string, historyLength: number): 'low' | 'medi
 
   if (/\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund|compensat)\b/i.test(message)) signals += 2;
   if (/\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for)\b/i.test(message)) signals += 2;
+  // Sarcasm/frustration signals — boost complexity to trigger Sonnet escalation
+  if (/\b(oh great|oh wonderful|oh fantastic|oh perfect|oh brilliant|really professional|wow.*service|sure.*take your time|not like I need)\b/i.test(message)) signals += 2;
+  if (/🙄|😒|😤/.test(message)) signals += 1;
+  // Cancellation/damage — always high complexity
+  if (/\b(cancel|scratched|broke|broken|dropped|damaged|won'?t turn on|not working)\b/i.test(message)) signals += 2;
 
   const hasPricing = /\b(price|cost|how much|quote|rate|£\d)\b/i.test(message);
   const hasDelivery = /\b(deliver|delivery|courier|postcode|address|collect)\b/i.test(message);

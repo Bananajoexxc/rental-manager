@@ -930,18 +930,19 @@ export class LostRevenueService {
     totalStock: number;
     bookedUntil: string;
     currentRenters: string[];
+    imageUrl?: string;
   }[]> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const results: { item: string; totalStock: number; bookedUntil: string; currentRenters: string[] }[] = [];
+    const results: { item: string; totalStock: number; bookedUntil: string; currentRenters: string[]; imageUrl?: string }[] = [];
 
     for (const [item, maxQty] of Object.entries(MASTER_INVENTORY)) {
       if (maxQty <= 0) continue;
 
-      // Find confirmed bookings overlapping today
+      // Find confirmed bookings overlapping today — include rental_id for photo lookup
       const overlapping = await this.prisma.booking.findMany({
         where: {
           item_name: item,
@@ -949,7 +950,7 @@ export class LostRevenueService {
           start_date: { lt: tomorrow },
           end_date: { gt: today },
         },
-        select: { quantity: true, end_date: true, renter_name: true },
+        select: { quantity: true, end_date: true, renter_name: true, rental_id: true },
       });
 
       const bookedQty = overlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
@@ -959,11 +960,27 @@ export class LostRevenueService {
           b.end_date < min ? b.end_date : min, overlapping[0].end_date);
         const renters = [...new Set(overlapping.map(b => b.renter_name).filter(Boolean))];
 
+        // Get item image from the first booking's rental photos
+        let imageUrl: string | undefined;
+        const rentalIds = [...new Set(overlapping.map(b => b.rental_id).filter((id): id is string => !!id))];
+        if (rentalIds.length > 0) {
+          const rental = await this.prisma.rental.findFirst({
+            where: { id: { in: rentalIds }, photos_urls: { isEmpty: false } },
+            select: { photos_urls: true },
+          });
+          if (rental && rental.photos_urls.length > 0) {
+            // Filter to product photos only (exclude renter profile avatars which contain /profiles/)
+            const productPhoto = rental.photos_urls.find(u => u.includes('/products/'));
+            if (productPhoto) imageUrl = productPhoto;
+          }
+        }
+
         results.push({
           item,
           totalStock: maxQty,
           bookedUntil: earliestEnd.toISOString().split('T')[0],
           currentRenters: renters,
+          imageUrl,
         });
       }
     }
