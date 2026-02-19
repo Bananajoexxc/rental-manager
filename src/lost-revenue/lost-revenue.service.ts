@@ -212,20 +212,22 @@ export class LostRevenueService {
           where: { hygglo_order_id: rental.listingId },
         });
         if (existing) {
-          // Reclassify records that still have 'expired' denial_type (from backfill)
-          if (existing.denial_type === 'expired' || !existing.denial_type) {
+          // Reclassify records using active_step data
+          if (existing.denial_type === 'expired' || !existing.denial_type || existing.denial_type === 'owner_denied') {
             const step = this.extractActiveOrderStep(rental._detail);
             const items = (existing.items_requested as any[]) || [];
             const hasMatched = items.some(i => i.matched !== null);
             const approved = this.isStepCompleted(rental._detail, 'APPROVED');
             let newType = existing.denial_type;
-            if (step && ['VERIFIED', 'FUNDS_RESERVED'].includes(step)) {
+            if (step === 'CANCELED') {
+              newType = 'renter_cancelled';
+            } else if (step === 'VERIFICATION_FAILED' || (step && ['VERIFIED', 'FUNDS_RESERVED'].includes(step))) {
               newType = 'verification_failed';
             } else if (existing.stock_blocked) {
               newType = 'unavailable';
             } else if (hasMatched && !approved) {
-              // Owner never approved — items were available but not accepted
-              newType = 'owner_denied';
+              // Use active_step to distinguish: DENIED = owner denied, null = timeout
+              newType = step === 'DENIED' ? 'owner_denied' : 'timeout';
             } else if (hasMatched && approved) {
               newType = 'expired';
             } else if (!hasMatched) {
@@ -293,10 +295,21 @@ export class LostRevenueService {
 
         const lostRevenue = hyggloPrice ?? estimatedPrice ?? 0;
 
-        // Skip verification failures entirely — not actionable
-        if (denialType === 'verification_failed') {
-          skipped++;
-          continue;
+        // Refine denial type using Hygglo active_step:
+        // - DENIED step = owner actively denied on Hygglo (confirmed via activities timeline)
+        // - CANCELED step = renter cancelled or auto-cancelled after approval
+        // - null step (old records) = keep as timeout (unknown, likely auto-expired)
+        if (activeStep === 'DENIED') {
+          denialType = 'owner_denied';
+        } else if (denialType === 'owner_denied' && !activeStep) {
+          // Old records without active_step — treat as timeout (can't confirm denial)
+          denialType = 'timeout';
+        }
+        if (activeStep === 'CANCELED') {
+          denialType = 'renter_cancelled';
+        }
+        if (activeStep === 'VERIFICATION_FAILED') {
+          denialType = 'verification_failed';
         }
 
         // Skip low-value rentals under £25 — these would have been declined
@@ -432,6 +445,104 @@ export class LostRevenueService {
   }
 
   /**
+   * Get missed revenue summary — items NOT in inventory (unmatched) with actual revenue amounts.
+   */
+  async getMissedRevenueSummary(period: string = '3m', account?: string) {
+    const { start, end } = this.getFlexiblePeriodRange(period);
+
+    const where: any = { denial_type: 'unmatched' };
+    if (account) where.account = account;
+    if (start) where.start_date = { ...(where.start_date || {}), gte: start };
+    if (end) where.start_date = { ...(where.start_date || {}), lt: end };
+
+    const records = await this.prisma.lost_revenue_record.findMany({ where });
+
+    const totalMissedRevenue = records.reduce((sum, r) => sum + r.lost_revenue, 0);
+    const missedCount = records.length;
+
+    // Aggregate by unmatched item name, filtering out items that actually match inventory
+    const inventoryNames = getInventoryItemNames();
+    const itemCounts: Record<string, { count: number; revenue: number }> = {};
+    for (const record of records) {
+      const unmatchedCount = record.unmatched_items.length || 1;
+      const share = record.lost_revenue / unmatchedCount;
+      for (const rawItem of record.unmatched_items) {
+        // Skip items that actually match our inventory (misclassified as unmatched)
+        const matched = findBestMatch(rawItem, inventoryNames);
+        if (matched) continue;
+        const normalized = normalizeItemTitle(rawItem);
+        const matchedNorm = findBestMatch(normalized, inventoryNames);
+        if (matchedNorm) continue;
+        const key = normalized.toLowerCase();
+        if (!itemCounts[key]) itemCounts[key] = { count: 0, revenue: 0 };
+        itemCounts[key].count++;
+        itemCounts[key].revenue += share;
+      }
+    }
+
+    const topMissedItems = Object.entries(itemCounts)
+      .map(([key, data]) => {
+        const displayName = key.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        return { item: displayName, count: data.count, revenue: Math.round(data.revenue * 100) / 100 };
+      })
+      .filter(i => i.count >= 2)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    return {
+      totalMissedRevenue: Math.round(totalMissedRevenue * 100) / 100,
+      missedCount,
+      topMissedItems,
+      period,
+    };
+  }
+
+  /**
+   * Get timeout revenue summary — items in stock but owner never responded.
+   */
+  async getTimeoutSummary(period: string = '3m', account?: string) {
+    const { start, end } = this.getFlexiblePeriodRange(period);
+
+    const where: any = { denial_type: 'timeout', lost_revenue: { gte: MIN_REVENUE_THRESHOLD } };
+    if (account) where.account = account;
+    if (start) where.start_date = { ...(where.start_date || {}), gte: start };
+    if (end) where.start_date = { ...(where.start_date || {}), lt: end };
+
+    const records = await this.prisma.lost_revenue_record.findMany({ where });
+
+    const totalTimeoutRevenue = records.reduce((sum, r) => sum + r.lost_revenue, 0);
+    const timeoutCount = records.length;
+
+    const itemCounts: Record<string, { count: number; revenue: number }> = {};
+    for (const record of records) {
+      const items = (record.items_requested as any[]) || [];
+      const matchedItems = items.filter(i => i.matched !== null);
+      const share = matchedItems.length > 0 ? record.lost_revenue / matchedItems.length : 0;
+      for (const item of matchedItems) {
+        const name = item.matched;
+        if (!itemCounts[name]) itemCounts[name] = { count: 0, revenue: 0 };
+        itemCounts[name].count++;
+        itemCounts[name].revenue += share;
+      }
+    }
+
+    const topTimeoutItems = Object.entries(itemCounts)
+      .map(([item, data]) => ({ item, count: data.count, revenue: Math.round(data.revenue * 100) / 100 }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    const uniqueItems = new Set(Object.keys(itemCounts));
+
+    return {
+      totalTimeoutRevenue: Math.round(totalTimeoutRevenue * 100) / 100,
+      timeoutCount,
+      itemsAffected: uniqueItems.size,
+      topTimeoutItems,
+      period,
+    };
+  }
+
+  /**
    * Get lost revenue summary — items were booked out/unavailable.
    */
   async getLostRevenueSummary(period: string = '3m', account?: string) {
@@ -530,27 +641,35 @@ export class LostRevenueService {
 
     const records = await this.prisma.lost_revenue_record.findMany({ where });
 
-    // Normalize and aggregate unmatched item names by clean product name
-    const itemData: Record<string, { requestCount: number; totalDays: number; displayName: string }> = {};
+    // Normalize and aggregate unmatched item names, filtering out items that match inventory
+    const inventoryNames = getInventoryItemNames();
+    const itemData: Record<string, { requestCount: number; totalDays: number; totalRevenue: number; displayName: string }> = {};
     for (const record of records) {
+      const unmatchedCount = record.unmatched_items.length || 1;
+      const revenueShare = record.lost_revenue / unmatchedCount;
       for (const rawItem of record.unmatched_items) {
+        // Skip items that actually match our inventory
+        if (findBestMatch(rawItem, inventoryNames)) continue;
         const normalized = normalizeItemTitle(rawItem);
+        if (findBestMatch(normalized, inventoryNames)) continue;
         const key = normalized.toLowerCase();
-        if (!itemData[key]) itemData[key] = { requestCount: 0, totalDays: 0, displayName: normalized };
+        if (!itemData[key]) itemData[key] = { requestCount: 0, totalDays: 0, totalRevenue: 0, displayName: normalized };
         itemData[key].requestCount++;
         itemData[key].totalDays += record.rental_days;
+        itemData[key].totalRevenue += revenueShare;
       }
     }
 
-    // Calculate avg days and format — NO revenue estimate (it was speculative)
+    // Calculate avg days and format — includes actual lost_revenue from Hygglo records
     return Object.entries(itemData)
       .map(([, data]) => ({
         item: data.displayName,
         requestCount: data.requestCount,
         avgRentalDays: Math.round(data.totalDays / data.requestCount * 10) / 10,
+        totalRevenue: Math.round(data.totalRevenue * 100) / 100,
       }))
       .filter(i => i.requestCount >= 2) // only show items requested 2+ times
-      .sort((a, b) => b.requestCount - a.requestCount)
+      .sort((a, b) => b.totalRevenue - a.totalRevenue)
       .slice(0, 30);
   }
 
@@ -919,42 +1038,57 @@ export class LostRevenueService {
   }
 
   /**
-   * Backfill denial_type for existing records.
-   * Without active_step data, we can't distinguish owner-declined from expired.
-   * So matched-but-not-blocked records get 'expired' (conservative).
-   * Also re-classifies any 'owner_denied' records that lack active_step evidence.
+   * Backfill denial_type for existing records using active_step data.
+   * Splits owner_denied into timeout (no response) vs owner_denied (actively declined).
+   * Also reclassifies expired/null records and picks up verification_failed + renter_cancelled.
    */
-  async backfillDenialTypes(): Promise<{ updated: number }> {
+  async backfillDenialTypes(): Promise<{ updated: number; breakdown: Record<string, number> }> {
     const records = await this.prisma.lost_revenue_record.findMany({
       where: {
         OR: [
           { denial_type: null },
-          { denial_type: 'expired' }, // reclassify: matched + not blocked = owner_denied
+          { denial_type: 'expired' },
+          { denial_type: 'owner_denied' },
+          { denial_type: 'timeout' },
         ],
       },
     });
 
     let updated = 0;
+    const breakdown: Record<string, number> = {};
     for (const record of records) {
       let denialType: string;
-      if (record.stock_blocked) {
+      const activeStep = record.active_step as string | null;
+
+      if (activeStep === 'CANCELED') {
+        denialType = 'renter_cancelled';
+      } else if (activeStep === 'VERIFICATION_FAILED') {
+        denialType = 'verification_failed';
+      } else if (record.stock_blocked) {
         denialType = 'unavailable';
       } else {
         const items = (record.items_requested as any[]) || [];
         const hasMatched = items.some(i => i.matched !== null);
-        // Items were available, owner didn't accept
-        denialType = hasMatched ? 'owner_denied' : 'unmatched';
+        if (hasMatched) {
+          // DENIED step = owner actively denied; null = timeout (unknown)
+          denialType = activeStep === 'DENIED' ? 'owner_denied' : 'timeout';
+        } else {
+          denialType = 'unmatched';
+        }
       }
 
-      await this.prisma.lost_revenue_record.update({
-        where: { id: record.id },
-        data: { denial_type: denialType },
-      });
-      updated++;
+      if (denialType !== record.denial_type) {
+        await this.prisma.lost_revenue_record.update({
+          where: { id: record.id },
+          data: { denial_type: denialType },
+        });
+        updated++;
+        breakdown[denialType] = (breakdown[denialType] || 0) + 1;
+      }
     }
 
-    this.logger.log(`Backfilled denial_type for ${updated} records`);
-    return { updated };
+    this.logger.log(`Backfilled denial_type for ${updated} records: ${JSON.stringify(breakdown)}`);
+    return { updated, breakdown };
   }
 
   @Cron('0 5 * * *')

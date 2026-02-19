@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
 import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
+import { getVerifiedItems } from '../data/listing-photo-reference';
 
 export interface ParsedItem {
   item: string;
@@ -82,26 +83,130 @@ export class TitleParserService {
   }
 
   /**
+   * Pattern-based overrides for titles the AI consistently fails on.
+   * These are checked BEFORE the AI call and bypass it entirely if matched.
+   * Patterns are tested against the lowercased, SEO-stripped title.
+   */
+  private matchTitlePatterns(normalizedTitle: string): ParsedItem[] | null {
+    const lower = normalizedTitle.toLowerCase();
+
+    // DZO Vespid 6x lens set — title doesn't list individual focal lengths
+    if (/vespid.*prime.*6x/i.test(lower) || /6x.*vespid/i.test(lower) || /vespid.*6.*lens.*set/i.test(lower)) {
+      return [
+        { item: 'DZO Vespid Prime 16mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 25mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 50mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 75mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 100mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 125mm T2.1', qty: 1 },
+      ];
+    }
+
+    // DZO Vespid 3x lens set — most common combo
+    if (/vespid.*prime.*3x/i.test(lower) || /3x.*vespid/i.test(lower) || /vespid.*3.*lens.*set/i.test(lower)) {
+      return [
+        { item: 'DZO Vespid Prime 25mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 50mm T2.1', qty: 1 },
+        { item: 'DZO Vespid Prime 75mm T2.1', qty: 1 },
+      ];
+    }
+
+    // DZO Vespid individual lenses
+    const vespidMatch = lower.match(/vespid.*prime.*?(\d+)mm/i);
+    if (vespidMatch) {
+      const fl = vespidMatch[1];
+      const tStop = fl === '16' ? 'T2.8' : 'T2.1';
+      const itemName = `DZO Vespid Prime ${fl}mm ${tStop}`;
+      return [{ item: itemName, qty: 1 }];
+    }
+
+    // V-mount batteries — "v mount", "v-mount", "150 wah", "150wh"
+    if (/v[\s-]?mount.*batter/i.test(lower) || /batter.*v[\s-]?mount/i.test(lower)) {
+      const qtyMatch = lower.match(/(\d+)x\s*v[\s-]?mount/i) || lower.match(/(\d+)x\s.*v[\s-]?mount/i);
+      const qty = qtyMatch ? parseInt(qtyMatch[1]) : (lower.includes('150') ? 1 : 1);
+      // Determine capacity: 150Wh (most common) vs 95Wh
+      const is95 = /95\s*w/i.test(lower);
+      return [{ item: is95 ? 'V-mount 95mAh' : 'V-mount 150mAh', qty }];
+    }
+
+    // "Ultimate audio Boom mic + Dji livelier/lavalier" — combo listings
+    if (/audio\s*boom\s*mic/i.test(lower) || /boom\s*mic.*shotgun/i.test(lower) || /shotgun.*boom/i.test(lower)) {
+      const items: ParsedItem[] = [{ item: 'Audio boom mic Sennheiser', qty: 1 }];
+      if (/dji/i.test(lower) && (/livelier|lavalier|lav|wireless\s*mic/i.test(lower))) {
+        items.push({ item: 'DJI Wireless Mics', qty: 1 });
+      }
+      return items;
+    }
+
+    // "Pro Boom Mic Kit + DJI Wireless Mics (2x)"
+    if (/boom\s*mic\s*kit/i.test(lower) && /dji/i.test(lower)) {
+      const djiQtyMatch = lower.match(/dji.*?(\d+)x/i) || lower.match(/(\d+)x.*dji/i);
+      const djiQty = djiQtyMatch ? parseInt(djiQtyMatch[1]) : 1;
+      return [
+        { item: 'Audio boom mic Sennheiser', qty: 1 },
+        { item: 'DJI Wireless Mics', qty: djiQty },
+      ];
+    }
+
+    // Nanlite 500B — "nanlite 500" / "nanlite bi color"
+    if (/nanlite\s*500/i.test(lower) || /nanlite.*bi\s*color/i.test(lower)) {
+      return [{ item: 'Nanlite 500B', qty: 1 }];
+    }
+
+    // 7Artisans 7.5mm fisheye — "7artisans" / "7.5mm fisheye"
+    if (/7\s*artisans/i.test(lower) && /fisheye|7\.5mm/i.test(lower)) {
+      return [{ item: '7Artisans 7.5mm f2.8 Fisheye', qty: 1 }];
+    }
+
+    // Sony A7 III — "a7s iii" / "a7siii" / "a7 iii" / "a73"
+    if (/a7s?\s*iii/i.test(lower) || /a7s3/i.test(lower) || /a73/i.test(lower) || /a7\s*3/i.test(lower)) {
+      const items: ParsedItem[] = [{ item: 'Sony A7 III', qty: 1 }];
+      // Check for lens
+      if (/24-70/i.test(lower) && /gm|gmaster|g\s*master/i.test(lower)) {
+        items.push({ item: 'Sony GM 24-70mm f2.8', qty: 1 });
+      }
+      return items;
+    }
+
+    return null; // No pattern matched — fall through to AI
+  }
+
+  /**
    * Parse a Hygglo rental title into structured inventory items using AI.
    * Results are cached in-memory to avoid duplicate calls for the same title.
    */
   async parseTitleWithAI(title: string): Promise<ParsedItem[]> {
     if (!title || title.trim().length === 0) return [];
 
-    const normalizedTitle = title.trim();
+    // Strip SEO noise: "(like X / Y)", "(similar to X)", "(comparable to X)"
+    // These parenthetical comparisons cause the AI to extract the comparison items instead of the actual item
+    const normalizedTitle = title.trim().replace(/\(\s*(?:like|similar to|comparable to|replaces|vs|or)\s[^)]+\)/gi, '').trim();
 
     // Check in-memory cache
     const cached = this.cache.get(normalizedTitle);
     if (cached) return cached;
 
-    // Check if any rental with this exact title already has parsed_items (DB lookup)
+    // Pattern-based overrides for titles the AI consistently fails on
+    const patternMatch = this.matchTitlePatterns(normalizedTitle);
+    if (patternMatch) {
+      this.logger.log(`Pattern override for "${normalizedTitle.substring(0, 60)}": ${patternMatch.map(i => i.item).join(', ')}`);
+      this.cache.set(normalizedTitle, patternMatch);
+      return patternMatch;
+    }
+
+    // Check if any rental with this exact title already has non-empty parsed_items (DB lookup)
     const existingWithItems = await this.prisma.$queryRaw<{ parsed_items: any }[]>`
-      SELECT parsed_items FROM rental WHERE title = ${normalizedTitle} AND parsed_items IS NOT NULL LIMIT 1
+      SELECT parsed_items FROM rental
+      WHERE (title = ${normalizedTitle} OR title = ${title.trim()})
+      AND parsed_items IS NOT NULL AND parsed_items::text != '[]' AND parsed_items::text != 'null'
+      LIMIT 1
     `;
     if (existingWithItems.length > 0 && existingWithItems[0].parsed_items) {
       const items = existingWithItems[0].parsed_items as ParsedItem[];
-      this.cache.set(normalizedTitle, items);
-      return items;
+      if (items.length > 0) {
+        this.cache.set(normalizedTitle, items);
+        return items;
+      }
     }
 
     if (!this.apiKey) {
@@ -128,11 +233,14 @@ MATCHING GUIDE:
 - "JBL partybox club 120" → "JBL Club 120 speaker"
 - "pioneer DJ" / "RX3" / "rekordbox" → "DJ RX3 Pioneer controller"
 - "a7III" / "a7 3" / "a73" → "Sony A7 III"
-- "nanlite 500" → "Nanlite 500B"
-- "v-mount" / "v mount" batteries → "V-mount 95mAh" or "V-mount 150mAh"
+- "nanlite 500" / "nanlite 500b" / "nanlite bi color" → "Nanlite 500B"
+- "v-mount" / "v mount" / "vmount" batteries → "V-mount 95mAh" or "V-mount 150mAh" (150wh/150wah=150mAh, 95wh=95mAh)
 - "sennheiser" / "MKE" / "MKE600" → "Audio boom mic Sennheiser"
 - "rode wireless" → "Rode Wireless Mic Pro set"
 - "suction cup" / "suction mount" → "Suction cups"
+- "7artisans" / "7.5mm fisheye" → "7Artisans 7.5mm f2.8 Fisheye"
+- "8-15mm fisheye" → "8-15mm f2.8 Fisheye Zoom"
+- "a7s iii" / "a7siii" / "a7s3" → "Sony A7 III" (we map all A7 variants to this)
 - "2x" or "3x" prefix → set qty accordingly
 - Bundle listings with "+" separate multiple items
 - Ignore items NOT in inventory (tripods, stands, cables, cards unless 256GB, cases, adapters unless PL mount)
@@ -282,7 +390,24 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
     title: string,
     currentItems: ParsedItem[],
     photoUrls: string[],
+    listingId?: string,
   ): Promise<ParsedItem[]> {
+    // AUTHORITATIVE OVERRIDE: If listing-photo-reference has verified items for this listing,
+    // use those instead of title-parsed items. This prevents SEO noise from polluting extraction.
+    if (listingId) {
+      const verified = getVerifiedItems(listingId);
+      if (verified && verified.items.length > 0) {
+        this.logger.log(`Photo reference override for listing ${listingId}: ${verified.items.map(i => i.item).join(', ')}`);
+        const refItems: ParsedItem[] = verified.items.map(i => ({ item: i.item, qty: i.qty }));
+        const jsonValue = JSON.stringify(refItems);
+        await this.prisma.$executeRaw`
+          UPDATE rental SET parsed_items = ${jsonValue}::jsonb, updated_at = NOW()
+          WHERE id = ${rentalId}
+        `;
+        return refItems;
+      }
+    }
+
     const hasPhotos = photoUrls.some(u => u.includes('/products/'));
     if (!hasPhotos) return currentItems;
 
@@ -370,9 +495,13 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
    * Groups by unique title to minimize AI calls.
    */
   async backfillParsedItems(): Promise<{ updated: number; skipped: number; failed: number; titles: number }> {
-    // Get all unique titles that need parsing
+    // Clear cache to force fresh parsing (especially after adding pattern overrides)
+    this.cache.clear();
+
+    // Get all unique titles that need parsing: NULL or empty array []
     const unparsed = await this.prisma.$queryRaw<{ title: string }[]>`
-      SELECT DISTINCT title FROM rental WHERE parsed_items IS NULL
+      SELECT DISTINCT title FROM rental
+      WHERE parsed_items IS NULL OR parsed_items::text = '[]' OR parsed_items::text = 'null'
     `;
 
     const uniqueTitles = unparsed.map(r => r.title);
@@ -386,18 +515,19 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
       const title = uniqueTitles[i];
       try {
         const items = await this.parseTitleWithAI(title);
-        const jsonValue = JSON.stringify(items.length === 0 ? [] : items);
-
-        const count = await this.prisma.$executeRaw`
-          UPDATE rental SET parsed_items = ${jsonValue}::jsonb, updated_at = NOW()
-          WHERE title = ${title} AND parsed_items IS NULL
-        `;
-
         if (items.length === 0) {
           skipped++;
-        } else {
-          updated += Number(count);
+          continue;
         }
+
+        const jsonValue = JSON.stringify(items);
+        const count = await this.prisma.$executeRaw`
+          UPDATE rental SET parsed_items = ${jsonValue}::jsonb, updated_at = NOW()
+          WHERE title = ${title}
+          AND (parsed_items IS NULL OR parsed_items::text = '[]' OR parsed_items::text = 'null')
+        `;
+
+        updated += Number(count);
       } catch (error: any) {
         this.logger.error(`Failed to backfill title "${title.substring(0, 60)}": ${error.message}`);
         failed++;
@@ -422,9 +552,9 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
     this.cache.clear();
 
     const rentals = await this.prisma.$queryRaw<{
-      id: string; title: string; photos_urls: string[]; parsed_items: any; renter_info: string | null;
+      id: string; title: string; photos_urls: string[]; parsed_items: any; renter_info: string | null; listing_id: string;
     }[]>`
-      SELECT id, title, photos_urls, parsed_items, renter_info
+      SELECT id, title, photos_urls, parsed_items, renter_info, listing_id
       FROM rental
       WHERE photos_urls IS NOT NULL AND array_length(photos_urls, 1) > 0
       ORDER BY created_at DESC
@@ -441,7 +571,7 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
     for (const rental of rentals) {
       try {
         const currentItems: ParsedItem[] = (rental.parsed_items as ParsedItem[]) || [];
-        const result = await this.enhanceWithPhotos(rental.id, rental.title, currentItems, rental.photos_urls);
+        const result = await this.enhanceWithPhotos(rental.id, rental.title, currentItems, rental.photos_urls, rental.listing_id);
         analyzed++;
 
         const changed = result.length !== currentItems.length ||

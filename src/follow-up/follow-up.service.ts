@@ -593,6 +593,120 @@ export class FollowUpService {
   }
 
   /**
+   * Accept a same-day rental on Hygglo after Daniel's explicit approval.
+   * Bypasses the same-day block in triggerAutoAccept since Daniel has already approved.
+   */
+  async acceptSameDayRental(rentalId: string): Promise<{ success: boolean; error?: string }> {
+    const rental = await this.prisma.rental.findUnique({ where: { id: rentalId } });
+    if (!rental) return { success: false, error: 'Rental not found' };
+
+    const account = (rental.account || 'dbcinema') as HyggloAccount;
+    const result = await this.playwrightService.acceptRental(rental.listing_id, account);
+
+    // Update follow-up state
+    const state = await this.prisma.follow_up_state.findFirst({ where: { rental_id: rentalId } });
+    if (state) {
+      await this.prisma.follow_up_state.update({
+        where: { id: state.id },
+        data: { auto_accepted: true, status: 'auto_accepted' },
+      });
+    }
+
+    if (result.success) {
+      this.logger.log(`Same-day rental ACCEPTED (Daniel approved): ${rental.title}`);
+    } else {
+      this.logger.warn(`Same-day rental accept FAILED: ${rental.title} — ${result.error}`);
+    }
+
+    return result;
+  }
+
+  /**
+   * Accept a low-value rental by first raising earnings to the account minimum,
+   * then accepting on Hygglo. Used when the renter agrees to the adjusted booking total.
+   */
+  async acceptWithMinimumPrice(rentalId: string): Promise<{
+    success: boolean;
+    previousEarnings?: number;
+    newEarnings?: number;
+    error?: string;
+  }> {
+    const rental = await this.prisma.rental.findUnique({ where: { id: rentalId } });
+    if (!rental) return { success: false, error: 'Rental not found' };
+
+    const account = (rental.account || 'dbcinema') as HyggloAccount;
+    const ACCOUNT_MIN_EARNINGS: Record<string, number> = { dbcinema: 20, leo: 25 };
+    const targetEarnings = ACCOUNT_MIN_EARNINGS[account] || 20;
+
+    // Step 1: Set earnings to minimum via Playwright
+    const earningsResult = await this.playwrightService.setOrderEarnings(
+      rental.listing_id,
+      account,
+      targetEarnings,
+    );
+
+    if (!earningsResult.success) {
+      this.logger.warn(`acceptWithMinimumPrice: setOrderEarnings failed for ${rental.title}: ${earningsResult.error}`);
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: rental.id,
+          decision_type: 'min_price_failed',
+          input_summary: `Attempted to set earnings to £${targetEarnings} for low-value rental`,
+          output_summary: `Failed: ${earningsResult.error}`,
+          confidence: 1.0,
+          action_taken: 'Price adjustment failed — manual intervention required',
+          notified: true,
+        },
+      });
+      return { success: false, error: earningsResult.error };
+    }
+
+    // Step 2: Update rental_price in DB to new earnings
+    await this.prisma.rental.update({
+      where: { id: rental.id },
+      data: { rental_price: targetEarnings },
+    });
+
+    // Step 3: Accept the rental
+    const acceptResult = await this.playwrightService.acceptRental(rental.listing_id, account);
+
+    // Step 4: Update follow-up state
+    const state = await this.prisma.follow_up_state.findFirst({ where: { rental_id: rentalId } });
+    if (state) {
+      await this.prisma.follow_up_state.update({
+        where: { id: state.id },
+        data: { auto_accepted: true, status: 'auto_accepted' },
+      });
+    }
+
+    // Step 5: Log the decision
+    await this.prisma.ai_decision.create({
+      data: {
+        rental_id: rental.id,
+        decision_type: 'min_price_accepted',
+        input_summary: `Low-value rental adjusted: £${earningsResult.previousEarnings || 0} → £${targetEarnings}`,
+        output_summary: `Earnings set to £${targetEarnings}, rental ${acceptResult.success ? 'accepted' : 'accept failed'}`,
+        confidence: 1.0,
+        action_taken: `Price adjusted and ${acceptResult.success ? 'accepted' : 'accept attempted'}`,
+        notified: true,
+      },
+    });
+
+    if (acceptResult.success) {
+      this.logger.log(`acceptWithMinimumPrice SUCCESS: ${rental.title} — £${earningsResult.previousEarnings} → £${targetEarnings}`);
+    } else {
+      this.logger.warn(`acceptWithMinimumPrice: earnings set OK but acceptRental FAILED for ${rental.title}: ${acceptResult.error}`);
+    }
+
+    return {
+      success: acceptResult.success,
+      previousEarnings: earningsResult.previousEarnings,
+      newEarnings: targetEarnings,
+      error: acceptResult.success ? undefined : acceptResult.error,
+    };
+  }
+
+  /**
    * Called when a renter sends a message. Resets follow-up counters.
    * If conversation was DEAD, revives to previous stage (smart revival).
    */

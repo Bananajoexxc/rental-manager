@@ -537,6 +537,140 @@ export class PlaywrightService implements OnModuleDestroy {
   }
 
   /**
+   * Set a specific earnings amount on a rental order. Used for minimum-price adjustments
+   * where we need to increase (or set) earnings to a target amount.
+   * Must be called BEFORE acceptRental(). Gated by READ_ONLY_MODE and PLAYWRIGHT_ENABLED.
+   */
+  async setOrderEarnings(orderId: string, account: HyggloAccount, targetEarnings: number): Promise<{
+    success: boolean;
+    previousEarnings?: number;
+    newEarnings?: number;
+    error?: string;
+  }> {
+    if (!this.isEnabled) {
+      return { success: false, error: 'Playwright is disabled' };
+    }
+    if (this.isReadOnly) {
+      this.logger.warn(`BLOCKED [READ_ONLY_MODE] setOrderEarnings for order ${orderId}`);
+      return { success: false, error: 'Read-only mode is active' };
+    }
+
+    try {
+      const loggedIn = await this.ensureLoggedIn(account);
+      if (!loggedIn) {
+        return { success: false, error: 'Failed to log in' };
+      }
+
+      const context = await this.getContext(account);
+      const page = await context.newPage();
+
+      try {
+        await page.goto(`${this.baseUrl}/my/orders/${orderId}`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await page.waitForTimeout(2000);
+
+        // Find the earnings/price element on the order page (same selectors as applyDiscount)
+        const earningsSelectors = [
+          '[data-testid="earnings"]',
+          '[data-testid="price"]',
+          '.earnings-amount',
+          '.order-earnings',
+          'input[name="earnings"]',
+          'input[name="price"]',
+        ];
+
+        let priceInput: any = null;
+        for (const selector of earningsSelectors) {
+          priceInput = await page.$(selector);
+          if (priceInput) break;
+        }
+
+        // If no dedicated input, look for an edit button first
+        if (!priceInput) {
+          const editSelectors = [
+            'button:has-text("Edit price")',
+            'button:has-text("Edit earnings")',
+            'button:has-text("Adjust")',
+            '[data-testid="edit-price"]',
+            '.edit-price-button',
+          ];
+
+          for (const selector of editSelectors) {
+            const editBtn = await page.$(selector);
+            if (editBtn) {
+              await editBtn.click();
+              await page.waitForTimeout(1000);
+              for (const inputSelector of earningsSelectors) {
+                priceInput = await page.$(inputSelector);
+                if (priceInput) break;
+              }
+              break;
+            }
+          }
+        }
+
+        if (!priceInput) {
+          this.logger.warn(`Could not find price input for order ${orderId} — earnings adjustment needs manual application`);
+          return { success: false, error: 'Price input not found on order page' };
+        }
+
+        // Read current price
+        const currentValue = await priceInput.inputValue().catch(() => null)
+          || await priceInput.textContent().catch(() => null);
+        const previousEarnings = parseFloat((currentValue || '0').replace(/[^0-9.]/g, ''));
+
+        if (!previousEarnings && previousEarnings !== 0) {
+          return { success: false, error: `Could not read current earnings: ${currentValue}` };
+        }
+
+        // Clear and type target earnings
+        await priceInput.click({ clickCount: 3 });
+        await priceInput.fill(targetEarnings.toString());
+        await page.waitForTimeout(500);
+
+        // Click save
+        const saveSelectors = [
+          'button:has-text("Save")',
+          'button:has-text("Apply")',
+          'button:has-text("Update")',
+          '[data-testid="save-price"]',
+        ];
+
+        for (const selector of saveSelectors) {
+          const saveBtn = await page.$(selector);
+          if (saveBtn) {
+            await saveBtn.click();
+            await page.waitForTimeout(1000);
+            break;
+          }
+        }
+
+        // Verification: re-read the field to confirm the write succeeded
+        await page.waitForTimeout(1000);
+        const verifyValue = await priceInput.inputValue().catch(() => null)
+          || await priceInput.textContent().catch(() => null);
+        const verifiedEarnings = parseFloat((verifyValue || '0').replace(/[^0-9.]/g, ''));
+
+        if (Math.abs(verifiedEarnings - targetEarnings) > 1) {
+          this.logger.warn(`setOrderEarnings verification failed for ${orderId}: expected £${targetEarnings}, got £${verifiedEarnings}`);
+          return { success: false, error: 'Price increase rejected by platform' };
+        }
+
+        await this.saveState(account, context);
+        this.logger.log(`Earnings set for order ${orderId}: £${previousEarnings} → £${targetEarnings}`);
+        return { success: true, previousEarnings, newEarnings: targetEarnings };
+      } finally {
+        await page.close();
+      }
+    } catch (error) {
+      this.logger.error(`setOrderEarnings failed for order ${orderId}: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Mark a rental as returned on Hygglo by navigating to the order page and clicking the return button.
    * Handles: login, modal dismissal, star rating popup (closes without reviewing).
    * Gated by READ_ONLY_MODE + RETURN_ENABLED_RENTALS and PLAYWRIGHT_ENABLED.

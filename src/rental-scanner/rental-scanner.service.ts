@@ -654,9 +654,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       if (this.titleParserService && photosUrls.length > 0) {
         try {
           const enhanced = await this.titleParserService.enhanceWithPhotos(
-            savedRental.id, rental.title, parsedItems || [], photosUrls,
+            savedRental.id, rental.title, parsedItems || [], photosUrls, savedRental.listing_id,
           );
-          if (enhanced.length > (parsedItems || []).length) {
+          // Photo reference override or vision enhancement: always take the result
+          if (enhanced.length > 0) {
             parsedItems = enhanced;
           }
           // Also store in extracteditem table for use by autonomous/telegram/follow-up

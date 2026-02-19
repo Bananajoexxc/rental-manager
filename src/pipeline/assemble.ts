@@ -25,13 +25,13 @@ function buildIdentitySection(account: string): string {
     return `You are Leo Adams — an individual gear rental owner.
 VOICE: Use "I" and "my". Casual, warm, slightly chill. Say "mate", "cheers", "sorted", "no worries".
 EXAMPLES: "Yeah mate, I've got the FX3 available — sorted!" / "Cheers for confirming, I'll get everything prepped."
-AUTHORITY: You represent Leo. Cannot make business decisions (pricing, discounts) without checking.`;
+AUTHORITY: You ARE Leo, the owner. For business decisions (pricing, discounts, special requests) you can't resolve from your rules, just say "let me check on that" and hold — NEVER say "let me check with the owner" or reference anyone else. You are the owner.`;
   }
 
   return `You are Daniel from DB Cinema Rentals — a professional rental business.
 VOICE: Use "our" and "the gear". Professional, concise, human. Efficient but not cold.
 EXAMPLES: "The FX3 is available for those dates. Shall I confirm?" / "Thanks for getting back to us. Everything's prepped."
-AUTHORITY: You represent Daniel. Cannot make business decisions on his behalf.`;
+AUTHORITY: You represent Daniel. Cannot make business decisions on his behalf. NEVER invent policies or requirements not in your rules — escalate to Daniel when unsure.`;
 }
 
 // --- Section 2: Renter Adaptation ---
@@ -87,7 +87,14 @@ function buildFactsSection(facts: FactPack, classification: MessageClassificatio
     const r = facts.rental;
     const startStr = r.startDate ? new Date(r.startDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : 'TBC';
     const endStr = r.endDate ? new Date(r.endDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : 'TBC';
-    parts.push(`Rental: ${r.title} | Status: ${r.status} | Dates: ${startStr} to ${endStr}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}`);
+    // Calculate return morning (day after end date) — renters keep gear through the last rental day
+    let returnMorningStr = '';
+    if (r.endDate) {
+      const returnDate = new Date(r.endDate);
+      returnDate.setDate(returnDate.getDate() + 1);
+      returnMorningStr = ` → return morning of ${returnDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}`;
+    }
+    parts.push(`Rental: ${r.title} | Status: ${r.status} | Dates: ${startStr} to ${endStr}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}${returnMorningStr}`);
     parts.push(`Renter: ${r.renterName}`);
     if (r.renterPrice) parts.push(`Renter pays: £${r.renterPrice}`);
     if (r.rentalPrice) parts.push(`Owner profit: £${Math.round(r.rentalPrice)}`);
@@ -243,6 +250,8 @@ export function assemblePrompt(
     'NEVER mention "Hygglo" — say "the platform" or "the booking system".',
     'Never prefix response with timestamps.',
     'RETURN CLOSURE: If asked to mark rental returned, explain inspection takes 24-72 hours.',
+    'LOCATION: NEVER ask "where are you based?" — instead weave the collection area into your availability answer naturally. For non-central listings: use an excuse (rented out there, pulled for service, etc.) then offer the central location. For central listings: say it is still available there. E.g. "that item is currently rented out at [listed location] but available for collection near ' + (account === 'leo' ? 'Charing Cross' : 'Trafalgar Square area') + ' — hope that works?" Only give rough area, not exact address, until booking is verified.',
+    'TIME SLOTS: ONLY 10am-12pm and 7-9pm. NEVER accept times outside these (e.g. 4pm, 2pm, 9am). If renter proposes off-hours, say "available slots are 10am-12pm and 7-9pm — which works for you?" EARLY ARRIVALS: If renter wants to come earlier than scheduled or on short notice ("finished early, can I come in 15 mins?") — NEVER accept. Say "let me check I can make that work" and escalate.',
     'Lead with the answer. Short paragraphs. Plain text, no markdown. No preamble.',
     facts.resolvedItems.length > 0 || classification.hasPricingIntent
       ? `INVENTORY: ${getInventoryItemNames().join(', ')}.`

@@ -135,7 +135,7 @@ export class PipelineService {
       if (input.rental) {
         try {
           const extracted = await this.prisma.extracteditem.findMany({
-            where: { rental_id: input.rental.id, source: 'listing_title' },
+            where: { rental_id: input.rental.id },
             select: { item_name: true },
           });
           if (extracted.length > 0) {

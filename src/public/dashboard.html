@@ -933,12 +933,12 @@
         <div class="sub" id="statDeniedRevenueSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandDeniedRevenue"></div></div>
       </div>
-      <div class="stat-card lost-revenue-card" data-stat="lost-revenue" data-stat-label="Lost Revenue" draggable="false">
+      <div class="stat-card lost-revenue-card" data-stat="missed-revenue" data-stat-label="Missed Revenue" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
-        <div class="label">Lost Revenue</div>
-        <div class="value red" id="statLostRevenue">--</div>
-        <div class="sub" id="statLostRevenueSub"></div>
-        <div class="stat-expand"><div class="stat-expand-inner" id="expandLostRevenue"></div></div>
+        <div class="label">Missed Revenue</div>
+        <div class="value red" id="statMissedRevenue">--</div>
+        <div class="sub" id="statMissedRevenueSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandMissedRevenue"></div></div>
       </div>
       <div class="stat-card" data-stat="ai-boost" data-stat-label="AI Boost" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
@@ -1255,8 +1255,9 @@
         <div style="display:flex;align-items:center;gap:8px;">
           <div id="missedTabs" style="display:flex;gap:0;">
             <button onclick="switchMissedTab('denied')" id="missedTabDenied" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:4px 0 0 0px;background:#f59e0b;color:#000;">Denied</button>
-            <button onclick="switchMissedTab('blocked')" id="missedTabBlocked" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0;">Blocked</button>
-            <button onclick="switchMissedTab('notinstock')" id="missedTabNotInStock" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0 4px 4px 0;">Not in Stock</button>
+            <button onclick="switchMissedTab('timeout')" id="missedTabTimeout" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0;">Timed Out</button>
+            <button onclick="switchMissedTab('blocked')" id="missedTabBlocked" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0;">Out of Stock</button>
+            <button onclick="switchMissedTab('notinstock')" id="missedTabNotInStock" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0 4px 4px 0;">Not in Inventory</button>
           </div>
           <select id="lostRevenuePeriod" onchange="loadLostRevenue()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
             <option value="month">This Month</option>
@@ -1269,6 +1270,9 @@
       </div>
       <div class="section-body padded" id="deniedRevenueBody">
         <div style="color:#8b8fa3;font-size:12px;">Loading denied items...</div>
+      </div>
+      <div class="section-body padded" id="timeoutRevenueBody" style="display:none;">
+        <div style="color:#8b8fa3;font-size:12px;">Loading timed out items...</div>
       </div>
       <div class="section-body padded" id="lostRevenueBody" style="display:none;">
         <div style="color:#8b8fa3;font-size:12px;">Run sync first: <code>/lost-revenue/sync</code></div>
@@ -3821,17 +3825,22 @@
     function switchMissedTab(tab) {
       currentMissedTab = tab;
       var deniedBtn = document.getElementById('missedTabDenied');
+      var timeoutBtn = document.getElementById('missedTabTimeout');
       var blockedBtn = document.getElementById('missedTabBlocked');
       var notInStockBtn = document.getElementById('missedTabNotInStock');
       var deniedBody = document.getElementById('deniedRevenueBody');
+      var timeoutBody = document.getElementById('timeoutRevenueBody');
       var blockedBody = document.getElementById('lostRevenueBody');
       var unmatchedBody = document.getElementById('unmatchedBody');
       // Reset all
-      [deniedBtn, blockedBtn, notInStockBtn].forEach(function(btn) { btn.style.background = ''; btn.style.color = ''; });
-      [deniedBody, blockedBody, unmatchedBody].forEach(function(b) { b.style.display = 'none'; });
+      [deniedBtn, timeoutBtn, blockedBtn, notInStockBtn].forEach(function(btn) { btn.style.background = ''; btn.style.color = ''; });
+      [deniedBody, timeoutBody, blockedBody, unmatchedBody].forEach(function(b) { b.style.display = 'none'; });
       if (tab === 'denied') {
         deniedBtn.style.background = '#f59e0b'; deniedBtn.style.color = '#000';
         deniedBody.style.display = '';
+      } else if (tab === 'timeout') {
+        timeoutBtn.style.background = '#f97316'; timeoutBtn.style.color = '#fff';
+        timeoutBody.style.display = '';
       } else if (tab === 'blocked') {
         blockedBtn.style.background = '#ef4444'; blockedBtn.style.color = '#fff';
         blockedBody.style.display = '';
@@ -3854,12 +3863,15 @@
         body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No unmatched demand found.</div>';
         return;
       }
-      var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:4px 6px;">Item Requested</th><th style="text-align:right;padding:4px 6px;">Requests</th><th style="text-align:right;padding:4px 6px;">Avg Days</th></tr>';
+      var totalRev = data.reduce(function(s, i) { return s + (i.totalRevenue || 0); }, 0);
+      var html = '<div style="margin-bottom:8px;font-size:12px;color:#2563eb;font-weight:600;">\u00A3' + Math.round(totalRev).toLocaleString('en-GB') + ' from items not in inventory</div>';
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:4px 6px;">Item Requested</th><th style="text-align:right;padding:4px 6px;">Requests</th><th style="text-align:right;padding:4px 6px;">Revenue</th><th style="text-align:right;padding:4px 6px;">Avg Days</th></tr>';
       data.forEach(function(item) {
         html += '<tr style="border-bottom:1px solid #1e2130;">';
         html += '<td style="padding:4px 6px;color:#e4e6eb;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(item.item) + '">' + escapeHtml(item.item) + '</td>';
-        html += '<td style="padding:4px 6px;text-align:right;color:#f59e0b;">' + item.requestCount + '</td>';
+        html += '<td style="padding:4px 6px;text-align:right;color:#2563eb;">' + item.requestCount + '</td>';
+        html += '<td style="padding:4px 6px;text-align:right;color:#2563eb;">\u00A3' + (item.totalRevenue || 0).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + '</td>';
         html += '<td style="padding:4px 6px;text-align:right;color:#8b8fa3;">' + item.avgRentalDays + '</td>';
         html += '</tr>';
       });
@@ -3907,8 +3919,9 @@
       var acctAmp = getAccountParam();
       Promise.allSettled([
         fetchJSON('/denied-revenue/summary?period=month' + acctAmp).then(renderDeniedStat),
-        fetchJSON('/lost-revenue/summary?period=month' + acctAmp).then(renderLostStat),
+        fetchJSON('/missed-revenue/summary?period=month' + acctAmp).then(renderMissedStat),
         fetchJSON('/denied-revenue/summary?period=' + period + acctAmp).then(renderDeniedItems),
+        fetchJSON('/timeout-revenue/summary?period=' + period + acctAmp).then(renderTimeoutItems),
         fetchJSON('/lost-revenue/items?period=' + period + acctAmp).then(renderLostRevenueItems),
         fetchJSON('/lost-revenue/unmatched?period=' + period + acctAmp).then(renderUnmatched),
       ]);
@@ -3937,24 +3950,24 @@
       }
     }
 
-    function renderLostStat(data) {
-      var el = document.getElementById('statLostRevenue');
-      var sub = document.getElementById('statLostRevenueSub');
-      var exp = document.getElementById('expandLostRevenue');
-      if (!data || data.lostCount === 0) {
+    function renderMissedStat(data) {
+      var el = document.getElementById('statMissedRevenue');
+      var sub = document.getElementById('statMissedRevenueSub');
+      var exp = document.getElementById('expandMissedRevenue');
+      if (!data || data.missedCount === 0) {
         el.textContent = '\u00A30';
-        sub.textContent = 'No blocked requests';
+        sub.textContent = 'No unmatched requests';
         if (exp) exp.innerHTML = '';
         return;
       }
-      el.textContent = '\u00A3' + data.totalLostRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-      sub.textContent = data.lostCount + ' blocked \u00B7 ' + data.itemsAffected + ' items';
+      el.textContent = '\u00A3' + data.totalMissedRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      sub.textContent = data.missedCount + ' requests \u00B7 not in inventory';
 
-      if (exp && data.topBlockedItems && data.topBlockedItems.length > 0) {
-        exp.innerHTML = data.topBlockedItems.slice(0, 4).map(function(item) {
+      if (exp && data.topMissedItems && data.topMissedItems.length > 0) {
+        exp.innerHTML = data.topMissedItems.slice(0, 4).map(function(item) {
           return '<div class="stat-rental-row">' +
             '<div class="stat-rental-info"><div class="stat-rental-name">' + escapeHtml(item.item) + '</div>' +
-            '<div class="stat-rental-items">' + item.count + ' blocked</div></div>' +
+            '<div class="stat-rental-items">' + item.count + ' requests</div></div>' +
             '<div class="stat-rental-amount" style="color:#ef4444;">-\u00A3' + Math.round(item.revenue) + '</div></div>';
         }).join('');
       }
@@ -3976,7 +3989,28 @@
         html += '</tr>';
       });
       html += '</table>';
-      html += '<div style="color:#6b6f82;font-size:10px;margin-top:6px;">Items were available \u2014 declined or not responded to in time.</div>';
+      html += '<div style="color:#6b6f82;font-size:10px;margin-top:6px;">Items were in stock \u2014 actively declined by owner.</div>';
+      body.innerHTML = html;
+    }
+
+    function renderTimeoutItems(data) {
+      var body = document.getElementById('timeoutRevenueBody');
+      if (!data || data.timeoutCount === 0) {
+        body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No timed-out requests found for this period.</div>';
+        return;
+      }
+      var html = '<div style="margin-bottom:8px;font-size:12px;color:#f97316;font-weight:600;">\u00A3' + data.totalTimeoutRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' from ' + data.timeoutCount + ' timed-out requests</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+      html += '<tr style="color:#8b8fa3;border-bottom:1px solid rgba(255,255,255,0.06);"><th style="text-align:left;padding:4px;">Item</th><th style="text-align:right;padding:4px;">Count</th><th style="text-align:right;padding:4px;">Revenue Lost</th></tr>';
+      (data.topTimeoutItems || []).forEach(function(item) {
+        html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">';
+        html += '<td style="padding:4px;color:#e4e6eb;">' + escapeHtml(item.item) + '</td>';
+        html += '<td style="padding:4px;text-align:right;color:#f97316;">' + item.count + '</td>';
+        html += '<td style="padding:4px;text-align:right;color:#f97316;">-\u00A3' + Math.round(item.revenue) + '</td>';
+        html += '</tr>';
+      });
+      html += '</table>';
+      html += '<div style="color:#6b6f82;font-size:10px;margin-top:6px;">Items were in stock \u2014 no owner response before expiry.</div>';
       body.innerHTML = html;
     }
 
@@ -5386,8 +5420,9 @@
         fetchJSON('/revenue/item-cycle' + getAccountQuery()).then(renderCycleChart).catch(function() {}),
         fetchJSON('/revenue/projection' + acct).then(renderProjection).catch(function() {}),
         fetchJSON('/denied-revenue/summary?period=month' + acctAmp).then(renderDeniedStat).catch(function() {}),
-        fetchJSON('/lost-revenue/summary?period=month' + acctAmp).then(renderLostStat).catch(function() {}),
+        fetchJSON('/missed-revenue/summary?period=month' + acctAmp).then(renderMissedStat).catch(function() {}),
         fetchJSON('/denied-revenue/summary?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderDeniedItems).catch(function() {}),
+        fetchJSON('/timeout-revenue/summary?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderTimeoutItems).catch(function() {}),
         fetchJSON('/lost-revenue/items?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderLostRevenueItems).catch(function() {}),
         fetchJSON('/lost-revenue/unmatched?period=' + (document.getElementById('lostRevenuePeriod').value || '3m') + acctAmp).then(renderUnmatched).catch(function() {}),
         fetchJSON('/revenue/potential?period=' + (document.getElementById('roiPeriod').value || '6m') + acctAmp).then(renderROI).catch(function() {}),

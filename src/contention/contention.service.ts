@@ -45,10 +45,15 @@ export class ContentionService {
       if (!rental || !rental.start_date || !rental.end_date) return;
       if (['cancelled', 'obsolete'].includes(rental.status)) return;
 
-      // Get listing_title items (most reliable source)
-      const titleItems = rental.extracted_items
-        .filter(ei => ei.source === 'listing_title')
-        .map(ei => ei.item_name);
+      // Get resolved items — photo_reference is most authoritative, then listing_title
+      const seenItems = new Map<string, string>();
+      for (const ei of rental.extracted_items) {
+        const existing = seenItems.get(ei.item_name);
+        if (!existing || ei.source === 'photo_reference') {
+          seenItems.set(ei.item_name, ei.source);
+        }
+      }
+      const titleItems = [...seenItems.keys()];
       if (titleItems.length === 0) return;
 
       for (const itemName of titleItems) {
@@ -81,7 +86,6 @@ export class ContentionService {
         extracted_items: {
           some: {
             item_name: matched,
-            source: 'listing_title',
           },
         },
       },

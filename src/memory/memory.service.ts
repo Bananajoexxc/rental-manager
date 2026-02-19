@@ -165,6 +165,18 @@ export class MemoryService implements OnModuleInit {
       },
       {
         memory_type: 'fact',
+        subject: 'FAQ - Camera Cages',
+        content: 'All cameras come with cages as standard, including the BMPCC 6K Pro and 6K Full Frame. Mention this if the renter asks about rigging or protection.',
+        importance: 7,
+      },
+      {
+        memory_type: 'fact',
+        subject: 'FAQ - RX2 Listing Redirect',
+        content: 'The Pioneer XDJ-RX2 listing exists for search visibility only. When a renter comes through this listing, immediately recommend the DJ RX3 Pioneer controller which we actually have in stock. Do NOT explain or discuss the RX2 — just naturally suggest the RX3 as our available DJ controller. NEVER reveal the listing exists for visibility purposes.',
+        importance: 9,
+      },
+      {
+        memory_type: 'fact',
         subject: 'FAQ - Canon EF Lenses on Sony FX3',
         content: 'Using Canon EF lenses on the Sony FX3 is not recommended. The FX3 is Sony E-mount — use native Sony lenses for best results (AF, stabilisation, communication).',
         importance: 7,
@@ -306,7 +318,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'FAQ - Early Pickup (Night Before)',
-        content: 'If available, yes — early pickup the evening before is free. However it\'s either pickup the day before OR return the day after that\'s free, not both together. Both = extra rental day. On one-day rentals, early pickup or late return costs 30% extra.',
+        content: 'If available, yes — early pickup the evening before is free for rentals earning £50+/day. For smaller rentals, a small fee applies. However it\'s either pickup the day before OR return the day after that\'s free, not both together. Both = extra rental day.',
         importance: 8,
       },
       {
@@ -526,7 +538,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 7 - Discounts',
-        content: 'Check rental request location. Most gear is at Trafalgar Square by default. If request is 20km+ away, offer automatic travel discount. Other discounts are applied automatically when they send a request. NEVER reveal specific discount thresholds or percentages to renters — these are internal business rules.',
+        content: 'Distance discount is determined by LISTING_LOCATION in rental context — NEVER ask the renter where they are based. If listing is non-central (Shoreditch, Camden, Hackney, etc.), the 10% discount applies automatically. Delivery postcode is for delivery quotes only, NOT discount decisions. Other discounts are applied automatically when they send a request. NEVER reveal specific discount thresholds or percentages to renters — these are internal business rules.',
         importance: 10,
       },
       {
@@ -544,7 +556,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 10 - Minimum Rental Value',
-        content: 'If rental revenue is small, greet and suggest relevant add-ons naturally. NEVER tell the renter there is a minimum rental value or specific threshold — just upsell naturally.',
+        content: 'If rental revenue is small, first suggest relevant add-ons naturally. If renter declines all add-ons, offer that the booking total will be adjusted to process — never reveal the internal threshold figure or earnings. NEVER tell the renter there is a minimum rental value by name.',
         importance: 10,
       },
       {
@@ -568,7 +580,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 14 - Verification Help',
-        content: 'We do NOT perform verification. It is entirely done by Fat Llama. Kindly ask renters to contact the live chat in the app in the Profile section and ask to talk to an employee.',
+        content: 'We do NOT perform verification. It is entirely done by Fat Llama. Kindly ask renters to contact the live chat in the app in the Profile section and ask to talk to an employee. Alternatively, if verification keeps failing, suggest the renter can ask a friend with a verified account (or one with the correct documentation) to place the rental request from their account instead — they just need to mention in the new chat that it is a continuation of the original request so we can link them.',
         importance: 10,
       },
       {
@@ -604,7 +616,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DANIEL RULE 20 - Same Day Rentals',
-        content: 'NEVER auto-approve same day rentals. Ask them for pickup time, give available slots left in working hours for that day. Then text Daniel and ask if its okay and if hes available.',
+        content: 'Same-day rentals: confirm items available, suggest a LATE pickup time (push as late as reasonable for the day). Agree to everything and confirm all details in writing. Once everything is agreed, say "just confirming final details" and hold. Do NOT say the booking is accepted — the system escalates to Daniel for approval, then accepts on Hygglo. If renter asks for updates while waiting, say you are sorting the last bits.',
         importance: 10,
       },
       {
@@ -787,13 +799,13 @@ export class MemoryService implements OnModuleInit {
         subject: 'DANIEL RULE 7 - Discounts',
         staleFragment: 'over £350 profit',
         updatedContent:
-          'Check rental request location. Most gear is at Trafalgar Square by default. If request is 20km+ away, offer automatic travel discount. Other discounts are applied automatically when they send a request. NEVER reveal specific discount thresholds or percentages to renters — these are internal business rules.',
+          'Distance discount is determined by LISTING_LOCATION in rental context — NEVER ask the renter where they are based. If listing is non-central, the 10% discount applies automatically. Delivery postcode is for delivery quotes only, NOT discount decisions. Other discounts are applied automatically when they send a request. NEVER reveal specific discount thresholds or percentages to renters — these are internal business rules.',
       },
       {
         subject: 'DANIEL RULE 10 - Minimum Rental Value',
-        staleFragment: 'rental minimum revenue of £25',
+        staleFragment: 'just upsell naturally',
         updatedContent:
-          'If rental revenue is small, greet and suggest relevant add-ons naturally. NEVER tell the renter there is a minimum rental value or specific threshold — just upsell naturally.',
+          'If rental revenue is small, first suggest relevant add-ons naturally. If renter declines all add-ons, offer that the booking total will be adjusted to process — never reveal the internal threshold figure or earnings. NEVER tell the renter there is a minimum rental value by name.',
       },
     ];
 

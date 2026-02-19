@@ -1203,6 +1203,148 @@ export class CalendarService implements OnModuleInit {
     };
   }
 
+  /**
+   * Additive resync: creates missing bookings from rental.parsed_items.
+   * NEVER deletes existing bookings — they may include items from additional
+   * listings added during the rental conversation (not captured in the title).
+   * Also enriches parsed_items with items found in existing bookings.
+   */
+  async resyncFromParsedItems(days = 365): Promise<{
+    rentalsProcessed: number;
+    bookingsCreated: number;
+    parsedItemsEnriched: number;
+    details: { rentalId: string; title: string; action: string }[];
+  }> {
+    const cutoff = new Date(Date.now() - days * 86400000);
+    const inventoryNames = getInventoryItemNames();
+
+    const rentals = await this.prisma.rental.findMany({
+      where: {
+        created_at: { gte: cutoff },
+        start_date: { not: null },
+        end_date: { not: null },
+        status: { in: ['completed', 'ongoing', 'upcoming'] },
+      },
+      include: {
+        bookings: { where: { status: { in: ['confirmed', 'pending_review'] } } },
+      },
+    });
+
+    let bookingsCreated = 0;
+    let parsedItemsEnriched = 0;
+    let rentalsProcessed = 0;
+    const details: { rentalId: string; title: string; action: string }[] = [];
+
+    for (const rental of rentals) {
+      if (!rental.parsed_items || !rental.start_date || !rental.end_date) continue;
+
+      let parsedItems: { item: string; qty: number }[];
+      try {
+        const raw = typeof rental.parsed_items === 'string'
+          ? JSON.parse(rental.parsed_items as string)
+          : rental.parsed_items;
+        if (!Array.isArray(raw) || raw.length === 0) continue;
+        parsedItems = raw.map((e: any) => ({ item: e.item || '', qty: e.qty || 1 }));
+      } catch { continue; }
+
+      // Existing booking item names
+      const existingBookingItems = new Set(rental.bookings.map(b => b.item_name));
+
+      // Resolve parsed items to canonical MASTER_INVENTORY names
+      const parsedResolved = new Map<string, string>(); // canonical → original
+      for (const pi of parsedItems) {
+        const matched = findBestMatch(pi.item, inventoryNames);
+        if (matched) parsedResolved.set(matched, pi.item);
+      }
+
+      // Find items in parsed_items that DON'T have a booking yet
+      const missingFromBookings: string[] = [];
+      for (const [canonical] of parsedResolved) {
+        if (!existingBookingItems.has(canonical)) {
+          missingFromBookings.push(canonical);
+        }
+      }
+
+      // Find items in bookings that DON'T exist in parsed_items (from additional listings)
+      // Enrich parsed_items to include them so revenue attribution sees all items
+      const parsedItemNames = new Set(parsedItems.map(p => {
+        const m = findBestMatch(p.item, inventoryNames);
+        return m || p.item;
+      }));
+      let enriched = false;
+      for (const bookingItem of existingBookingItems) {
+        if (!parsedItemNames.has(bookingItem)) {
+          parsedItems.push({ item: bookingItem, qty: 1 });
+          enriched = true;
+        }
+      }
+      if (enriched) {
+        await this.prisma.rental.update({
+          where: { id: rental.id },
+          data: { parsed_items: parsedItems as any },
+        });
+        parsedItemsEnriched++;
+        details.push({
+          rentalId: rental.id,
+          title: rental.title.substring(0, 50),
+          action: `enriched_parsed_items: added ${[...existingBookingItems].filter(b => !parsedItemNames.has(b)).join(', ')}`,
+        });
+      }
+
+      // Create missing bookings directly (don't use createBookingsFromRental which has
+      // relevance filters and title fallback that can create WRONG items)
+      if (missingFromBookings.length > 0 && rental.start_date && rental.end_date) {
+        // Revenue proportional split using ALL items (parsed + existing bookings)
+        const DEFAULT_DAILY_PRICE = 15;
+        const allResolvedItems = [...parsedResolved.keys(), ...existingBookingItems];
+        const uniqueItems = [...new Set(allResolvedItems)];
+        const totalRevenue = rental.rental_price ? Number(rental.rental_price) : 0;
+        const itemWeights = uniqueItems.map(name => ({
+          name,
+          weight: getOneDayPrice(name) || DEFAULT_DAILY_PRICE,
+        }));
+        const totalWeight = itemWeights.reduce((sum, iw) => sum + iw.weight, 0);
+
+        const createdNames: string[] = [];
+        for (const itemName of missingFromBookings) {
+          const itemRevenue = totalWeight > 0
+            ? Math.round((((getOneDayPrice(itemName) || DEFAULT_DAILY_PRICE) / totalWeight) * totalRevenue) * 100) / 100
+            : 0;
+
+          const booking = await this.prisma.booking.create({
+            data: {
+              item_name: itemName,
+              quantity: 1,
+              start_date: rental.start_date,
+              end_date: rental.end_date,
+              renter_name: rental.renter_info || 'Unknown',
+              account: rental.account || 'dbcinema',
+              rental_id: rental.id,
+              revenue: itemRevenue > 0 ? itemRevenue : null,
+              platform_fee: 0,
+              net_profit: itemRevenue > 0 ? itemRevenue : null,
+              status: 'confirmed',
+              notes: JSON.stringify({ source: 'resync_from_parsed', allItems: uniqueItems }),
+            },
+          });
+          createdNames.push(itemName);
+          bookingsCreated++;
+        }
+        if (createdNames.length > 0) {
+          details.push({
+            rentalId: rental.id,
+            title: rental.title.substring(0, 50),
+            action: `created_bookings: ${createdNames.join(', ')}`,
+          });
+        }
+        rentalsProcessed++;
+      }
+    }
+
+    this.logger.log(`Resync: ${rentalsProcessed} rentals with new bookings, ${bookingsCreated} created, ${parsedItemsEnriched} parsed_items enriched`);
+    return { rentalsProcessed, bookingsCreated, parsedItemsEnriched, details };
+  }
+
   async getFullInventoryStatus(daysAhead = 7): Promise<string> {
     const now = new Date();
     const futureDate = new Date(now);
@@ -1480,6 +1622,57 @@ export class CalendarService implements OnModuleInit {
       );
     }
 
+    // Visibility redirect listings: items listed for SEO/visibility, redirect to actual stock.
+    // NEVER tell the renter the listing exists for visibility — naturally pivot to the real item.
+    const VISIBILITY_REDIRECTS: Record<string, string> = {
+      // DJ equipment
+      'Pioneer XDJ-RX2': 'DJ RX3 Pioneer controller',
+      // Cameras
+      'Blackmagic Pyxis 6K': 'BMPCC 6K Pro',
+      'Pyxis 6K': 'BMPCC 6K Pro',
+      // Drones
+      'DJI Mavic 4 Pro': 'DJI Mavic 3 Pro',
+      'Mavic 4': 'DJI Mavic 3 Pro',
+      // Canon RF lenses (we only stock Canon EF mount)
+      'Canon RF 24-70mm': 'Canon EF 24-105mm f4 (EF mount)',
+      'Canon RF 24-70mm f2.8': 'Canon EF 24-105mm f4 (EF mount)',
+      // Sony GM lenses not in stock
+      'Sony GM 12-24mm': 'Sony GM 16-35mm f2.8',
+      'Sony GM 12-24mm f2.8': 'Sony GM 16-35mm f2.8',
+      'Sony GM 35mm f1.4': 'Sony GM 24-70mm f2.8',
+      'Sigma 14-24mm f2.8': 'Sony GM 16-35mm f2.8',
+      // Fisheye lenses
+      '7Artisans 7.5mm': 'Sony 11mm f2.8 fisheye',
+      '7Artisans 7.5mm f2.8 Fisheye': 'Sony 11mm f2.8 fisheye',
+      '8-15mm Fisheye Zoom': 'Sony 11mm f2.8 fisheye',
+      'Canon 8-15mm f2.8 Fisheye': 'Sony 11mm f2.8 fisheye',
+      // Cinema prime lens sets (we have anamorphic sets)
+      'DZO ARLES': 'Anamorphic Blazar Remus lens set or Anamorphic Great Joy lens set',
+      'DZO Vespid': 'Anamorphic Blazar Remus lens set or Anamorphic Great Joy lens set',
+      // Aputure lighting (not in our stock — we have Nanlite)
+      'Aputure 300D II': 'Nanlite Forza 300 or Nanlite 500B',
+      'Aputure Amaran 300c': 'Nanlite Forza 300 or Nanlite 500B',
+      'Aputure MC Pro': 'Ambitful RGB light tubes 2x set',
+      'Aputure Light Dome': 'Softbox 85cm',
+      'Nanlite Forza 60C': 'Nanlite Forza 300',
+      // Audio
+      'Rode NTG5': 'Audio boom mic Sennheiser',
+      'Rode Wireless Go II': 'Rode Wireless Mic Pro set',
+      // Projectors (no direct equivalent — mention unavailable)
+      'ViewSonic 4K Projector': 'not currently available (no projectors in stock)',
+      'Anker Nebula Projector': 'not currently available (no projectors in stock)',
+    };
+    const redirectLines: string[] = [];
+    for (const [listedItem, actualItem] of Object.entries(VISIBILITY_REDIRECTS)) {
+      redirectLines.push(`${listedItem} → ${actualItem}`);
+    }
+    if (redirectLines.length > 0) {
+      lines.push(
+        `\nVISIBILITY REDIRECT LISTINGS: Some Hygglo listings advertise items we don't physically stock. When a renter comes through one of these listings or asks about these items, naturally recommend what we actually have. Do NOT say "we don't have that" or "that's not available" — instead say something like "our [real item] is great for [their use case]" and pivot naturally. NEVER reveal listings exist for visibility. Treat it as if we simply have the alternative ready to go.`,
+        ...redirectLines,
+      );
+    }
+
     lines.push(
       '\nRULES: This is ALL we stock. If renter asks for something NOT on this list, say it is "currently unavailable" and suggest the closest alternative from this list. Frame as a temporary stock issue, NEVER as a permanent gap. NEVER confirm items not listed above.',
       'For lenses, note the mount system (Sony E-mount, Canon EF mount) — different mounts are NOT interchangeable. We do NOT stock Canon RF lenses.',
@@ -1519,7 +1712,15 @@ export class CalendarService implements OnModuleInit {
     const examples: any[] = [];
 
     for (const rental of rentals) {
-      const mainBookings = rental.bookings.filter(b => !isAccessoryItem(b.item_name));
+      let mainBookings = rental.bookings.filter(b => !isAccessoryItem(b.item_name));
+      // If no main items exist (accessory-only listing), promote all bookings to main
+      // Also: if accessories have their own bookings, they were intentionally created and should get revenue
+      if (mainBookings.length === 0) {
+        mainBookings = rental.bookings;
+      } else if (mainBookings.length < rental.bookings.length) {
+        // Mixed: include accessories that have their own bookings — they were promoted during creation
+        mainBookings = rental.bookings;
+      }
       if (mainBookings.length < 2) {
         // Single-item rentals: just ensure revenue = rental_price
         if (mainBookings.length === 1 && mainBookings[0].revenue !== rental.rental_price) {

@@ -328,9 +328,13 @@ export class RemindersService {
         // Notify renter via Hygglo
         if (booking.rental?.listing_id) {
           try {
+            const assignedParts: string[] = [];
+            if (assignPickup) assignedParts.push(`pickup at ${pickupTime}`);
+            if (assignReturn) assignedParts.push(`return at ${returnTime}`);
+            const assignedText = assignedParts.join(' and ');
             await this.hyggloService.sendMessage(
               booking.rental.listing_id,
-              `Since the rental starts tomorrow, I've set pickup for ${pickupTime} and return for ${returnTime}. Let me know if you need to adjust!`,
+              `Just a heads up — since we hadn't heard back on times after a few reminders, I've gone ahead and assigned ${assignedText} for your rental starting tomorrow. If those times don't work for you, just let me know and we can adjust!`,
             );
           } catch (sendErr) {
             this.logger.warn(`Failed to notify renter about auto-assigned times: ${sendErr.message}`);

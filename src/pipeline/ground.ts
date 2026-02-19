@@ -33,7 +33,14 @@ export function buildKnownFacts(facts: FactPack): string[] {
     if (r.startDate) {
       const start = new Date(r.startDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
       const end = r.endDate ? new Date(r.endDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : 'TBC';
-      entries.push(`Dates: ${start} to ${end}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}`);
+      // Calculate return morning (day after end date) — renters keep gear through the last rental day
+      let returnMorning = '';
+      if (r.endDate) {
+        const returnDate = new Date(r.endDate);
+        returnDate.setDate(returnDate.getDate() + 1);
+        returnMorning = ` → return morning of ${returnDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}`;
+      }
+      entries.push(`Dates: ${start} to ${end}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}${returnMorning}`);
     }
     entries.push(`Renter: ${r.renterName}`);
     if (r.renterPrice) entries.push(`Renter pays: £${r.renterPrice}`);
@@ -80,8 +87,8 @@ export function buildKnownFacts(facts: FactPack): string[] {
     }
   }
 
-  // Location is always Central London / Trafalgar Square area (or listed branch)
-  entries.push('Pickup location: Central London, Trafalgar Square area');
+  // Location — account-aware (Leo = Charing Cross, DB = Trafalgar Square)
+  entries.push('Pickup location: Central London (rough area only until booking verified)');
 
   // What the agent IS and ISN'T
   entries.push('Agent role: chat-only agent who arranges rentals. Daniel/Leo handles physical handoffs.');

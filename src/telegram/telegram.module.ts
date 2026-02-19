@@ -20,6 +20,7 @@ import { RecommendationModule } from '../recommendations/recommendation.module';
 import { AutolearnModule } from '../autolearn/autolearn.module';
 import { LostRevenueModule } from '../lost-revenue/lost-revenue.module';
 import { PipelineModule } from '../pipeline/pipeline.module';
+import { FollowUpModule } from '../follow-up/follow-up.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { PipelineModule } from '../pipeline/pipeline.module';
     forwardRef(() => AutolearnModule),
     LostRevenueModule,
     PipelineModule,
+    forwardRef(() => FollowUpModule),
   ],
   providers: [TelegramService],
   exports: [TelegramService],

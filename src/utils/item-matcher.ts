@@ -70,6 +70,9 @@ function getTokenVariants(token: string): string[] {
   const variants = [token];
   if (/\d/.test(token) && /[a-z]/.test(token)) {
     // Try splitting at letter→digit and digit→letter boundaries
+    // Aperture tokens like "f28" (from "f2.8") must NOT split into variant "28"
+    // — "28" would falsely match focal length numbers (e.g. 28-70mm lens)
+    if (/^f\d+$/.test(token)) return variants;
     const split = token.replace(/(\d)([a-z])/g, '$1 $2').replace(/([a-z])(\d)/g, '$1 $2');
     if (split !== token) {
       const parts = split.split(' ');

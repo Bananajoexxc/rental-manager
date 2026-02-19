@@ -236,17 +236,18 @@ export class RenterProfileService {
       return { isReturning: false, previousRentalCount: 0 };
     }
 
-    // Only count rentals that actually happened — not pending requests or rejections
-    const CONFIRMED_STATUSES = ['upcoming', 'ongoing', 'completed', 'confirmed'];
-    const previousConfirmed = profile.renter_links.filter(
+    // Only count COMPLETED rentals — upcoming/ongoing/confirmed don't count.
+    // A renter is only "returning" if they've actually completed a rental before.
+    // Unbooked requests, pending, cancelled, etc. do NOT qualify.
+    const previousCompleted = profile.renter_links.filter(
       (link) =>
         link.rental_id !== currentRentalId &&
-        CONFIRMED_STATUSES.some(s => (link.rental?.status || '').toLowerCase().includes(s)),
+        (link.rental?.status || '').toLowerCase().includes('completed'),
     );
 
     return {
-      isReturning: previousConfirmed.length > 0,
-      previousRentalCount: previousConfirmed.length,
+      isReturning: previousCompleted.length > 0,
+      previousRentalCount: previousCompleted.length,
       profileId: profile.id,
     };
   }
@@ -255,6 +256,56 @@ export class RenterProfileService {
    * Get active (upcoming/ongoing/confirmed) rentals for a profile, excluding a specific rental.
    * Used for detecting additions/extensions when a returning renter sends a new request.
    */
+  /**
+   * Get pending/upcoming rentals for a profile — used for cross-scan consolidation.
+   * Returns rentals that are still pending or upcoming (not yet completed/cancelled/consolidated).
+   */
+  async getPendingRentalsForProfile(profileId: string, excludeRentalId: string): Promise<{
+    id: string;
+    title: string;
+    status: string;
+    listing_id: string;
+    start_date: Date | null;
+    end_date: Date | null;
+    rental_price: number | null;
+    account: string | null;
+  }[]> {
+    const PENDING_STATUSES = ['pending', 'pending_review', 'upcoming'];
+
+    const profile = await this.prisma.renter_profile.findUnique({
+      where: { id: profileId },
+      include: {
+        renter_links: {
+          include: {
+            rental: {
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                listing_id: true,
+                start_date: true,
+                end_date: true,
+                rental_price: true,
+                account: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!profile) return [];
+
+    return profile.renter_links
+      .filter(
+        (link) =>
+          link.rental_id !== excludeRentalId &&
+          PENDING_STATUSES.some(s => (link.rental?.status || '').toLowerCase().includes(s)),
+      )
+      .map((link) => link.rental)
+      .filter(Boolean) as any[];
+  }
+
   async getActiveRentalsForProfile(profileId: string, excludeRentalId: string): Promise<{
     id: string;
     title: string;
@@ -411,17 +462,24 @@ export class RenterProfileService {
 
     if (!profile) return '';
 
+    // Count only COMPLETED rentals for loyalty — not just linked/requested
+    const completedRentals = profile.renter_links.filter(
+      (link) => link.rental_id !== currentRentalId &&
+        (link.rental?.status || '').toLowerCase().includes('completed'),
+    );
+    const completedCount = completedRentals.length;
+
     const parts: string[] = [];
     parts.push(`--- RENTER PROFILE: ${profile.name} ---`);
-    parts.push(`Total rentals: ${profile.total_rentals}`);
+    parts.push(`Completed rentals: ${completedCount}`);
     parts.push(`First seen: ${profile.first_seen_at.toISOString().split('T')[0]}`);
 
-    // Loyalty tier
-    const loyalty = this.getLoyaltyTier(profile.total_rentals);
+    // Loyalty tier — based on completed rentals only
+    const loyalty = this.getLoyaltyTier(completedCount);
     if (loyalty) {
       parts.push(`Loyalty tier: ${loyalty.tier} (valued returning customer)`);
       parts.push(`Total spend: £${Math.round(profile.total_spend)}`);
-      parts.push(`RETURNING CUSTOMER: Acknowledge their loyalty naturally ("Welcome back!" or "Good to see you again"). Do NOT offer loyalty discounts — there are no loyalty/repeat-customer discounts. Standard pricing applies.`);
+      parts.push(`RETURNING CUSTOMER: Acknowledge their loyalty naturally ("Welcome back!" or "Good to see you again"). There IS a returning renter discount but do NOT mention it unless the renter specifically asks about discounts or returning renter pricing.`);
     }
 
     if (profile.verification_status !== 'unknown') {

@@ -27,6 +27,7 @@ import { CorrectionDetectorService } from '../autolearn/correction-detector.serv
 import { HyggloAccount } from '../hygglo/hygglo.service';
 import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
 import { PipelineService } from '../pipeline/pipeline.service';
+import { FollowUpService } from '../follow-up/follow-up.service';
 
 // --- Consolidated rental notification types ---
 export type RentalSectionType =
@@ -177,6 +178,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     @Inject(forwardRef(() => CorrectionDetectorService)) private correctionDetector: CorrectionDetectorService,
     private lostRevenueService: LostRevenueService,
     private pipelineService: PipelineService,
+    @Inject(forwardRef(() => FollowUpService)) private followUpService: FollowUpService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -1061,6 +1063,31 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           // 'ignore' intent = "Wait & monitor" — keep escalation in place, auto-accept stays blocked
         } catch (reviewResErr) {
           this.logger.warn(`Failed to process review_flag resolution: ${reviewResErr.message}`);
+        }
+      }
+
+      // same_day: accept the rental on Hygglo when Daniel approves
+      if (decision.type === 'same_day' && decision.rentalId) {
+        try {
+          if (chosenOption.intent === 'approve') {
+            const result = await this.followUpService.acceptSameDayRental(decision.rentalId);
+            if (result.success) {
+              this.logger.log(`Same-day rental ACCEPTED on Hygglo: ${decision.rentalId}`);
+              await this.bot.sendMessage(this.ownerChatId, `\u2705 Rental accepted on Hygglo.`).catch(() => {});
+            } else {
+              this.logger.warn(`Same-day rental Hygglo accept failed: ${decision.rentalId} — ${result.error}`);
+              await this.bot.sendMessage(this.ownerChatId, `\u26a0\ufe0f Hygglo accept failed: ${result.error || 'unknown error'}. You may need to accept manually.`).catch(() => {});
+            }
+          } else if (chosenOption.intent === 'decline') {
+            await this.prisma.follow_up_state.updateMany({
+              where: { rental_id: decision.rentalId },
+              data: { status: 'declined', auto_accept_eligible: false },
+            });
+            this.logger.log(`Same-day rental DECLINED: ${decision.rentalId}`);
+          }
+        } catch (sameDayErr) {
+          this.logger.warn(`Failed to process same_day resolution: ${sameDayErr.message}`);
+          await this.bot.sendMessage(this.ownerChatId, `\u26a0\ufe0f Error processing same-day approval. Check Hygglo manually.`).catch(() => {});
         }
       }
 

@@ -256,7 +256,7 @@ export class AiService {
       '- Use markdown formatting (bold, bullets, headers) — plain text only, like texting\n' +
       '- Add signatures, sign-offs, or "Cheers, Daniel" — just end naturally\n' +
       '- Downsell: never say renter has "enough" or "doesn\'t need" something\n' +
-      '- Offer distance discount when the renter is NOT being redirected from a non-central listing. The discount is an apology for redirecting from a distant listing location (Hackney, Shoreditch, Croydon, etc.) to central. It does NOT apply for central-zone listings (SE1, SW1, WC2, EC1, W1, E1 areas) where Trafalgar Square is already nearby.\n' +
+      '- Offer distance discount when the renter is NOT being redirected from a non-central listing. The discount is an apology for redirecting from a distant listing location (Hackney, Shoreditch, Croydon, etc.) to central. It does NOT apply for central-zone listings (SE1, SW1, WC2, EC1, W1, E1 areas) where Trafalgar Square is already nearby. NEVER ask "where are you based?" to determine discount eligibility — use LISTING_LOCATION from rental context only. Delivery postcodes do NOT affect discounts.\n' +
       '- Promise actions you cannot perform: you CANNOT "add items to a booking", "update pickup times in the system", "send payment links", or "check and get back later". You can only draft messages. Say "I\'ll pass that on" or "Daniel will sort that" instead of "I\'ll do X".\n' +
       '- Guess technical specs (battery life, exact weight, firmware versions, flare colors) unless the data is in your context. Say "I\'d need to double-check that" rather than guessing.\n',
     );

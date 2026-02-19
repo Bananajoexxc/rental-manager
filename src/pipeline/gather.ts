@@ -136,11 +136,19 @@ export async function gatherFacts(
   if (rental) {
     try {
       const extracted = await services.prisma.extracteditem.findMany({
-        where: { rental_id: rental.id, source: 'listing_title' },
-        select: { item_name: true },
+        where: { rental_id: rental.id },
+        select: { item_name: true, source: true },
       });
       if (extracted.length > 0) {
-        const dbItems = extracted.map((e: any) => e.item_name);
+        // Deduplicate: photo_reference is authoritative over listing_title
+        const seen = new Map<string, string>();
+        for (const e of extracted) {
+          const existing = seen.get(e.item_name);
+          if (!existing || e.source === 'photo_reference') {
+            seen.set(e.item_name, e.source);
+          }
+        }
+        const dbItems = [...seen.keys()];
         resolvedItems = [...new Set([...dbItems, ...classification.mentionedItems])];
       }
     } catch { /* non-critical */ }
@@ -466,11 +474,11 @@ export async function gatherFacts(
       (async () => {
         try {
           const extracted = await services.prisma.extracteditem.findMany({
-            where: { rental_id: rental.id, source: 'listing_title' },
+            where: { rental_id: rental.id },
             select: { item_name: true },
           });
           if (extracted.length > 0) {
-            const names = extracted.map((e: any) => e.item_name).join(', ');
+            const names = [...new Set(extracted.map((e: any) => e.item_name))].join(', ');
             facts.verifiedListingItem = `Actual item(s): ${names}. Ignore SEO keywords in listing title.`;
           }
         } catch { /* non-critical */ }

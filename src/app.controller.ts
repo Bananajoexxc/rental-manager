@@ -1007,6 +1007,15 @@ export class AppController {
     return this.calendarService.reconcileRecentBookings(lookback);
   }
 
+  @Get('calendar/resync-from-parsed')
+  @ApiTags('Maintenance')
+  @ApiOperation({ summary: 'Resync bookings from parsed_items — deletes wrong bookings, creates correct ones' })
+  @ApiQuery({ name: 'days', required: false, type: Number, description: 'Number of days to look back (default 365)' })
+  async resyncFromParsed(@Query('days') days?: string) {
+    const lookback = days ? parseInt(days, 10) || 365 : 365;
+    return this.calendarService.resyncFromParsedItems(lookback);
+  }
+
   @Get('calendar/recompute-revenue')
   @ApiTags('Maintenance')
   @ApiOperation({ summary: 'Recompute booking revenue using proportional split by catalog daily price' })
@@ -1451,6 +1460,26 @@ export class AppController {
   @ApiResponse({ status: 200, description: 'Number of records backfilled' })
   async backfillDenialTypes() {
     return await this.lostRevenueService.backfillDenialTypes();
+  }
+
+  @Get('missed-revenue/summary')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Missed revenue summary — items not in inventory with actual revenue' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Missed revenue from unmatched items with revenue amounts' })
+  async getMissedRevenueSummary(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getMissedRevenueSummary(period || '3m', account || undefined);
+  }
+
+  @Get('timeout-revenue/summary')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Timeout revenue summary — items in stock but owner never responded' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Timeout revenue summary with top items' })
+  async getTimeoutRevenueSummary(@Query('period') period?: string, @Query('account') account?: string) {
+    return await this.lostRevenueService.getTimeoutSummary(period || '3m', account || undefined);
   }
 
   @Get('lost-revenue/unmatched')

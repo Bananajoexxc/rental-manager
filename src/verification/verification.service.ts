@@ -274,7 +274,8 @@ export class VerificationService {
       `A few things that might help:\n` +
       `- Make sure the photo of your ID is clear and well-lit\n` +
       `- Try using a passport if your driving licence isn't working\n` +
-      `- Contact the Hygglo/Fat Llama support team directly - they can sometimes verify manually\n\n` +
+      `- Contact the Hygglo/Fat Llama support team directly - they can sometimes verify manually\n` +
+      `- Alternatively, if you have a friend with a verified account (or one with the right documentation), they could place the rental request from their account instead - just have them mention in the chat that it's a continuation of your request so we know it's linked\n\n` +
       `If it's still not working, feel free to get in touch with the platform's support and they'll sort it out.`;
 
     // Notify Daniel of persistent verification issue
@@ -404,7 +405,7 @@ export class VerificationService {
       `- Return time: ${returnTime}\n` +
       `- Location: Trafalgar Square area (exact address sent on the day)\n\n` +
       `A few things to note:\n` +
-      `- Please bring a valid photo ID for the handover\n` +
+      `- Have your booking reference number ready for the handover\n` +
       `- Equipment should be returned in the same condition\n` +
       `- Please handle all gear with care\n\n` +
       `Let me know if you have any questions!`;
