@@ -631,13 +631,27 @@ export class CalendarService implements OnModuleInit {
   private filterByListingRelevance(
     items: { name: string; quantity: number }[],
     listingTitle: string,
+    strict = false,
   ): { name: string; quantity: number }[] {
     if (!listingTitle || items.length <= 1) return items;
 
-    const title = listingTitle.toLowerCase();
+    // Strip SEO comparison text like "(Like Aputure / Nanlite Pavotube)" before matching
+    const cleanedTitle = listingTitle
+      .replace(/\(?\blike\b[^)]*\)?/gi, '')  // "(Like X / Y)" or "Like X"
+      .replace(/\(?\bsimilar\s+to\b[^)]*\)?/gi, '')  // "(Similar to X)"
+      .replace(/\|[^|]*$/g, '')  // trailing "| SEO / keywords" sections
+      .trim();
+    const title = cleanedTitle.toLowerCase();
 
     // Bundle/kit/set listings: extracted items are expected to be diverse
-    if (/\b(kit|set|bundle|combo|package|film|ultimate|short\s*film)\b/i.test(title)) return items;
+    // In strict mode (resync), skip the bundle bypass — always apply per-item filtering
+    // In normal mode, bypass for genuine multi-category bundles (not SEO "kit" text)
+    if (!strict && /\b(bundle|combo|package|ultimate|short\s*film)\b/i.test(title)) return items;
+    if (!strict && /\b(kit|set)\b/i.test(title)) {
+      // Only bypass if title has 3+ items separated by +/&/,/and (genuine bundle)
+      const separators = title.split(/[+&,]|\band\b/).filter(s => s.trim().length > 3);
+      if (separators.length >= 3) return items;
+    }
 
     // Map item names and title to broad equipment categories
     const CATEGORY_RULES: [RegExp, RegExp][] = [
@@ -682,9 +696,29 @@ export class CalendarService implements OnModuleInit {
       if (brandOverlap.length > 0 && itemTokens.length <= 2) return true; // very short item name with brand match
 
       // Category match: item's category is mentioned in the title
+      // But check for competing brands within the same category
+      const COMPETING_BRANDS: [RegExp, string[]][] = [
+        // [item brand pattern, all brands in this product subcategory]
+        [/nanlite|pavotube/i, ['nanlite', 'pavotube', 'ambitful', 'forza']],
+        [/ambitful/i, ['ambitful', 'nanlite', 'pavotube']],
+        [/rode/i, ['rode', 'sennheiser', 'dji']],
+        [/sennheiser/i, ['sennheiser', 'rode', 'dji']],
+      ];
       for (const [itemPattern, titlePattern] of CATEGORY_RULES) {
         if (itemPattern.test(name)) {
-          return titlePattern.test(title);
+          if (!titlePattern.test(title)) return false;
+          // Category matches — but check for competing brand conflict
+          for (const [brandPattern, competitors] of COMPETING_BRANDS) {
+            if (brandPattern.test(name)) {
+              // Item has this specific brand — check if title has a DIFFERENT brand from same group
+              const itemBrand = competitors.find(b => name.includes(b));
+              const titleBrand = competitors.find(b => b !== itemBrand && titleNorm.includes(b));
+              if (titleBrand && itemBrand && !titleNorm.includes(itemBrand)) {
+                return false; // Competing brand in title, item's brand absent
+              }
+            }
+          }
+          return true;
         }
       }
 
@@ -1252,15 +1286,28 @@ export class CalendarService implements OnModuleInit {
 
       // Resolve parsed items to canonical MASTER_INVENTORY names
       const parsedResolved = new Map<string, string>(); // canonical → original
+      const parsedQty = new Map<string, number>(); // canonical → qty
       for (const pi of parsedItems) {
         const matched = findBestMatch(pi.item, inventoryNames);
-        if (matched) parsedResolved.set(matched, pi.item);
+        if (matched) {
+          parsedResolved.set(matched, pi.item);
+          parsedQty.set(matched, pi.qty || 1);
+        }
       }
 
-      // Find items in parsed_items that DON'T have a booking yet
+      // Filter resolved items through listing relevance to prevent stock-photo contamination
+      // Use strict mode: no kit/bundle bypass, always apply per-item category matching
+      const resolvedItems = [...parsedResolved.keys()].map(name => ({
+        name,
+        quantity: parsedQty.get(name) || 1,
+      }));
+      const relevantItems = this.filterByListingRelevance(resolvedItems, rental.title, true);
+      const relevantNames = new Set(relevantItems.map(i => i.name));
+
+      // Find items in parsed_items that DON'T have a booking yet (only relevant ones)
       const missingFromBookings: string[] = [];
       for (const [canonical] of parsedResolved) {
-        if (!existingBookingItems.has(canonical)) {
+        if (!existingBookingItems.has(canonical) && relevantNames.has(canonical)) {
           missingFromBookings.push(canonical);
         }
       }
@@ -1291,8 +1338,8 @@ export class CalendarService implements OnModuleInit {
         });
       }
 
-      // Create missing bookings directly (don't use createBookingsFromRental which has
-      // relevance filters and title fallback that can create WRONG items)
+      // Create missing bookings directly with listing relevance filtering
+      // Uses parsedQty for correct quantities, capped by MASTER_INVENTORY max
       if (missingFromBookings.length > 0 && rental.start_date && rental.end_date) {
         // Revenue proportional split using ALL items (parsed + existing bookings)
         const DEFAULT_DAILY_PRICE = 15;
@@ -1311,10 +1358,14 @@ export class CalendarService implements OnModuleInit {
             ? Math.round((((getOneDayPrice(itemName) || DEFAULT_DAILY_PRICE) / totalWeight) * totalRevenue) * 100) / 100
             : 0;
 
+          const itemQty = Math.min(
+            parsedQty.get(itemName) || 1,
+            MASTER_INVENTORY[itemName] || 1,
+          );
           const booking = await this.prisma.booking.create({
             data: {
               item_name: itemName,
-              quantity: 1,
+              quantity: itemQty,
               start_date: rental.start_date,
               end_date: rental.end_date,
               renter_name: rental.renter_info || 'Unknown',
