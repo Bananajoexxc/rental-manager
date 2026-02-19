@@ -1371,6 +1371,38 @@ export class AutonomousService {
         this.logger.debug(`First-time renter check failed in onNewRental: ${ftErr.message}`);
       }
 
+      // Low-value detection for new rental analysis
+      let onNewRentalLowValueCtx = '';
+      try {
+        const analyzeAccountName = rental.account || 'dbcinema';
+        const ANALYZE_MIN: Record<string, number> = { dbcinema: 20, leo: 25 };
+        const analyzeMinimum = ANALYZE_MIN[analyzeAccountName] || 20;
+        let analyzeProfit = rental.rental_price || null;
+        if (!analyzeProfit) {
+          const extractedItems = await this.prisma.extracteditem.findMany({
+            where: { rental_id: rental.id }, select: { item_name: true },
+          });
+          if (extractedItems.length > 0) {
+            let itemTotal = 0;
+            for (const ei of extractedItems) {
+              const entry = PRICING_CATALOG.find(p => p.item_name.toLowerCase() === ei.item_name.toLowerCase());
+              itemTotal += entry ? entry.daily_price_max : 25;
+            }
+            analyzeProfit = Math.round(itemTotal * 0.64);
+          }
+        }
+        if (analyzeProfit && analyzeProfit < analyzeMinimum) {
+          const renterFacingMin = Math.ceil(analyzeMinimum / 0.64);
+          onNewRentalLowValueCtx =
+            `\n\n--- LOW VALUE RENTAL (CRITICAL) ---\n` +
+            `Estimated profit: ~£${analyzeProfit}. Minimum for ${analyzeAccountName === 'leo' ? 'Leo Adams' : 'DB Cinema'}: £${analyzeMinimum}.\n` +
+            `This rental is BELOW the minimum. In your welcome message:\n` +
+            `1. First try to upsell add-ons (ask what they're shooting, suggest accessories)\n` +
+            `2. If renter only wants the single item, the booking total needs to come to at least £${renterFacingMin}\n` +
+            `3. Frame as standard pricing, NEVER say "minimum". You CANNOT modify bookings — the renter must adjust through the platform.\n`;
+        }
+      } catch { /* non-critical */ }
+
       const rentalContext =
         `New rental detected:\n` +
         `Title: ${rental.title}\n` +
@@ -1386,6 +1418,7 @@ export class AutonomousService {
         (rentalStageCtx ? `\n\n${rentalStageCtx}` : '') +
         multiItemContextStr +
         onNewRentalFirstTimeCtx +
+        onNewRentalLowValueCtx +
         previousConversationContext;
 
       // 2. Ask Claude to analyze and decide
@@ -2552,9 +2585,9 @@ export class AutonomousService {
         // Retrieve conversation history — 8 recent messages + facts summary from older ones
         const conversationHistory = await this.memoryService.getConversationHistory(chatId, 8);
 
-        // Build conversation summary if missing (use cache if available — avoids redundant Haiku call per message)
+        // Always refresh conversation summary on new messages — stale summaries cause context amnesia
         try {
-          await this.memoryService.buildConversationSummary(rental.id, chatId, false);
+          await this.memoryService.buildConversationSummary(rental.id, chatId, true);
         } catch {
           // Non-critical — cached summary will be used as fallback
         }
@@ -3712,7 +3745,8 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
             // OPERATIONAL: inventory specs, schedule, vacation, blacklist
             ...[inventoryContext, scheduleContext, vacationContext, blacklistContext].filter(Boolean),
             // COMMERCIAL (supplementary): coupons, delivery quotes, low-value guidance
-            ...[couponContext, deliveryQuoteContext, (!isLateStage && !suppressUpsell) ? lowValueInstruction : ''].filter(Boolean),
+            // Low-value instruction is a business rule (minimum order), NOT optional upselling — always inject
+            ...[couponContext, deliveryQuoteContext, lowValueInstruction].filter(Boolean),
             // CONVERSATION: summary, urgency, welcome-back, multi-rental coordination
             ...[conversationSummary, urgencyContext, welcomeBackContext, multiRentalContext].filter(Boolean),
             // TIME REFERENCES: help AI resolve relative times against rental dates

@@ -9,6 +9,8 @@ import { formatSpecsForAI } from '../data/item-specs';
 @Injectable()
 export class MemoryService implements OnModuleInit {
   private readonly logger = new Logger(MemoryService.name);
+  // Track message count at last summary build to detect when new messages arrive
+  private summaryMessageCount = new Map<string, number>();
 
   constructor(
     private prisma: PrismaService,
@@ -318,7 +320,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'FAQ - Early Pickup (Night Before)',
-        content: 'If available, yes — early pickup the evening before is free for rentals earning £50+/day. For smaller rentals, a small fee applies. However it\'s either pickup the day before OR return the day after that\'s free, not both together. Both = extra rental day.',
+        content: 'If available, yes — early pickup the evening before is free for multi-day rentals or any rental earning £40+ total. For short/low-value rentals, a small fee applies. However it\'s either pickup the day before OR return the day after that\'s free, not both together. Both = extra rental day.',
         importance: 8,
       },
       {
@@ -1219,9 +1221,9 @@ export class MemoryService implements OnModuleInit {
 
       const messageCount = messages.length;
       if (!forceRefresh && state?.conversation_summary && messageCount > 0) {
-        // Return cached summary if recently built (within 5min) — avoids redundant Haiku calls
-        const summaryAge = state.updated_at ? Date.now() - state.updated_at.getTime() : Infinity;
-        if (summaryAge < 300_000) return state.conversation_summary;
+        // Return cached summary only if no new messages since last build
+        const lastBuildCount = this.summaryMessageCount.get(rentalId) || 0;
+        if (lastBuildCount >= messageCount) return state.conversation_summary;
       }
 
       // Build summary from even a single message — don't wait for 4
@@ -1240,11 +1242,12 @@ export class MemoryService implements OnModuleInit {
 
       const summary = response.content.trim();
 
-      // Persist to follow_up_state
+      // Persist to follow_up_state and track message count for cache invalidation
       await this.prisma.follow_up_state.update({
         where: { rental_id: rentalId },
         data: { conversation_summary: summary },
       });
+      this.summaryMessageCount.set(rentalId, messageCount);
 
       return summary;
     } catch (error) {

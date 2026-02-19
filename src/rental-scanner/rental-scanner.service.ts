@@ -441,12 +441,39 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
               this.logger.warn(`Failed to send booking confirmation notification: ${err.message}`);
             }
 
-            // Auto-trigger time request for confirmed booking
+            // Auto-send confirmation info + time request to renter
             try {
               const followUpState = await this.prisma.follow_up_state.findUnique({
                 where: { rental_id: existingRental.id },
               });
               if (followUpState && !(followUpState as any).time_request_sent) {
+                // Build confirmation info message with address and logistics
+                const account = updatedRental.account || rental.account || 'dbcinema';
+                const startDate = updatedRental.start_date ? new Date(updatedRental.start_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+                const endDate = updatedRental.end_date ? new Date(updatedRental.end_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+                const dateRange = startDate && endDate ? `\nDates: ${startDate} – ${endDate}` : '';
+
+                let pickupAddress: string;
+                let mapsLink: string;
+                if (account === 'leo') {
+                  pickupAddress = '5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret';
+                  mapsLink = '';
+                } else {
+                  pickupAddress = 'Statue of James II, 11 Trafalgar Square, London WC2N 5DN';
+                  mapsLink = '\nGoogle Maps: https://maps.app.goo.gl/ry8ea4tySBoah7d7A';
+                }
+
+                const infoMessage =
+                  `Your booking is confirmed! Here are the details:\n` +
+                  `\nItems: ${items}${dateRange}` +
+                  `\nPickup address: ${pickupAddress}${mapsLink}` +
+                  `\nOpening times: 10am–12pm & 7–9pm` +
+                  `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
+                  `\nDelivery available (separate charge) — let us know if needed.`;
+
+                await this.hyggloService.sendMessage(rental.listingId, infoMessage);
+                await this.memoryService.storeConversation(`rental:${existingRental.id}`, 'assistant', infoMessage, { model: 'system' });
+
                 // Check if times already exist
                 const bookings = await this.prisma.booking.findMany({
                   where: { rental_id: existingRental.id, status: 'confirmed' },
@@ -460,19 +487,19 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
                     data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'confirmed' },
                   });
                 } else {
-                  await this.hyggloService.sendMessage(
-                    rental.listingId,
-                    `Booking's all confirmed! Just need your exact pickup and return times (with AM or PM please) so I can lock those in.`,
-                  );
+                  // Send time request as separate message so renter reads and replies to it
+                  const timeRequest = `One last thing — what are your exact pickup and return times? (Please include AM or PM)`;
+                  await this.hyggloService.sendMessage(rental.listingId, timeRequest);
+                  await this.memoryService.storeConversation(`rental:${existingRental.id}`, 'assistant', timeRequest, { model: 'system' });
                   await this.prisma.follow_up_state.update({
                     where: { id: followUpState.id },
                     data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'none' },
                   });
-                  this.logger.log(`Auto-sent time request on confirmation for ${updatedRental.title}`);
+                  this.logger.log(`Auto-sent confirmation info + time request for ${updatedRental.title}`);
                 }
               }
             } catch (err) {
-              this.logger.warn(`Failed to auto-send time request on confirmation: ${err.message}`);
+              this.logger.warn(`Failed to auto-send confirmation info on confirmation: ${err.message}`);
             }
           }
         }

@@ -586,13 +586,43 @@ export class FollowUpService {
     });
 
     if (result.success) {
-      // Send confirmation message
-      const confirmMessage = `Great news - your booking for the ${rental.title} has been confirmed! ` +
-        `Looking forward to the rental. Let me know if you have any questions about pickup.`;
-
+      // Send confirmation info message with address and logistics
       try {
-        await this.hyggloService.sendMessage(rental.listing_id, confirmMessage);
-        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', confirmMessage, { model: 'follow-up' });
+        const startDate = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+        const endDate = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+        const dateRange = startDate && endDate ? `\nDates: ${startDate} – ${endDate}` : '';
+
+        let pickupAddress: string;
+        let mapsLink: string;
+        if (account === 'leo') {
+          pickupAddress = '5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret';
+          mapsLink = '';
+        } else {
+          pickupAddress = 'Statue of James II, 11 Trafalgar Square, London WC2N 5DN';
+          mapsLink = '\nGoogle Maps: https://maps.app.goo.gl/ry8ea4tySBoah7d7A';
+        }
+
+        const infoMessage =
+          `Your booking is confirmed! Here are the details:\n` +
+          `\nItems: ${rental.title}${dateRange}` +
+          `\nPickup address: ${pickupAddress}${mapsLink}` +
+          `\nOpening times: 10am–12pm & 7–9pm` +
+          `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
+          `\nDelivery available (separate charge) — let us know if needed.`;
+
+        await this.hyggloService.sendMessage(rental.listing_id, infoMessage);
+        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', infoMessage, { model: 'follow-up' });
+
+        // Send time request as separate message so renter reads and replies to it
+        const timeRequest = `One last thing — what are your exact pickup and return times? (Please include AM or PM)`;
+        await this.hyggloService.sendMessage(rental.listing_id, timeRequest);
+        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', timeRequest, { model: 'follow-up' });
+
+        // Mark time request sent so scanner doesn't double-send
+        await this.prisma.follow_up_state.update({
+          where: { id: state.id },
+          data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'none' },
+        });
       } catch {
         // Silent failure - confirmation is best-effort
       }
