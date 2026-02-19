@@ -7,6 +7,12 @@
 |----|------|---|-------|------|
 | #130 | 11:49 PM | 🔵 | Item Matcher Utility Provides Fuzzy Matching and Master Inventory Database | ~433 |
 
+### Feb 6, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #313 | 7:12 PM | 🔵 | DJI Mavic 3 Pro Inventory and Pricing Configuration | ~441 |
+
 ### Feb 7, 2026
 
 | ID | Time | T | Title | Read |
@@ -23,6 +29,7 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1142 | 1:43 PM | 🔵 | MASTER_INVENTORY Contains Aputure Lights - Validation Logic Found | ~541 |
 | #1121 | 12:34 PM | 🔵 | Sony NPF 970 Batteries Incorrectly Included in MASTER_INVENTORY as Rentable Item | ~594 |
 | #1094 | 12:24 PM | 🔵 | Item Matching System with Master Inventory of 100+ Equipment Items | ~561 |
 </claude-mem-context>

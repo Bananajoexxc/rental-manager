@@ -4,8 +4,9 @@ import { Cron } from '@nestjs/schedule';
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
-import { getOneDayPrice, PRICING_CATALOG } from '../data/pricing-catalog';
-import { MASTER_INVENTORY } from '../utils/item-matcher';
+import { RevenueService } from '../revenue/revenue.service';
+import { getItemPrice, getOneDayPrice, PRICING_CATALOG } from '../data/pricing-catalog';
+import { findBestMatch, getInventoryItemNames, isAccessoryItem, MASTER_INVENTORY } from '../utils/item-matcher';
 
 // ── Competitor config ──
 
@@ -49,6 +50,140 @@ function categorizeItem(title: string): string {
   return 'other';
 }
 
+// ── Strict match validation for competitor price comparison ──
+// findBestMatch is designed for renter messages (loose, informal) — too permissive for competitor listings.
+// This function validates that a match actually represents the SAME product.
+
+const NOISE_TOKENS = new Set([
+  'the', 'a', 'an', 'for', 'with', 'and', 'or', 'of', 'in', 'on', 'to',
+  'like', 'similar', 'mount', 'full', 'frame', 'professional', 'cinema',
+  'rental', 'hire', 'pro', 'digital', 'camera', 'lens', 'fe', 'ef',
+]);
+
+function isValidCompetitorMatch(inventoryItem: string, competitorTitle: string): boolean {
+  const inv = inventoryItem.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+  const comp = competitorTitle.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+
+  // 1. Category cross-check: reject blatant cross-category matches
+  const invCat = categorizeItem(inv);
+  const compCat = categorizeItem(comp);
+  if (invCat !== 'other' && compCat !== 'other' && invCat !== compCat) return false;
+
+  // 2. Extract significant tokens from inventory item (the thing we need to find in the competitor title)
+  const invTokens = inv.split(/\s+/).filter(t => t.length > 1 && !NOISE_TOKENS.has(t));
+  const compTokensSet = new Set(comp.split(/\s+/).filter(t => t.length > 1));
+
+  // 3. Brand conflict check — different brands = different product
+  const KNOWN_BRANDS = new Set([
+    'sony', 'canon', 'cannon', 'nikon', 'panasonic', 'fujifilm', 'blackmagic', 'dji', 'rode',
+    'sennheiser', 'nanlite', 'aputure', 'godox', 'hollyland', 'anker', 'ecoflow',
+    'pioneer', 'jbl', 'gopro', 'tilta', 'smallrig', 'atomos', 'blazar', 'sirui',
+    'manfrotto', 'sachtler', 'neewer', 'ambitful', 'deity', 'ttartisan', '7artisans', 'sigma',
+  ]);
+  // Normalize brand aliases (common misspellings)
+  const normalizeBrand = (b: string) => b === 'cannon' ? 'canon' : b;
+  const invBrands = invTokens.filter(t => KNOWN_BRANDS.has(t)).map(normalizeBrand);
+  const compTokensArr = comp.split(/\s+/).filter(t => t.length > 1);
+  const compBrands = compTokensArr.filter(t => KNOWN_BRANDS.has(t)).map(normalizeBrand);
+  // If both have brands and NO overlap, reject (Sony vs Canon, Anker vs EcoFlow, etc.)
+  if (invBrands.length > 0 && compBrands.length > 0) {
+    const brandOverlap = invBrands.some(b => compBrands.includes(b));
+    if (!brandOverlap) return false;
+  }
+  // If our item has a brand but competitor doesn't mention ANY known brand,
+  // require that our brand appears somewhere in the competitor title
+  if (invBrands.length > 0 && compBrands.length === 0) {
+    const hasBrandInComp = invBrands.some(b => comp.includes(b));
+    if (!hasBrandInComp) return false;
+  }
+
+  // 4. Count how many significant inventory tokens appear in competitor title
+  let matches = 0;
+  for (const token of invTokens) {
+    // Direct match
+    if (compTokensSet.has(token)) { matches++; continue; }
+    // Fuzzy: check if comp contains a token that starts with or contains ours (e.g., "500b" in "500")
+    let found = false;
+    for (const ct of compTokensSet) {
+      if (ct.includes(token) || token.includes(ct)) { found = true; break; }
+    }
+    if (found) matches++;
+  }
+
+  const coverage = invTokens.length > 0 ? matches / invTokens.length : 0;
+  if (coverage < 0.5) return false;
+  // For multi-token items, require at least 2 significant tokens to match
+  // (prevents single-keyword matches like "nanlite" matching a C-Stand that mentions Nanlite)
+  if (invTokens.length >= 2 && matches < 2) return false;
+
+  // 4. Model number conflict detection — if both have a model number pattern, they must match
+  // Sony camera models: a7 II, a7 III, a7s III, a7c, a7r IV, a1, fx3, fx6, zv-e1
+  const sonyModelPattern = /\b(a7s?\s*(?:iv|iii|ii|i|c|r\s*(?:iv|iii|ii|v)?)?|a1|a9|fx[36]|zv\s*e?\d)/i;
+  const invSonyModel = inv.match(sonyModelPattern);
+  const compSonyModel = comp.match(sonyModelPattern);
+  if (invSonyModel && compSonyModel) {
+    const invM = invSonyModel[1].replace(/\s+/g, '').toLowerCase();
+    const compM = compSonyModel[1].replace(/\s+/g, '').toLowerCase();
+    if (invM !== compM) return false;
+  }
+  // If our item IS a Sony camera model but competitor has a DIFFERENT model
+  if (invSonyModel && !compSonyModel) return false;
+
+  // DJI model conflicts: Mavic 2 vs 3, Mini 3 vs 4, RS3 vs RS4
+  const djiModelPattern = /\b(mavic|mini|rs)\s*(\d)/i;
+  const invDji = inv.match(djiModelPattern);
+  const compDji = comp.match(djiModelPattern);
+  if (invDji && compDji && invDji[1].toLowerCase() === compDji[1].toLowerCase()) {
+    if (invDji[2] !== compDji[2]) return false;
+  }
+
+  // Atomos model conflicts: Ninja V vs Shogun, Shinobi
+  if (/\bninja\b/i.test(inv) && !/\bninja\b/i.test(comp) && /\b(shogun|shinobi)\b/i.test(comp)) return false;
+
+  // Blazar Remus focal length conflict
+  const blazarFocalPattern = /remus\s*(\d+)/i;
+  const invBlazar = inv.match(blazarFocalPattern);
+  const compBlazar = comp.match(blazarFocalPattern);
+  if (invBlazar && compBlazar && invBlazar[1] !== compBlazar[1]) return false;
+  // Remus shouldn't match Sirui anamorphic
+  if (/remus/i.test(inv) && /sirui/i.test(comp)) return false;
+
+  // Sony GM lens check: if our item does NOT have "GM" but competitor does, or vice versa,
+  // it's a fundamentally different product (e.g., Sony 28-70mm kit vs 28-70mm F2.8 GM II)
+  const invHasGM = /\bgm\b/i.test(inventoryItem);
+  const compHasGM = /\bgm\b|g\s*master/i.test(competitorTitle);
+  // Use ORIGINAL strings for focal length detection (cleaned strings strip hyphens from "24-70mm")
+  if (invHasGM !== compHasGM && /sony/i.test(inventoryItem) && /\d+-\d+mm/i.test(inventoryItem)) {
+    return false;
+  }
+
+  // Generic focal length conflict: 24-70mm shouldn't match 16-35mm, etc.
+  // MUST use original strings — cleaned versions strip hyphens, breaking range patterns.
+  const focalPattern = /\b(\d{1,3})-(\d{1,3})mm\b|\b(\d{1,3})mm\b/i;
+  const invFocal = inventoryItem.match(focalPattern);
+  const compFocal = competitorTitle.match(focalPattern);
+  if (invFocal && compFocal) {
+    const invFocalStr = invFocal[0].toLowerCase();
+    const compFocalStr = compFocal[0].toLowerCase();
+    // Both have focal lengths — they should be the same
+    if (invFocalStr !== compFocalStr) {
+      const invIsRange = invFocal[1] != null && invFocal[2] != null; // matched X-Ymm
+      const compIsRange = compFocal[1] != null && compFocal[2] != null;
+      // Zoom range vs prime single = different lens type, reject
+      if (invIsRange !== compIsRange) return false;
+      // Both ranges or both primes: check if numbers overlap (±2mm tolerance)
+      const invNums = invFocal[0].match(/\d+/g)?.map(Number) || [];
+      const compNums = compFocal[0].match(/\d+/g)?.map(Number) || [];
+      if (invNums.length > 0 && compNums.length > 0) {
+        const hasOverlap = invNums.some(n => compNums.some(cn => Math.abs(n - cn) <= 2));
+        if (!hasOverlap) return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 // ── Service ──
 
 @Injectable()
@@ -60,6 +195,7 @@ export class CompetitorIntelService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly revenueService: RevenueService,
   ) {
     this.claude = new Anthropic({ apiKey: this.configService.get('ANTHROPIC_API_KEY') });
     this.model = this.configService.get('CLAUDE_MODEL_COMPLEX') || 'claude-sonnet-4-5-20250929';
@@ -476,6 +612,195 @@ export class CompetitorIntelService {
     }
 
     return { competitors, marketGaps: marketGaps.slice(0, 20) };
+  }
+
+  // ────────────── PRICE RECOMMENDATIONS ──────────────
+
+  /**
+   * Per-item pricing comparison: our price vs competitors, our rental history vs competitor reviews.
+   * Signals: overpriced (>15% above avg competitor), underpriced (>15% below), competitive, no_data.
+   */
+  async getPriceRecommendations(): Promise<{
+    items: any[];
+    summary: { overpriced: number; underpriced: number; competitive: number; no_data: number; total: number };
+  }> {
+    const inventoryItems = getInventoryItemNames().filter(name => !isAccessoryItem(name));
+
+    // Parallel data fetches
+    const [allEarnings, revenueBreakdown, catalog, competitorReviews, effectiveRates] = await Promise.all([
+      this.revenueService.getAllItemEarnings(),
+      this.revenueService.getItemRevenueBreakdown('all'),
+      this.getCompetitorCatalog(),
+      this.prisma.competitor_review.findMany({
+        where: { item_rented: { not: null } },
+        select: { item_rented: true, competitor_id: true },
+      }),
+      // Compute effective daily rate from actual booking data (revenue / rental days).
+      // This is what we ACTUALLY earn per day, accounting for multi-day discounts and bundle pricing.
+      this.prisma.$queryRaw<{ item_name: string; total_revenue: number; total_days: number; rental_count: number }[]>`
+        SELECT
+          item_name,
+          COALESCE(SUM(revenue), 0)::float AS total_revenue,
+          COALESCE(SUM(GREATEST(1, ROUND(EXTRACT(EPOCH FROM (end_date - start_date)) / 86400) + 1)), 0)::float AS total_days,
+          COUNT(*)::int AS rental_count
+        FROM booking
+        WHERE status IN ('confirmed', 'completed')
+          AND revenue IS NOT NULL AND revenue > 0
+          AND end_date < NOW()
+        GROUP BY item_name
+      `,
+    ]);
+
+    // Build effective daily rate lookup (owner earnings per rental day from real data)
+    const effectiveRateMap = new Map<string, number>();
+    for (const row of effectiveRates) {
+      if (row.total_days > 0) {
+        effectiveRateMap.set(row.item_name, Math.round((row.total_revenue / row.total_days) * 100) / 100);
+      }
+    }
+
+    // Build earnings lookup
+    const earningsMap = new Map<string, { totalRevenue: number; rentalCount: number }>();
+    for (const item of allEarnings.currentItems) {
+      earningsMap.set(item.item, { totalRevenue: item.totalRevenue, rentalCount: item.rentalCount });
+    }
+
+    // Build monthly revenue lookup (avg monthly = total / months with activity)
+    const monthlyMap = new Map<string, number>();
+    for (const item of revenueBreakdown.items) {
+      const activeMonths = item.monthlyBreakdown.filter((m: any) => m.revenue > 0).length;
+      monthlyMap.set(item.item, activeMonths > 0 ? Math.round((item.totalRevenue / activeMonths) * 100) / 100 : 0);
+    }
+
+    // Pre-compute best inventory match for each competitor listing.
+    // CRITICAL: Only match SINGLE-ITEM listings — bundles/kits have inflated prices
+    // that don't represent individual item value.
+    // Bundle detection: title has "+" separating products, or explicit bundle words
+    // with quantity markers (e.g., "2x Sony FX3 + 2x lens"), or "Package N" patterns.
+    // Detect bundle/multi-item listings: " + " separator, "Nx " quantity prefix,
+    // "Package N", or explicit set/kit/combo words in the title
+    const bundlePattern = /\s\+\s|(?:^|\s)[2-9]x\s|\bpackage\s*\d|\b(?:set|kit|combo)\b/i;
+
+    const listingToItem = new Map<string, { competitorName: string; title: string; dailyPrice: number; bestMatch: string }>();
+    for (const comp of catalog.competitors) {
+      for (const listing of comp.listings) {
+        if (!listing.dailyPrice) continue;
+
+        // Skip obvious bundles by title pattern
+        if (bundlePattern.test(listing.title)) continue;
+
+        const bestMatch = findBestMatch(listing.title, inventoryItems);
+        if (bestMatch && isValidCompetitorMatch(bestMatch, listing.title)) {
+          const key = `${comp.name}::${listing.title}`;
+          listingToItem.set(key, {
+            competitorName: comp.name,
+            title: listing.title,
+            dailyPrice: listing.dailyPrice,
+            bestMatch,
+          });
+        }
+      }
+    }
+
+    // Pre-compute best inventory match for each competitor review
+    const reviewToItem = new Map<number, string>();
+    for (let i = 0; i < competitorReviews.length; i++) {
+      const review = competitorReviews[i];
+      if (review.item_rented) {
+        const bestMatch = findBestMatch(review.item_rented, inventoryItems);
+        if (bestMatch) reviewToItem.set(i, bestMatch);
+      }
+    }
+
+    const results: any[] = [];
+
+    for (const itemName of inventoryItems) {
+      const priceEntry = getItemPrice(itemName);
+      const catalogPrice = priceEntry?.daily_price_max ?? null;
+      // Use catalog price as primary comparison — this is our listed 1-day rate that renters see.
+      // Effective rate from bookings is unreliable: item-matching errors + multi-day discount averaging.
+      const ourDailyPrice = catalogPrice;
+      // Effective daily rate as secondary insight: what we actually earn per rental day (owner earnings).
+      const effectiveOwnerRate = effectiveRateMap.get(itemName) ?? null;
+      const effectiveDailyRate = effectiveOwnerRate
+        ? Math.round((effectiveOwnerRate / HYGGLO_OWNER_TAKE) * 100) / 100
+        : null;
+      const earnings = earningsMap.get(itemName);
+      const ourRentalCount = earnings?.rentalCount ?? 0;
+      const ourTotalRevenue = earnings?.totalRevenue ?? 0;
+      const avgMonthlyRevenue = monthlyMap.get(itemName) ?? 0;
+
+      // Collect competitor listings whose BEST match is this item
+      const competitorMatches: { competitorName: string; title: string; dailyPrice: number }[] = [];
+      for (const entry of listingToItem.values()) {
+        if (entry.bestMatch === itemName) {
+          competitorMatches.push(entry);
+        }
+      }
+
+      // Competitor average daily price (renter-facing listed price)
+      const compAvgPrice = competitorMatches.length > 0
+        ? Math.round(competitorMatches.reduce((s, c) => s + c.dailyPrice, 0) / competitorMatches.length * 100) / 100
+        : null;
+
+      // Count competitor reviews whose BEST match is this item
+      let compReviewCount = 0;
+      for (const [, matchedItem] of reviewToItem) {
+        if (matchedItem === itemName) compReviewCount++;
+      }
+
+      // Compute price gap and signal
+      let gapPercent: number | null = null;
+      let signal: 'overpriced' | 'underpriced' | 'competitive' | 'no_data' = 'no_data';
+
+      if (ourDailyPrice && compAvgPrice) {
+        gapPercent = Math.round(((ourDailyPrice - compAvgPrice) / compAvgPrice) * 100);
+        if (gapPercent > 15) signal = 'overpriced';
+        else if (gapPercent < -15) signal = 'underpriced';
+        else signal = 'competitive';
+      }
+
+      // Determine category from pricing catalog
+      const category = priceEntry?.category ?? 'other';
+
+      results.push({
+        item: itemName,
+        category,
+        ourDailyPrice,
+        effectiveDailyRate,
+        compAvgPrice,
+        gapPercent,
+        signal,
+        ourRentalCount,
+        ourTotalRevenue,
+        avgMonthlyRevenue,
+        compReviewCount,
+        competitorMatches: competitorMatches.map(c => ({
+          competitor: c.competitorName,
+          title: c.title,
+          dailyPrice: c.dailyPrice,
+        })),
+      });
+    }
+
+    // Sort: overpriced first, then underpriced, competitive, no_data
+    const signalOrder: Record<string, number> = { overpriced: 0, underpriced: 1, competitive: 2, no_data: 3 };
+    results.sort((a, b) => {
+      const orderDiff = (signalOrder[a.signal] ?? 9) - (signalOrder[b.signal] ?? 9);
+      if (orderDiff !== 0) return orderDiff;
+      // Within same signal, sort by absolute gap descending
+      return Math.abs(b.gapPercent ?? 0) - Math.abs(a.gapPercent ?? 0);
+    });
+
+    const summary = {
+      overpriced: results.filter(r => r.signal === 'overpriced').length,
+      underpriced: results.filter(r => r.signal === 'underpriced').length,
+      competitive: results.filter(r => r.signal === 'competitive').length,
+      no_data: results.filter(r => r.signal === 'no_data').length,
+      total: results.length,
+    };
+
+    return { items: results, summary };
   }
 
   // ────────────── AI INSIGHTS ──────────────

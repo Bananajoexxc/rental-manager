@@ -1512,6 +1512,14 @@ export class AppController {
 
   // --- Competitor Intelligence endpoints ---
 
+  @Get('price-recommendations')
+  @ApiTags('Competitor Intelligence')
+  @ApiOperation({ summary: 'Per-item price comparison: our price vs competitors with signals' })
+  @ApiResponse({ status: 200, description: 'Price recommendations with gap analysis' })
+  async getPriceRecommendations() {
+    return await this.competitorIntelService.getPriceRecommendations();
+  }
+
   @Get('competitor-intel/insights')
   @ApiTags('Competitor Intelligence')
   @ApiOperation({ summary: 'AI-generated strategic recommendations from competitor data' })
