@@ -3496,6 +3496,7 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           if (convState.upsellAttempted) parts.push('Upselling already attempted — do NOT upsell again');
           if (convState.priceQuoted) parts.push(`Last price quoted: £${convState.priceQuoted}`);
           if (convState.deliveryDiscussed) parts.push('Delivery already discussed');
+          if (convState.rentalNotes?.length) parts.push(`Notes for owner: ${convState.rentalNotes.join('; ')}`);
           if (parts.length > 0) {
             conversationStateCtx = `\n--- CONVERSATION STATE ---\n${parts.join('\n')}\nDo NOT re-ask questions listed above. Do NOT repeat information already established.\n`;
           }
@@ -3848,13 +3849,23 @@ Bot response: "${response.content.substring(0, 500)}"
 Renter message: "${msg.content.substring(0, 300)}"
 
 Return ONLY a JSON object with changed fields (omit unchanged):
-{"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false}`,
+{"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false,"rentalNotes":["needs extra batteries","shooting outdoors"]}
+rentalNotes: include anything the OWNER should know — extras requested, special conditions, delivery preferences, location specifics, project details, fragile items, time constraints. Only add genuinely useful notes, not generic info.`,
             { maxTokens: 150 },
           );
           // Strip markdown fences if present, then parse
           const jsonStr = stateExtraction.content.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
           const parsed = JSON.parse(jsonStr);
           await this.followUpService.mergeStructuredState(rental.id, parsed);
+
+          // Flush new notes to booking records immediately if bookings exist
+          if (parsed.rentalNotes?.length) {
+            try {
+              for (const note of parsed.rentalNotes) {
+                await this.calendarService.addDecisionNotesToBookings(rental.id, note);
+              }
+            } catch { /* non-critical — notes flush is best-effort */ }
+          }
         } catch { /* non-critical — state extraction is best-effort */ }
 
         // VALIDATION: Check response before sending

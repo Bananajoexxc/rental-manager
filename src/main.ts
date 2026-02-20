@@ -1,11 +1,13 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as path from 'path';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Enable graceful shutdown
   app.enableShutdownHooks();
@@ -52,6 +54,9 @@ async function bootstrap() {
       body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif; }
     `,
   });
+
+  // Serve listing creator images as static files
+  app.useStaticAssets(path.join(process.cwd(), 'listing-creator-images'), { prefix: '/listing-images' });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

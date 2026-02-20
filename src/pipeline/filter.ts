@@ -1,3 +1,5 @@
+import { getMarketingListingItems } from './assemble';
+
 /**
  * Layer 8: FILTER — Expanded Hard Filters (Code-Enforced, <1ms)
  *
@@ -14,7 +16,7 @@
  */
 
 export interface FilterIssue {
-  type: 'PHYSICAL_PRESENCE' | 'FABRICATED_QUOTE' | 'INTERNAL_ACTION' | 'PLATFORM_LEAK' | 'TIME_LOGIC' | 'SELF_CONTRADICTION' | 'TIMESTAMP' | 'FORMATTING';
+  type: 'PHYSICAL_PRESENCE' | 'FABRICATED_QUOTE' | 'INTERNAL_ACTION' | 'PLATFORM_LEAK' | 'TIME_LOGIC' | 'SELF_CONTRADICTION' | 'TIMESTAMP' | 'FORMATTING' | 'MARKETING_ITEM_AVAILABLE';
   detail: string;
   action: 'stripped' | 'rewritten' | 'flagged';
 }
@@ -206,7 +208,26 @@ export function filterResponse(
     });
   }
 
-  // --- 8. FORMATTING CLEANUP ---
+  // --- 8. MARKETING ITEM AVAILABILITY ---
+  // If the bot claims a marketing-only item is available, flag it
+  const marketingItems = getMarketingListingItems();
+  if (marketingItems.length > 0) {
+    const availablePattern = /\b(available|in stock|I'?ve got|we'?ve got|I have|we have|can get|ready for)\b/i;
+    if (availablePattern.test(text)) {
+      const textLower = text.toLowerCase();
+      for (const item of marketingItems) {
+        if (textLower.includes(item.toLowerCase())) {
+          issues.push({
+            type: 'MARKETING_ITEM_AVAILABLE',
+            detail: `Bot claims marketing-only item "${item}" is available — this item is NOT in inventory`,
+            action: 'flagged',
+          });
+        }
+      }
+    }
+  }
+
+  // --- 9. FORMATTING CLEANUP ---
   const originalLength = text.length;
   text = text
     .replace(/\]\]+/g, '')           // stray brackets

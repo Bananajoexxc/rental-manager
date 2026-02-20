@@ -18,6 +18,20 @@ import { getInventoryItemNames } from '../utils/item-matcher';
 import { AiContext } from '../ai/ai.service';
 import { buildKnownFacts } from './ground';
 
+// Marketing listing items — these are NOT real inventory.
+// Loaded once at startup and refreshed periodically.
+let marketingListingItems: string[] = [];
+let marketingItemsLastLoaded = 0;
+
+export function setMarketingListingItems(items: string[]): void {
+  marketingListingItems = items;
+  marketingItemsLastLoaded = Date.now();
+}
+
+export function getMarketingListingItems(): string[] {
+  return marketingListingItems;
+}
+
 // --- Section 1: Identity ---
 
 function buildIdentitySection(account: string): string {
@@ -269,7 +283,10 @@ You have NO other information beyond KNOWN FACTS above.
 - NEVER guess or use your general knowledge about cameras/equipment. Only state facts from the list above.
 - You are a CHAT AGENT. You CANNOT: be physically present, receive payments, grab equipment, arrive at locations, or perform any physical action. ${account === 'leo' ? 'Leo' : 'Daniel'} handles all physical handoffs — you only arrange them via chat.
 - NEVER fabricate what the renter said. Only reference things actually in the conversation history.
-- NEVER invent policies, discounts, or promotions not listed above.`;
+- NEVER invent policies, discounts, or promotions not listed above.`
++ (marketingListingItems.length > 0
+  ? `\n\n=== MARKETING-ONLY ITEMS (NOT AVAILABLE) ===\nThe following items are marketing-only listings. They are NOT available for rental and NOT in our inventory: ${marketingListingItems.join(', ')}.\nIf a renter asks about any of these items, say: "That item is currently out of stock — I can suggest similar alternatives from what we have available." NEVER say these items are available or offer to book them.`
+  : '');
 
   // SECTION: Sales directive (promoted stage guidance + momentum + salesAction)
   const salesDirective = buildSalesDirectiveSection(monologue, facts, classification);

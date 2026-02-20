@@ -86,7 +86,7 @@ export class FollowUpService {
     const current = await this.getStructuredState(rentalId);
     const merged = { ...current, ...changes };
     // Array fields: merge (append unique), don't replace
-    const arrayFields: (keyof ConversationState)[] = ['confirmedItems', 'questionsAsked', 'upsellItems'];
+    const arrayFields: (keyof ConversationState)[] = ['confirmedItems', 'questionsAsked', 'upsellItems', 'rentalNotes'];
     for (const field of arrayFields) {
       const currentArr = current[field] as string[] | undefined;
       const changesArr = changes[field] as string[] | undefined;

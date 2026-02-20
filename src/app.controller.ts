@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Query, Param, Res, Header, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Query, Param, Res, Header, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Prisma } from '@prisma/client';
@@ -25,6 +25,7 @@ import { MarketReleasesService } from './market/market-releases.service';
 import { ConversationStageService } from './conversation-tree/conversation-stage.service';
 import { ItemMatcherAiService } from './item-matcher-ai/item-matcher-ai.service';
 import { SellRecommenderService } from './sell-recommender/sell-recommender.service';
+import { ListingCreatorService } from './listing-creator/listing-creator.service';
 
 @ApiTags('Health')
 @Controller()
@@ -51,6 +52,7 @@ export class AppController {
     private readonly itemMatcherAi: ItemMatcherAiService,
     private readonly sellRecommenderService: SellRecommenderService,
     private readonly taxReportService: TaxReportService,
+    private readonly listingCreatorService: ListingCreatorService,
   ) {}
 
   // In-memory session store for renter chat testing
@@ -1737,6 +1739,116 @@ export class AppController {
       return { success: true };
     } catch {
       return { error: 'Claim not found' };
+    }
+  }
+
+  // --- Marketing Listings ---
+
+  @Get('marketing-listings')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'List all marketing listings with optional filters' })
+  @ApiQuery({ name: 'image_status', required: false, type: String })
+  @ApiQuery({ name: 'upload_status', required: false, type: String })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Marketing listings' })
+  async getMarketingListings(
+    @Query('image_status') imageStatus?: string,
+    @Query('upload_status') uploadStatus?: string,
+    @Query('account') account?: string,
+  ) {
+    return await this.listingCreatorService.getMarketingListings({
+      image_status: imageStatus,
+      upload_status: uploadStatus,
+      account,
+    });
+  }
+
+  @Get('marketing-listings/stats')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Marketing listing summary stats' })
+  @ApiResponse({ status: 200, description: 'Stats summary' })
+  async getMarketingListingStats() {
+    return await this.listingCreatorService.getMarketingListingStats();
+  }
+
+  @Get('marketing-listings/discover')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Manually trigger listing discovery from competitor reviews' })
+  @ApiResponse({ status: 200, description: 'Discovery results' })
+  async discoverMarketingListings() {
+    const count = await this.listingCreatorService.discoverListingsFromReviews();
+    return { discovered: count };
+  }
+
+  @Get('marketing-listings/:id')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Get marketing listing detail' })
+  @ApiResponse({ status: 200, description: 'Marketing listing detail' })
+  async getMarketingListing(@Param('id') id: string) {
+    const listing = await this.listingCreatorService.getMarketingListing(id);
+    if (!listing) return { error: 'Not found' };
+    return listing;
+  }
+
+  @Post('marketing-listings')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Create a marketing listing (manual or from search bar)' })
+  @ApiResponse({ status: 201, description: 'Marketing listing created' })
+  async createMarketingListing(@Body() body: { itemName: string; title?: string; account?: string }) {
+    if (!body.itemName) return { error: 'itemName is required' };
+    return await this.listingCreatorService.createMarketingListing(body);
+  }
+
+  @Patch('marketing-listings/:id')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Update marketing listing fields' })
+  @ApiResponse({ status: 200, description: 'Marketing listing updated' })
+  async updateMarketingListing(@Param('id') id: string, @Body() body: Record<string, any>) {
+    try {
+      return await this.listingCreatorService.updateMarketingListing(id, body);
+    } catch {
+      return { error: 'Not found or update failed' };
+    }
+  }
+
+  @Post('marketing-listings/:id/approve')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Approve a marketing listing for upload' })
+  @ApiResponse({ status: 200, description: 'Marketing listing approved' })
+  async approveMarketingListing(@Param('id') id: string) {
+    try {
+      return await this.listingCreatorService.approveMarketingListing(id);
+    } catch {
+      return { error: 'Not found or approval failed' };
+    }
+  }
+
+  @Post('marketing-listings/:id/generate-image')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Generate listing image (find → remove BG → compose)' })
+  @ApiResponse({ status: 200, description: 'Image generation result' })
+  async generateMarketingListingImage(@Param('id') id: string) {
+    return this.listingCreatorService.generateImages(id);
+  }
+
+  @Post('marketing-listings/generate-all-images')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Generate images for all pending listings' })
+  @ApiResponse({ status: 200, description: 'Batch image generation result' })
+  async generateAllMarketingListingImages() {
+    return this.listingCreatorService.generateAllPendingImages();
+  }
+
+  @Delete('marketing-listings/:id')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Delete a marketing listing' })
+  @ApiResponse({ status: 200, description: 'Marketing listing deleted' })
+  async deleteMarketingListing(@Param('id') id: string) {
+    try {
+      await this.listingCreatorService.deleteMarketingListing(id);
+      return { success: true };
+    } catch {
+      return { error: 'Not found' };
     }
   }
 

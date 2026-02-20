@@ -42,6 +42,7 @@ import { ItemMatcherAiModule } from './item-matcher-ai/item-matcher-ai.module';
 import { SellRecommenderModule } from './sell-recommender/sell-recommender.module';
 import { PipelineModule } from './pipeline/pipeline.module';
 import { ContentionModule } from './contention/contention.module';
+import { ListingCreatorModule } from './listing-creator/listing-creator.module';
 
 @Module({
   imports: [
@@ -88,6 +89,7 @@ import { ContentionModule } from './contention/contention.module';
     SellRecommenderModule,
     PipelineModule,
     ContentionModule,
+    ListingCreatorModule,
   ],
   controllers: [AppController],
   providers: [AppService],

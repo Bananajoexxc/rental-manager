@@ -905,3 +905,52 @@ model ebay_price_cache {
 
   @@index([scraped_at])
 }
+
+// === Marketing Listings (demand testing via Hygglo — NOT real inventory) ===
+
+model marketing_listing {
+  id                String    @id @default(uuid())
+  title             String                           // Listing title for Hygglo
+  seo_tag           String?                          // SEO-optimized tag
+  items             Json                             // [{item: "Sony A7 IV", qty: 1}, ...]
+  accessories       Json?                            // Correct accessories based on item-compatibility
+  account           String                           // 'dbcinema' | 'leo'
+  source            String                           // 'competitor_review' | 'competitor_listing' | 'manual'
+  source_competitor String?                          // Which competitor inspired this
+  source_listing_id String?                          // competitor_listing.id reference
+
+  // Image pipeline
+  image_status      String    @default("pending")    // pending | images_found | bg_removed | composed | ready | uploaded
+  product_images    String[]                         // URLs/paths of source product images
+  composed_image    String?                          // Path to final composed listing image
+  image_width       Int?
+  image_height      Int?
+
+  // Pricing (from competitor data + our pricing logic)
+  price_1day        Float?                           // Renter-facing 1-day price
+  price_3day        Float?                           // Renter-facing 3-day price
+  price_7day        Float?                           // Renter-facing 7-day price
+  estimated_value   Float?                           // Item value for Hygglo insurance disclosure
+  description       String?   @db.Text               // Listing description matching account template
+
+  // Revenue estimation
+  est_monthly_rev_low   Float?                       // Conservative monthly revenue estimate (owner earnings)
+  est_monthly_rev_high  Float?                       // Optimistic estimate
+  estimation_basis      String?  @db.Text            // How the estimate was calculated
+
+  // Upload tracking
+  hygglo_listing_id     String?                      // Once uploaded to Hygglo
+  hygglo_url            String?
+  uploaded_at           DateTime?
+  upload_status         String    @default("draft")  // draft | pending_upload | uploaded | paused | removed
+
+  // Lifecycle
+  approved_by           String?                      // 'owner' when Daniel approves
+  approved_at           DateTime?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  @@index([account])
+  @@index([upload_status])
+  @@index([image_status])
+}

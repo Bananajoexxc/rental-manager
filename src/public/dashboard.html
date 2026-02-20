@@ -413,6 +413,30 @@
     .section-body { padding: 0; overflow-x: auto; }
     .section-body.padded { padding: 18px; }
 
+    /* Marketing listings */
+    .mktg-filter-btn { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#8b8fa3; padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer; transition:all 0.2s; }
+    .mktg-filter-btn.active, .mktg-filter-btn:hover { background:rgba(139,92,246,0.2); border-color:#8b5cf6; color:#c4b5fd; }
+    .mktg-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
+    .mktg-card { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color 0.2s; }
+    .mktg-card:hover { border-color:rgba(139,92,246,0.4); }
+    .mktg-card-img { width:100%; height:140px; object-fit:cover; background:rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; }
+    .mktg-card-img img { width:100%; height:140px; object-fit:cover; }
+    .mktg-card-body { padding:10px 12px; }
+    .mktg-card-title { font-size:13px; font-weight:600; color:#e2e4ec; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .mktg-card-meta { font-size:11px; color:#8b8fa3; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .mktg-badge { display:inline-block; padding:1px 7px; border-radius:8px; font-size:10px; font-weight:600; }
+    .mktg-badge.db { background:rgba(59,130,246,0.15); color:#60a5fa; }
+    .mktg-badge.leo { background:rgba(245,158,11,0.15); color:#fbbf24; }
+    .mktg-badge.pending { background:rgba(234,179,8,0.15); color:#facc15; }
+    .mktg-badge.ready { background:rgba(34,197,94,0.15); color:#4ade80; }
+    .mktg-badge.uploaded { background:rgba(139,92,246,0.15); color:#c4b5fd; }
+    .mktg-card-rev { font-size:11px; color:#22c55e; margin-top:4px; }
+    .mktg-card-actions { display:flex; gap:6px; padding:6px 12px 10px; }
+    .mktg-card-actions button { flex:1; padding:4px 8px; border:none; border-radius:5px; font-size:11px; cursor:pointer; }
+    .mktg-detail-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:1000; align-items:center; justify-content:center; }
+    .mktg-detail-overlay.open { display:flex; }
+    .mktg-detail-panel { background:rgba(18,21,32,0.97); border-radius:14px; border:1px solid rgba(255,255,255,0.1); padding:24px; max-width:560px; width:92%; max-height:80vh; overflow-y:auto; position:relative; backdrop-filter:blur(20px); }
+
     /* Two/three column */
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
     .grid-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 20px; }
@@ -1593,6 +1617,34 @@
           <button onclick="saveInsuranceClaim()" id="insuranceSaveBtn" style="background:#22c55e;color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-size:13px;font-weight:600;margin-top:4px;">Save Claim</button>
         </div>
       </div>
+    </div>
+
+    <!-- Marketing Listings Panel -->
+    <div class="panel-wrapper" data-panel="marketing-listings" data-panel-label="Marketing Listings">
+    <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Marketing Listings</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Marketing Listings <span id="marketingListingsCount" style="font-size:14px;color:#8b5cf6;font-weight:700;"></span></span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button onclick="discoverMarketingListings()" id="marketingDiscoverBtn" style="background:#8b5cf6;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Discover</button>
+        </div>
+      </div>
+      <div style="padding:8px 16px 0;">
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="marketingSearchInput" placeholder="Type an item name to create a listing..." style="flex:1;padding:7px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;outline:none;" />
+          <button onclick="createMarketingListing()" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;white-space:nowrap;">+ Create</button>
+        </div>
+      </div>
+      <div style="padding:8px 16px;display:flex;gap:6px;flex-wrap:wrap;" id="marketingFilterBar">
+        <button class="mktg-filter-btn active" data-filter="all" onclick="filterMarketingListings('all',this)">All</button>
+        <button class="mktg-filter-btn" data-filter="pending" onclick="filterMarketingListings('pending',this)">Pending Images</button>
+        <button class="mktg-filter-btn" data-filter="ready" onclick="filterMarketingListings('ready',this)">Ready</button>
+        <button class="mktg-filter-btn" data-filter="uploaded" onclick="filterMarketingListings('uploaded',this)">Uploaded</button>
+      </div>
+      <div class="section-body padded" id="marketingListingsBody">
+        <div class="loading"><div class="spinner"></div><br>Loading marketing listings...</div>
+      </div>
+    </div>
     </div>
 
     <!-- Health Panel -->
@@ -5566,6 +5618,182 @@
       });
     }
 
+    // ---- Marketing Listings ----
+    var marketingListingsCache = [];
+    var marketingFilter = 'all';
+
+    function loadMarketingListings() {
+      return fetchJSON('/marketing-listings').then(function(data) {
+        marketingListingsCache = data || [];
+        renderMarketingListings();
+      }).catch(function() {
+        marketingListingsCache = [];
+        renderMarketingListings();
+      });
+    }
+
+    function renderMarketingListings() {
+      var body = document.getElementById('marketingListingsBody');
+      var count = document.getElementById('marketingListingsCount');
+      var listings = marketingListingsCache;
+
+      // Apply filter
+      if (marketingFilter === 'pending') listings = listings.filter(function(l) { return l.image_status === 'pending'; });
+      else if (marketingFilter === 'ready') listings = listings.filter(function(l) { return l.image_status === 'ready'; });
+      else if (marketingFilter === 'uploaded') listings = listings.filter(function(l) { return l.upload_status === 'uploaded'; });
+
+      count.textContent = marketingListingsCache.length ? '(' + marketingListingsCache.length + ')' : '';
+
+      if (listings.length === 0) {
+        body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No marketing listings yet. Use "Discover" to find candidates from competitor reviews, or type an item name above to create one.</div>';
+        return;
+      }
+
+      var html = '<div class="mktg-grid">';
+      for (var i = 0; i < listings.length; i++) {
+        var l = listings[i];
+        var imgHtml = '';
+        if (l.composed_image) {
+          var imgUrl = '/listing-images/' + l.id + '/composed/listing.png';
+          imgHtml = '<div class="mktg-card-img"><img src="' + imgUrl + '" alt="" onerror="this.parentNode.innerHTML=\'&#128247;\'"></div>';
+        } else {
+          imgHtml = '<div class="mktg-card-img" style="color:#8b8fa3;font-size:24px;">&#128247;</div>';
+        }
+
+        var acctBadge = l.account === 'leo'
+          ? '<span class="mktg-badge leo">Leo</span>'
+          : '<span class="mktg-badge db">DB Cinema</span>';
+
+        var statusBadge = '';
+        if (l.upload_status === 'uploaded') statusBadge = '<span class="mktg-badge uploaded">Uploaded</span>';
+        else if (l.image_status === 'ready') statusBadge = '<span class="mktg-badge ready">Ready</span>';
+        else statusBadge = '<span class="mktg-badge pending">' + escapeHtml(l.image_status || 'pending') + '</span>';
+
+        var revHtml = '';
+        if (l.est_monthly_rev_low && l.est_monthly_rev_high) {
+          revHtml = '<div class="mktg-card-rev">Est. revenue: £' + Math.round(l.est_monthly_rev_low) + '-£' + Math.round(l.est_monthly_rev_high) + '/mo</div>';
+        }
+
+        var priceHtml = '';
+        if (l.price_1day) priceHtml = '<span>£' + l.price_1day + '/day</span>';
+
+        html += '<div class="mktg-card" onclick="showMarketingDetail(\'' + l.id + '\')">'
+          + imgHtml
+          + '<div class="mktg-card-body">'
+          + '<div class="mktg-card-title">' + escapeHtml(l.title || 'Untitled') + '</div>'
+          + '<div class="mktg-card-meta">' + acctBadge + statusBadge + priceHtml + '</div>'
+          + revHtml
+          + '</div>'
+          + '<div class="mktg-card-actions">'
+          + (l.image_status === 'pending' ? '<button style="background:#3b82f6;color:#fff;" onclick="event.stopPropagation();generateMarketingImage(\'' + l.id + '\')">Generate Image</button>' : '')
+          + (l.image_status === 'ready' && !l.approved_by ? '<button style="background:#22c55e;color:#fff;" onclick="event.stopPropagation();approveMarketingListing(\'' + l.id + '\')">Approve</button>' : '')
+          + '<button style="background:rgba(239,68,68,0.2);color:#ef4444;" onclick="event.stopPropagation();deleteMarketingListing(\'' + l.id + '\')">Delete</button>'
+          + '</div>'
+          + '</div>';
+      }
+      html += '</div>';
+      body.innerHTML = html;
+    }
+
+    function filterMarketingListings(filter, btn) {
+      marketingFilter = filter;
+      document.querySelectorAll('#marketingFilterBar .mktg-filter-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      renderMarketingListings();
+    }
+
+    function createMarketingListing() {
+      var input = document.getElementById('marketingSearchInput');
+      var itemName = (input.value || '').trim();
+      if (!itemName) return;
+      input.value = '';
+      fetchJSON('/marketing-listings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemName: itemName }) })
+        .then(function() { loadMarketingListings(); })
+        .catch(function(err) { alert('Failed: ' + (err.message || 'unknown error')); });
+    }
+
+    function discoverMarketingListings() {
+      var btn = document.getElementById('marketingDiscoverBtn');
+      btn.disabled = true;
+      btn.textContent = 'Discovering...';
+      fetchJSON('/marketing-listings/discover').then(function(data) {
+        btn.disabled = false;
+        btn.textContent = 'Discover';
+        loadMarketingListings();
+        if (data && data.newListings) alert('Discovered ' + data.newListings + ' new listing candidates!');
+      }).catch(function() {
+        btn.disabled = false;
+        btn.textContent = 'Discover';
+      });
+    }
+
+    function generateMarketingImage(id) {
+      var body = document.getElementById('marketingListingsBody');
+      body.innerHTML = '<div style="color:#8b5cf6;font-size:12px;">Generating image... This may take a minute (finding images, removing backgrounds, composing).</div>';
+      fetchJSON('/marketing-listings/' + id + '/generate-image', { method: 'POST' })
+        .then(function(result) {
+          loadMarketingListings();
+          if (result && !result.success) alert('Image generation issue: ' + (result.error || 'unknown'));
+        })
+        .catch(function(err) { loadMarketingListings(); alert('Failed: ' + (err.message || 'unknown error')); });
+    }
+
+    function approveMarketingListing(id) {
+      fetchJSON('/marketing-listings/' + id + '/approve', { method: 'POST' })
+        .then(function() { loadMarketingListings(); })
+        .catch(function(err) { alert('Approve failed: ' + (err.message || 'unknown')); });
+    }
+
+    function deleteMarketingListing(id) {
+      if (!confirm('Delete this marketing listing?')) return;
+      fetchJSON('/marketing-listings/' + id, { method: 'DELETE' })
+        .then(function() { loadMarketingListings(); })
+        .catch(function(err) { alert('Delete failed: ' + (err.message || 'unknown')); });
+    }
+
+    function showMarketingDetail(id) {
+      var listing = marketingListingsCache.find(function(l) { return l.id === id; });
+      if (!listing) return;
+
+      var items = listing.items || [];
+      var itemsHtml = items.map(function(it) { return '<li>' + escapeHtml(it.item || it) + (it.qty > 1 ? ' x' + it.qty : '') + '</li>'; }).join('');
+
+      var imgHtml = '';
+      if (listing.composed_image) {
+        var imgUrl = '/listing-images/' + listing.id + '/composed/listing.png';
+        imgHtml = '<img src="' + imgUrl + '" style="width:100%;border-radius:8px;margin-bottom:12px;" onerror="this.style.display=\'none\'">';
+      }
+
+      var overlay = document.createElement('div');
+      overlay.className = 'mktg-detail-overlay open';
+      overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
+      overlay.innerHTML = '<div class="mktg-detail-panel">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        + '<h3 style="margin:0;font-size:15px;">' + escapeHtml(listing.title || 'Untitled') + '</h3>'
+        + '<button onclick="this.closest(\'.mktg-detail-overlay\').remove()" style="background:none;border:none;color:#8b8fa3;font-size:20px;cursor:pointer;">&times;</button>'
+        + '</div>'
+        + imgHtml
+        + '<div style="display:flex;gap:8px;margin-bottom:12px;">'
+        + (listing.account === 'leo' ? '<span class="mktg-badge leo">Leo Adams</span>' : '<span class="mktg-badge db">DB Cinema</span>')
+        + '<span class="mktg-badge ' + (listing.image_status === 'ready' ? 'ready' : 'pending') + '">' + escapeHtml(listing.image_status || 'pending') + '</span>'
+        + '<span class="mktg-badge ' + (listing.upload_status === 'uploaded' ? 'uploaded' : 'pending') + '">' + escapeHtml(listing.upload_status || 'draft') + '</span>'
+        + '</div>'
+        + (listing.seo_tag ? '<div style="font-size:11px;color:#8b8fa3;margin-bottom:8px;">SEO: ' + escapeHtml(listing.seo_tag) + '</div>' : '')
+        + '<div style="font-size:12px;color:#c9cbda;margin-bottom:10px;"><strong>Items:</strong><ul style="margin:4px 0;padding-left:20px;">' + itemsHtml + '</ul></div>'
+        + (listing.price_1day ? '<div style="font-size:12px;color:#c9cbda;margin-bottom:10px;"><strong>Pricing:</strong> £' + listing.price_1day + '/day' + (listing.price_3day ? ' | £' + listing.price_3day + '/3 days' : '') + (listing.price_7day ? ' | £' + listing.price_7day + '/7 days' : '') + '</div>' : '')
+        + (listing.est_monthly_rev_low ? '<div style="font-size:12px;color:#22c55e;margin-bottom:10px;"><strong>Est. Revenue:</strong> £' + Math.round(listing.est_monthly_rev_low) + '-£' + Math.round(listing.est_monthly_rev_high) + '/mo</div>' : '')
+        + (listing.estimation_basis ? '<div style="font-size:11px;color:#8b8fa3;margin-bottom:10px;">' + escapeHtml(listing.estimation_basis) + '</div>' : '')
+        + (listing.source_competitor ? '<div style="font-size:11px;color:#8b8fa3;margin-bottom:10px;">Source: ' + escapeHtml(listing.source || '') + ' — ' + escapeHtml(listing.source_competitor) + '</div>' : '')
+        + (listing.description ? '<div style="font-size:12px;color:#c9cbda;margin-bottom:10px;max-height:120px;overflow-y:auto;">' + escapeHtml(listing.description) + '</div>' : '')
+        + '</div>';
+      document.body.appendChild(overlay);
+    }
+
+    // Enter key on search input
+    document.getElementById('marketingSearchInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') createMarketingListing();
+    });
+
     // ---- Main refresh ----
     function refreshAll() {
       var btn = document.getElementById('refreshBtn');
@@ -5604,6 +5832,7 @@
         loadPriceReco(),
         loadInventoryWorth(),
         loadInsuranceClaims(),
+        loadMarketingListings(),
       ]).then(function(results) {
         if (results[0].status === 'rejected') {
           document.getElementById('statusDot').className = 'status-dot unhealthy';

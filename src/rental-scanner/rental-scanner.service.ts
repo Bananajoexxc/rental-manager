@@ -577,6 +577,19 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             } catch (delErr) {
               this.logger.warn(`Delivery escalation check failed: ${delErr.message}`);
             }
+
+            // NOTES FLUSH: Write accumulated conversation notes to booking records
+            try {
+              const convState = await this.followUpService.getStructuredState(existingRental.id);
+              if (convState.rentalNotes?.length) {
+                for (const note of convState.rentalNotes) {
+                  await this.calendarService.addDecisionNotesToBookings(existingRental.id, note);
+                }
+                this.logger.log(`Flushed ${convState.rentalNotes.length} conversation note(s) to bookings for ${updatedRental.title}`);
+              }
+            } catch (notesErr) {
+              this.logger.warn(`Notes flush on confirmation failed: ${notesErr.message}`);
+            }
           }
         }
 
