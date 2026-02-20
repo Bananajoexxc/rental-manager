@@ -105,15 +105,24 @@ DON'T:
       },
       {
         name: 'delivery_domain',
-        version: '2.0',
+        version: '3.0',
         category: 'context',
         content: `DELIVERY: London only, 30km max from Trafalgar Square. When they ask, quote them straight away - don't make them send a booking request first.
 
 Tell them what courier: "Your stuff fits on a bike, so about £20-25" or "The Nanlite's too heavy for a bike, need a car - around £35-45". If you need their postcode, just ask.
 
-Estimates are pretty close (±15%). Don't send the booking form til they say they want it.
+IF THEY ADD ITEMS LATER: Update the delivery price if it changes the courier type. "Heads up - adding that gimbal means we need a car now instead of a bike, so delivery bumps up to about £40."
 
-IF THEY ADD ITEMS LATER: Update the delivery price if it changes the courier type. "Heads up - adding that gimbal means we need a car now instead of a bike, so delivery bumps up to about £40."`,
+DELIVERY BOOKING PROCESS — MUST disclose BEFORE confirming any delivery:
+1. We send the quote first. Once paid, we book the courier close to dispatch and send the tracking link.
+2. Larger items = higher charge (bigger vehicle needed).
+3. There's an extra 10% buffer on top because drivers sometimes charge more if the delivery takes longer than expected. The courier has to be booked on our end.
+4. If you've already received a quote from us, that's inclusive of all fees.
+5. The quotes are for the normal delivery service. If you have a tight schedule, ask about our priority delivery service — higher fee but better chance of on-time delivery.
+6. No exact pickup or drop-off times are guaranteed — Addison Lee is a third-party courier. No refund on the delivery charge for late deliveries due to traffic delays or other courier-related issues outside our control.
+7. By choosing delivery, you agree to these terms.
+
+When a renter confirms they want delivery, include a brief summary of these terms BEFORE finalising. Something natural like: "Just so you know — we book the Addison Lee courier on our end close to dispatch and send you the tracking link. Exact times can't be guaranteed as they're a third-party service, and no refund on delivery charges for delays outside our control. The quote covers all fees including a small buffer for longer routes. Happy to go ahead?"`,
       },
       {
         name: 'compatibility_rules',

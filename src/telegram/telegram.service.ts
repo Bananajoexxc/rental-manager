@@ -36,7 +36,8 @@ export type RentalSectionType =
   | 'review_block' | 'availability_block' | 'auto_accept_failed'
   | 'blacklist' | 'scam' | 'damage' | 'verification_failure'
   | 'pipeline_error' | 'info'
-  | 'contention_detected' | 'contention_resolved';
+  | 'contention_detected' | 'contention_resolved'
+  | 'alt_conversion_success' | 'alt_conversion_failed' | 'alt_conversion_blocked';
 
 export interface RentalNotificationSection {
   type: RentalSectionType;
@@ -621,6 +622,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       pipeline_error: 10, verification_failure: 11, damage: 12, info: 13,
       blacklist: 14, scam: 15,
       contention_detected: 16, contention_resolved: 17,
+      alt_conversion_success: 18, alt_conversion_failed: 19, alt_conversion_blocked: 20,
     };
     const sorted = [...entry.sections].sort((a, b) => (displayOrder[a.type] ?? 99) - (displayOrder[b.type] ?? 99));
 
@@ -760,6 +762,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           lines.push(`✅ CONTENTION RESOLVED — ${d.statusLabel || 'UNKNOWN'}`);
           lines.push(`${d.itemName} contention ended.`);
           lines.push(`Reason: ${d.reason || 'n/a'}`);
+          break;
+
+        case 'alt_conversion_success':
+          lines.push(`🔄 ALT CONVERSION SUCCESS`);
+          if (Array.isArray(d.items)) {
+            for (const swap of d.items) lines.push(`  ${swap}`);
+          }
+          if (d.earnings) lines.push(`Earnings: ${d.earnings}`);
+          if (d.discountApplied) lines.push(`Discount applied`);
+          break;
+
+        case 'alt_conversion_failed':
+          lines.push(`❌ ALT CONVERSION FAILED`);
+          lines.push(`Reason: ${d.reason || 'unknown'}`);
+          if (Array.isArray(d.items) && d.items.length > 0) lines.push(`Items: ${d.items.join(', ')}`);
+          break;
+
+        case 'alt_conversion_blocked':
+          lines.push(`🚫 ALT CONVERSION BLOCKED`);
+          lines.push(`Reason: ${d.reason || 'unknown'}`);
           break;
       }
     }

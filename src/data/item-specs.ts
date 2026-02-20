@@ -175,7 +175,7 @@ export const ITEM_SPECS: ItemSpec[] = [
   // ──────────────────────────────────────────
   {
     item_name: 'Nanlite Forza 300',
-    specs: '300W daylight (5600K) COB LED monolight, 29,440 lumens, up to 108,679 lux @1m with optional Fresnel. CRI 98 / TLCI 95. Bowens mount. 0-100% dimming, DMX. Built-in effects (lightning, TV, fire). AC-powered, 5.5 lbs. Comparable to 1000W tungsten. Best for: key/fill light on film sets, interviews, product shoots.',
+    specs: '300W DAYLIGHT ONLY (5600K fixed — NOT bi-color) COB LED monolight, 29,440 lumens, up to 108,679 lux @1m with optional Fresnel. CRI 98 / TLCI 95. Bowens mount. 0-100% dimming, DMX. Built-in effects (lightning, TV, fire). AC-powered, 5.5 lbs. Comparable to 1000W tungsten. Best for: key/fill light on film sets, interviews, product shoots. For bi-color use Nanlite 500B instead.',
   },
   {
     item_name: 'Nanlite 500B',

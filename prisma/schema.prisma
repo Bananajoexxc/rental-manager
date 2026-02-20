@@ -166,6 +166,9 @@ model booking {
   return_arrival_sent_at        DateTime?  // When first return arrival check was sent to renter
   return_arrival_followup_sent  Boolean    @default(false) // Second return arrival reminder sent
   return_arrival_confirmed      Boolean    @default(false) // Renter confirmed return arrival
+  // Delivery method tracking (null = unknown/not discussed, 'collection' = in-person, 'delivery' = Addison Lee courier)
+  pickup_method   String?   // 'collection' or 'delivery' — only set when CONFIRMED, not just discussed
+  return_method   String?   // 'collection' or 'delivery' — only set when CONFIRMED, not just discussed
   status          String    @default("confirmed") // 'confirmed', 'completed', 'cancelled'
   revenue         Float?
   platform_fee    Float?
@@ -367,6 +370,8 @@ model renter_profile {
   hygglo_review_count       Int?      // Number of reviews
   hygglo_bad_reviews        String?   @db.Text  // JSON array of reviews < 5 stars: [{stars, text, date}]
   rating_checked_at         DateTime? // When rating was last checked
+
+  loyalty_voucher           loyalty_voucher?
 
   @@index([name])
   @@index([hygglo_user_id])
@@ -678,6 +683,23 @@ model coupon_code {
 
   @@index([code])
   @@index([active])
+}
+
+model loyalty_voucher {
+  id                String          @id @default(uuid())
+  code              String          @unique
+  renter_profile_id String          @unique  // One active voucher per renter (newest replaces old)
+  rental_id         String          // Rental that earned this voucher
+  issued_at         DateTime        @default(now())
+  used_at           DateTime?
+  used_rental_id    String?
+  expired           Boolean         @default(false)
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
+  renter_profile    renter_profile  @relation(fields: [renter_profile_id], references: [id], onDelete: Cascade)
+
+  @@index([code])
+  @@index([issued_at])
 }
 
 // === Return Processing ===

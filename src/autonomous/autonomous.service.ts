@@ -1275,6 +1275,61 @@ export class AutonomousService {
             }
           }
 
+          // FEATURE: Store "alternatives_offered" flag for alt conversion follow-up
+          // When inventory doesn't match, track which alternatives were offered so
+          // follow-up can auto-accept with alternative items if renter goes silent
+          if (onNewRentalInventoryWarning.includes('LISTING_INVENTORY_MISMATCH') ||
+              onNewRentalInventoryWarning.includes('VISIBILITY LISTING')) {
+            try {
+              const alternativeItems: { original: string; alternative: string; dailyPrice: number | null }[] = [];
+
+              if (multiCheck && multiCheck.noneMatched) {
+                // Full mismatch — single alternative
+                const altMatch = findBestMatch(cleanTitle, getInventoryItemNames());
+                if (altMatch) {
+                  const price = getItemPrice(altMatch);
+                  alternativeItems.push({
+                    original: rental.title || cleanTitle,
+                    alternative: altMatch,
+                    dailyPrice: price?.daily_price_max ?? null,
+                  });
+                }
+              } else if (multiCheck && multiCheck.someMatched && multiCheck.isComboListing) {
+                // Combo listing — build alternatives for unmatched items only
+                for (const item of multiCheck.items.filter(i => !i.matched)) {
+                  const altMatch = findBestMatch(item.name, getInventoryItemNames());
+                  if (altMatch) {
+                    const price = getItemPrice(altMatch);
+                    alternativeItems.push({
+                      original: item.name,
+                      alternative: altMatch,
+                      dailyPrice: price?.daily_price_max ?? null,
+                    });
+                  }
+                }
+              } else if (photoRef && photoRef.items.length === 0) {
+                // Visibility listing — find closest alternative
+                const altMatch = findBestMatch(cleanTitle, getInventoryItemNames());
+                if (altMatch) {
+                  const price = getItemPrice(altMatch);
+                  alternativeItems.push({
+                    original: rental.title || cleanTitle,
+                    alternative: altMatch,
+                    dailyPrice: price?.daily_price_max ?? null,
+                  });
+                }
+              }
+
+              if (alternativeItems.length > 0) {
+                await this.followUpService.mergeStructuredState(rental.id, {
+                  alternatives_offered: true,
+                  alternative_items: alternativeItems,
+                } as any);
+                this.logger.log(`Stored ${alternativeItems.length} alternative(s) for alt conversion: ${rental.title}`);
+              }
+            } catch { /* non-critical */ }
+          }
+
           // FEATURE: Pre-Extracted Listing Identity
           // Store matched inventory items with source='listing_title' OR photo_reference
           // so processMessage can inject verified identity instead of relying on raw SEO-laden title
@@ -1392,14 +1447,13 @@ export class AutonomousService {
           }
         }
         if (analyzeProfit && analyzeProfit < analyzeMinimum) {
-          const renterFacingMin = Math.ceil(analyzeMinimum / 0.64);
           onNewRentalLowValueCtx =
             `\n\n--- LOW VALUE RENTAL (CRITICAL) ---\n` +
-            `Estimated profit: ~£${analyzeProfit}. Minimum for ${analyzeAccountName === 'leo' ? 'Leo Adams' : 'DB Cinema'}: £${analyzeMinimum}.\n` +
+            `Estimated earnings: ~£${analyzeProfit}. Minimum earnings for ${analyzeAccountName === 'leo' ? 'Leo Adams' : 'DB Cinema'}: £${analyzeMinimum}.\n` +
             `This rental is BELOW the minimum. In your welcome message:\n` +
             `1. First try to upsell add-ons (ask what they're shooting, suggest accessories)\n` +
-            `2. If renter only wants the single item, the booking total needs to come to at least £${renterFacingMin}\n` +
-            `3. Frame as standard pricing, NEVER say "minimum". You CANNOT modify bookings — the renter must adjust through the platform.\n`;
+            `2. If renter only wants the single item, the booking total needs to come to at least £${analyzeMinimum}\n` +
+            `3. Frame as standard pricing, NEVER say "minimum". NEVER mention platform fees or any fee structure. You CANNOT modify bookings — the renter must adjust through the platform.\n`;
         }
       } catch { /* non-critical */ }
 
@@ -3162,6 +3216,20 @@ export class AutonomousService {
           }
         }
 
+        // LOYALTY VOUCHER: Per-renter decaying discount code
+        let loyaltyVoucherContext = '';
+        if (currentProfileId) {
+          try {
+            const voucher = await this.couponService.getRenterVoucher(currentProfileId);
+            if (voucher) {
+              const daysUsed = 20 - voucher.discountPercent;
+              loyaltyVoucherContext = `LOYALTY VOUCHER: This renter has an active loyalty code "${voucher.code}", currently ${voucher.discountPercent}% off (${daysUsed} day${daysUsed !== 1 ? 's' : ''} since issued, ${voucher.daysLeft} day${voucher.daysLeft !== 1 ? 's' : ''} left). If the renter mentions this code, confirm the discount percentage and let them know it decreases by 1% each day.`;
+            }
+          } catch (lvErr) {
+            this.logger.debug(`Loyalty voucher context load failed: ${lvErr.message}`);
+          }
+        }
+
         // WELCOME-BACK CONTEXT: Detect recently-revived DEAD conversations
         let welcomeBackContext = '';
         try {
@@ -3629,18 +3697,18 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
         }
         let lowValueInstruction = '';
         if (estimatedProfit && estimatedProfit < accountMinimum) {
-          const renterFacingMinimum = Math.ceil(accountMinimum / 0.64);
           lowValueInstruction =
             `\n--- LOW VALUE RENTAL (CRITICAL) ---\n` +
-            `Estimated profit: ~£${estimatedProfit}. Minimum profitable threshold for ${accountName === 'leo' ? 'Leo Adams' : 'DB Cinema'} account: £${accountMinimum}.\n` +
+            `Estimated earnings: ~£${estimatedProfit}. Minimum earnings threshold: £${accountMinimum}.\n` +
             `This rental is BELOW the minimum. Follow these phases IN ORDER:\n\n` +
             `PHASE 1 — Upsell first (always try this first):\n` +
             `1. Ask what they're shooting — use this to suggest relevant add-ons (lenses, audio, lighting, filters, batteries)\n` +
             `2. Mention complementary items naturally: "Most people shooting with this also grab a..." \n` +
             `3. If they only want the single item, still quote it but mention bundle value: "Happy to help! The [item] is ~£X/day. Just so you know, we often bundle it with [accessory] which works out better value"\n\n` +
             `PHASE 2 — Minimum price option (only if renter clearly declines all add-ons):\n` +
-            `4. Offer: "For this rental the booking total would come to £${renterFacingMinimum} — would that work?"\n` +
-            `   Frame as standard platform processing, NOT as a "minimum". Never say "minimum" to the renter.\n` +
+            `4. Offer: "For this rental the booking total would need to come to at least £${accountMinimum} — would that work?"\n` +
+            `   Frame as standard pricing, NOT as a "minimum". Never say "minimum" to the renter.\n` +
+            `   NEVER mention platform fees, service fees, or any fee structure. Just state the price.\n` +
             `5. If they agree, include <memory>MINIMUM_PRICE_ACCEPTED</memory> in your response\n` +
             `6. Do NOT accept or confirm until either upsell succeeds, renter agrees to adjusted price, or Daniel approves\n`;
         }
@@ -3744,9 +3812,9 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
             ...[conversationStateCtx].filter(Boolean),
             // OPERATIONAL: inventory specs, schedule, vacation, blacklist
             ...[inventoryContext, scheduleContext, vacationContext, blacklistContext].filter(Boolean),
-            // COMMERCIAL (supplementary): coupons, delivery quotes, low-value guidance
+            // COMMERCIAL (supplementary): coupons, loyalty vouchers, delivery quotes, low-value guidance
             // Low-value instruction is a business rule (minimum order), NOT optional upselling — always inject
-            ...[couponContext, deliveryQuoteContext, lowValueInstruction].filter(Boolean),
+            ...[couponContext, loyaltyVoucherContext, deliveryQuoteContext, lowValueInstruction].filter(Boolean),
             // CONVERSATION: summary, urgency, welcome-back, multi-rental coordination
             ...[conversationSummary, urgencyContext, welcomeBackContext, multiRentalContext].filter(Boolean),
             // TIME REFERENCES: help AI resolve relative times against rental dates
@@ -4124,14 +4192,13 @@ Return ONLY a JSON object with changed fields (omit unchanged):
               const accountName = rental.account || 'dbcinema';
               const ACCOUNT_MIN_EARNINGS: Record<string, number> = { dbcinema: 20, leo: 25 };
               const targetEarnings = ACCOUNT_MIN_EARNINGS[accountName] || 20;
-              const renterFacingPrice = Math.ceil(targetEarnings / 0.64);
 
               // Write idempotency record SYNCHRONOUSLY before fire-and-forget (prevents race condition)
               await this.prisma.ai_decision.create({
                 data: {
                   rental_id: rental.id,
                   decision_type: 'min_price_pending',
-                  input_summary: `Renter agreed to adjusted price £${renterFacingPrice} (target earnings £${targetEarnings})`,
+                  input_summary: `Renter agreed to adjusted price — target earnings £${targetEarnings}`,
                   output_summary: 'Processing — setOrderEarnings + acceptRental in progress',
                   confidence: 1.0,
                   action_taken: 'min_price_pending',
@@ -4147,7 +4214,7 @@ Return ONLY a JSON object with changed fields (omit unchanged):
                 data: {
                   renterMsg: '',
                   botReply: '',
-                  status: `💰 Min price accepted: renter agreed to £${renterFacingPrice} (earnings → £${targetEarnings}). Auto-accepting...`,
+                  status: `💰 Min price accepted: renter agreed to £${targetEarnings} minimum. Auto-accepting...`,
                 },
               }, rentalMeta);
 
@@ -4950,16 +5017,28 @@ Return ONLY a JSON object with changed fields (omit unchanged):
       `- Return can be the MORNING AFTER the rental ends (e.g., morning of ${endDateStr} plus 1 day).\n` +
       `- Determine the actual date for pickup and return from context (day mentioned, "tomorrow", "next day", etc).\n` +
       `- If no specific date context, default pickup to ${startDateStr} and return to ${endDateStr}.\n\n` +
-      `Respond ONLY with these four lines:\n` +
+      `DELIVERY METHOD DETECTION:\n` +
+      `- Determine if pickup and/or return is via Addison Lee courier DELIVERY or in-person COLLECTION.\n` +
+      `- ONLY mark as DELIVERY if the courier was ACTUALLY BOOKED/CONFIRMED in the conversation.\n` +
+      `- Merely discussing delivery, asking about it, getting a quote, or mentioning it does NOT count as confirmed.\n` +
+      `- Look for CONFIRMED delivery signals: "Delivery sorted", "car/bike courier", delivery address confirmed with window, "we'll contact when courier's on the way", renter accepting delivery arrangement ("perfect", "sounds good"), a delivery price agreed and accepted.\n` +
+      `- IMPORTANT: Delivery can be ONE-WAY (pickup only or return only). If they say "one-way delivery" or "only need 1 way", mark only the relevant direction as DELIVERY.\n` +
+      `- If delivery was discussed but NOT confirmed/agreed, output COLLECTION (the default).\n` +
+      `- If delivery was never discussed, output UNKNOWN.\n\n` +
+      `Respond ONLY with these six lines:\n` +
       `PICKUP_TIME: HH:MM or NONE\n` +
       `PICKUP_DATE: YYYY-MM-DD or NONE\n` +
+      `PICKUP_METHOD: DELIVERY or COLLECTION or UNKNOWN\n` +
       `RETURN_TIME: HH:MM or NONE\n` +
-      `RETURN_DATE: YYYY-MM-DD or NONE`;
+      `RETURN_DATE: YYYY-MM-DD or NONE\n` +
+      `RETURN_METHOD: DELIVERY or COLLECTION or UNKNOWN`;
 
     let pickupTime: string | undefined;
     let returnTime: string | undefined;
     let pickupDate: string | undefined;
     let returnDate: string | undefined;
+    let pickupMethod: string | undefined;
+    let returnMethod: string | undefined;
 
     try {
       const response = await this.aiService.processExtractionComplex(extractionPrompt);
@@ -4967,10 +5046,14 @@ Return ONLY a JSON object with changed fields (omit unchanged):
       const rMatch = response.content.match(/RETURN_TIME:\s*(\d{1,2}:\d{2})/);
       const pdMatch = response.content.match(/PICKUP_DATE:\s*(\d{4}-\d{2}-\d{2})/);
       const rdMatch = response.content.match(/RETURN_DATE:\s*(\d{4}-\d{2}-\d{2})/);
+      const pmMatch = response.content.match(/PICKUP_METHOD:\s*(DELIVERY|COLLECTION)/i);
+      const rmMatch = response.content.match(/RETURN_METHOD:\s*(DELIVERY|COLLECTION)/i);
       pickupTime = pMatch ? pMatch[1].padStart(5, '0') : undefined;
       returnTime = rMatch ? rMatch[1].padStart(5, '0') : undefined;
       pickupDate = pdMatch ? pdMatch[1] : undefined;
       returnDate = rdMatch ? rdMatch[1] : undefined;
+      pickupMethod = pmMatch ? pmMatch[1].toLowerCase() : undefined;
+      returnMethod = rmMatch ? rmMatch[1].toLowerCase() : undefined;
     } catch (aiErr) {
       this.logger.debug(`extractTimesFromChatHistory AI failed for ${rental.title}: ${aiErr.message}`);
       return null;
@@ -4986,21 +5069,25 @@ Return ONLY a JSON object with changed fields (omit unchanged):
     //    Existing times come from real-time regex extraction on the actual message — more reliable.
     const existingBooking = await this.prisma.booking.findFirst({
       where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
-      select: { pickup_time: true, return_time: true, pickup_date: true, return_date: true },
+      select: { pickup_time: true, return_time: true, pickup_date: true, return_date: true, pickup_method: true, return_method: true },
     });
     if (existingBooking?.pickup_time && existingBooking?.return_time) {
-      // Both times already set — only update dates if they're missing
+      // Both times already set — only update dates and delivery methods if they're missing
       const needPickupDate = !existingBooking.pickup_date && pickupDate;
       const needReturnDate = !existingBooking.return_date && returnDate;
-      if (needPickupDate || needReturnDate) {
+      const needPickupMethod = !existingBooking.pickup_method && pickupMethod;
+      const needReturnMethod = !existingBooking.return_method && returnMethod;
+      if (needPickupDate || needReturnDate || needPickupMethod || needReturnMethod) {
         await this.calendarService.updateBookingTimes(
           rental.id,
           undefined, // don't touch pickup_time
           undefined, // don't touch return_time
           needPickupDate ? pickupDate : undefined,
           needReturnDate ? returnDate : undefined,
+          needPickupMethod ? pickupMethod : undefined,
+          needReturnMethod ? returnMethod : undefined,
         );
-        this.logger.log(`extractTimesFromChatHistory: times already set for ${rental.title}, only updated dates: pDate=${pickupDate}, rDate=${returnDate}`);
+        this.logger.log(`extractTimesFromChatHistory: times already set for ${rental.title}, only updated dates/methods: pDate=${pickupDate}, rDate=${returnDate}, pMethod=${pickupMethod}, rMethod=${returnMethod}`);
       } else {
         this.logger.debug(`extractTimesFromChatHistory: skipping ${rental.title} — times already confirmed (pickup=${existingBooking.pickup_time}, return=${existingBooking.return_time})`);
       }
@@ -5010,8 +5097,8 @@ Return ONLY a JSON object with changed fields (omit unchanged):
     // Only update times that are currently missing
     const finalPickup = existingBooking?.pickup_time ? undefined : pickupTime;
     const finalReturn = existingBooking?.return_time ? undefined : returnTime;
-    if (finalPickup || finalReturn || pickupDate || returnDate) {
-      await this.calendarService.updateBookingTimes(rental.id, finalPickup, finalReturn, pickupDate, returnDate);
+    if (finalPickup || finalReturn || pickupDate || returnDate || pickupMethod || returnMethod) {
+      await this.calendarService.updateBookingTimes(rental.id, finalPickup, finalReturn, pickupDate, returnDate, pickupMethod, returnMethod);
     }
 
     // 4. Update follow_up_state
@@ -5030,13 +5117,13 @@ Return ONLY a JSON object with changed fields (omit unchanged):
     // 5. Store as memory
     const renterName = rental.renter_info || 'Unknown';
     const memoryParts: string[] = [];
-    if (pickupTime) memoryParts.push(`pickup at ${pickupTime}`);
-    if (returnTime) memoryParts.push(`return at ${returnTime}`);
+    if (pickupTime) memoryParts.push(`pickup at ${pickupTime}${pickupMethod === 'delivery' ? ' (Addison Lee delivery)' : ''}`);
+    if (returnTime) memoryParts.push(`return at ${returnTime}${returnMethod === 'delivery' ? ' (Addison Lee delivery)' : ''}`);
     const memoryContent = `${renterName} agreed ${memoryParts.join(' and ')} for ${rental.title} (from chat)`;
     await this.memoryService.storeMemory('fact', `Agreed times: ${rental.title}`, memoryContent, 8);
 
     this.logger.log(
-      `extractTimesFromChatHistory for ${rental.title}: pickup=${pickupTime || 'N/A'}, return=${returnTime || 'N/A'} (${messages.length} msgs scanned, DB-first)`,
+      `extractTimesFromChatHistory for ${rental.title}: pickup=${pickupTime || 'N/A'}[${pickupMethod || '?'}], return=${returnTime || 'N/A'}[${returnMethod || '?'}] (${messages.length} msgs scanned, DB-first)`,
     );
 
     return { pickupTime, returnTime, pickupDate, returnDate };

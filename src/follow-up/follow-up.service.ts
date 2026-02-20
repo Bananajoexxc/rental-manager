@@ -9,6 +9,7 @@ import { CalendarService } from '../calendar/calendar.service';
 import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
 import { ContentionService } from '../contention/contention.service';
 import { MemoryService } from '../memory/memory.service';
+import { CouponService } from '../coupon/coupon.service';
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
@@ -38,6 +39,7 @@ export class FollowUpService {
     private conversationStageService: ConversationStageService,
     private contentionService: ContentionService,
     private memoryService: MemoryService,
+    private couponService: CouponService,
   ) {}
 
   /**
@@ -264,8 +266,13 @@ export class FollowUpService {
       return;
     }
 
-    // 7. followup_count === 1 AND 10h+ since last follow-up -> send second follow-up
+    // 7. followup_count === 1 AND 10h+ since last follow-up -> attempt alt conversion or send second follow-up
     if (state.followup_count === 1) {
+      const ss = state.structured_state as any;
+      if (ss?.alternatives_offered && ss?.alternative_items?.length > 0) {
+        const converted = await this.attemptAlternativeConversion(state, state.rental);
+        if (converted) return;
+      }
       await this.sendFollowUp(state, state.rental, 'inactivity_2');
       return;
     }
@@ -623,6 +630,9 @@ export class FollowUpService {
           where: { id: state.id },
           data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'none' },
         });
+
+        // If delivery was discussed, send the delivery info collection form
+        await this.sendDeliveryFormIfNeeded(rental);
       } catch {
         // Silent failure - confirmation is best-effort
       }
@@ -636,6 +646,299 @@ export class FollowUpService {
     }
 
     this.logger.log(`Auto-accept for ${rental.title}: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+  }
+
+  /**
+   * Alternative conversion: at followup_count===1, if alternatives were offered and renter
+   * went silent, proactively build a minimal item set, verify availability, apply discount,
+   * accept the rental, and send a "done deal" message.
+   * Returns true if conversion was attempted (even if failed), false to fall through to normal follow-up.
+   */
+  async attemptAlternativeConversion(state: any, rental: any): Promise<boolean> {
+    const account = (rental?.account || 'dbcinema') as HyggloAccount;
+    this.logger.log(`Alternative conversion attempt for ${rental?.title}`);
+
+    // --- Guard checks (same as triggerAutoAccept) ---
+
+    // Same-day block
+    if (rental?.start_date) {
+      const startDate = new Date(rental.start_date);
+      const today = new Date();
+      if (
+        startDate.getFullYear() === today.getFullYear() &&
+        startDate.getMonth() === today.getMonth() &&
+        startDate.getDate() === today.getDate()
+      ) {
+        this.logger.warn(`Alt conversion blocked: same-day rental ${rental.title}`);
+        await this.telegramService.sendRentalUpdate(rental.id, {
+          type: 'alt_conversion_blocked' as any, priority: 'high',
+          data: { reason: 'Same-day rental', items: [] },
+        }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+        return true;
+      }
+    }
+
+    // Verification check
+    try {
+      const renterLink = await this.prisma.rental_renter_link.findFirst({
+        where: { rental_id: rental.id },
+        select: { renter_profile_id: true },
+      });
+      if (renterLink) {
+        const profile = await this.prisma.renter_profile.findUnique({
+          where: { id: renterLink.renter_profile_id },
+          select: { verification_status: true, name: true },
+        });
+        if (profile && profile.verification_status !== 'verified' && profile.verification_status !== 'unknown') {
+          this.logger.warn(`Alt conversion blocked: verification not complete for ${rental.title} (${profile.verification_status})`);
+          await this.telegramService.sendRentalUpdate(rental.id, {
+            type: 'alt_conversion_blocked' as any, priority: 'high',
+            data: { reason: `Verification: ${profile.verification_status}`, items: [] },
+          }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+          return true;
+        }
+      }
+    } catch (err) {
+      this.logger.debug(`Alt conversion verification check failed: ${err.message}`);
+    }
+
+    // Review escalation check
+    try {
+      const reviewDecisions = await this.prisma.ai_decision.findFirst({
+        where: {
+          rental_id: rental.id,
+          input_summary: { contains: 'review' },
+          decision_type: 'escalate',
+        },
+      });
+      if (reviewDecisions) {
+        this.logger.warn(`Alt conversion blocked: review escalation exists for ${rental.title}`);
+        await this.telegramService.sendRentalUpdate(rental.id, {
+          type: 'alt_conversion_blocked' as any, priority: 'high',
+          data: { reason: 'Review escalation', items: [] },
+        }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+        return true;
+      }
+    } catch (err) {
+      this.logger.debug(`Alt conversion review check failed: ${err.message}`);
+    }
+
+    // --- Build available item set ---
+    const ss = state.structured_state as any;
+    const alternativeItems: { original: string; alternative: string; dailyPrice: number | null }[] = ss.alternative_items || [];
+    const rejectedList = state.rejected_suggestions ? state.rejected_suggestions.split(',').map((s: string) => s.trim()) : [];
+
+    // Filter out rejected items
+    const candidates = alternativeItems.filter(
+      (item: any) => !rejectedList.includes(item.alternative),
+    );
+
+    if (candidates.length === 0) {
+      this.logger.log(`Alt conversion: no candidates after filtering rejected suggestions for ${rental.title}`);
+      return false; // Fall through to normal follow-up
+    }
+
+    // Verify availability for each candidate
+    const availableItems: typeof candidates = [];
+    if (rental.start_date && rental.end_date) {
+      for (const candidate of candidates) {
+        try {
+          const availability = await this.calendarService.checkAvailability(
+            candidate.alternative,
+            rental.start_date,
+            rental.end_date,
+          );
+          if (availability.available) {
+            availableItems.push(candidate);
+          } else {
+            this.logger.log(`Alt conversion: ${candidate.alternative} not available for ${rental.title}`);
+          }
+        } catch (err) {
+          this.logger.warn(`Alt conversion availability check failed for ${candidate.alternative}: ${err.message}`);
+        }
+      }
+    } else {
+      this.logger.warn(`Alt conversion: missing dates for ${rental.title}`);
+      return false;
+    }
+
+    if (availableItems.length === 0) {
+      this.logger.log(`Alt conversion: no items available for ${rental.title}`);
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'alt_conversion_failed' as any, priority: 'high',
+        data: { reason: 'No alternative items available for dates', items: candidates.map((c: any) => c.alternative) },
+      }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+      return false; // Fall through to normal follow-up
+    }
+
+    // --- Update rental records ---
+    const newParsedItems = availableItems.map((item: any) => ({ item: item.alternative, qty: 1 }));
+    try {
+      await this.prisma.rental.update({
+        where: { id: rental.id },
+        data: { parsed_items: newParsedItems },
+      });
+
+      // Create extracteditem records for alternative items
+      for (const item of availableItems) {
+        try {
+          const existing = await this.prisma.extracteditem.findFirst({
+            where: { rental_id: rental.id, item_name: item.alternative, source: 'alt_conversion' },
+          });
+          if (!existing) {
+            await this.prisma.extracteditem.create({
+              data: {
+                rental_id: rental.id,
+                item_name: item.alternative,
+                source: 'alt_conversion',
+                confidence_score: 1.0,
+              },
+            });
+          }
+        } catch { /* non-critical */ }
+      }
+
+      // Delete existing bookings (they reference wrong items)
+      await this.prisma.booking.deleteMany({
+        where: { rental_id: rental.id },
+      });
+    } catch (err) {
+      this.logger.error(`Alt conversion: failed to update rental records for ${rental.title}: ${err.message}`);
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'alt_conversion_failed' as any, priority: 'high',
+        data: { reason: `DB update failed: ${err.message}`, items: availableItems.map((i: any) => i.alternative) },
+      }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+      return true;
+    }
+
+    // --- Apply discount if eligible ---
+    let discountApplied = false;
+    try {
+      const discountCheck = await this.checkAndApplyDiscount(rental);
+      if (discountCheck.applied && discountCheck.percentage) {
+        const discountResult = await this.playwrightService.applyDiscount(
+          rental.listing_id,
+          account,
+          discountCheck.percentage,
+        );
+        if (discountResult.success) {
+          discountApplied = true;
+          this.logger.log(`Alt conversion discount applied for ${rental.title}: ${discountCheck.percentage}%`);
+          await this.prisma.follow_up_state.updateMany({
+            where: { rental_id: rental.id },
+            data: { discount_applied: true },
+          });
+        } else {
+          this.logger.warn(`Alt conversion discount failed for ${rental.title}: ${discountResult.error} — proceeding`);
+        }
+      }
+    } catch (discountErr) {
+      this.logger.warn(`Alt conversion discount check failed: ${discountErr.message} — proceeding`);
+    }
+
+    // --- Accept rental ---
+    const result = await this.playwrightService.acceptRental(rental.listing_id, account);
+
+    // Update follow-up state
+    await this.prisma.follow_up_state.update({
+      where: { id: state.id },
+      data: {
+        auto_accepted: true,
+        status: 'auto_accepted',
+        followup_count: { increment: 1 },
+        last_bot_followup_at: new Date(),
+        last_bot_message_at: new Date(),
+      },
+    });
+
+    if (result.success) {
+      // Create bookings for the new alternative items
+      try {
+        const extractedItemNames = availableItems.map((i: any) => i.alternative);
+        await this.calendarService.createBookingsFromRental(rental, extractedItemNames);
+      } catch (err) {
+        this.logger.warn(`Alt conversion: booking creation failed for ${rental.title}: ${err.message}`);
+      }
+
+      // Send confirmation messages (matching existing two-message pattern)
+      try {
+        const startDate = rental.start_date ? new Date(rental.start_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+        const endDate = rental.end_date ? new Date(rental.end_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+        const dateRange = startDate && endDate ? `${startDate} – ${endDate}` : '';
+        const itemNames = availableItems.map((i: any) => i.alternative).join(', ');
+
+        let pickupAddress: string;
+        let mapsLink: string;
+        if (account === 'leo') {
+          pickupAddress = '5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret';
+          mapsLink = '';
+        } else {
+          pickupAddress = 'Statue of James II, 11 Trafalgar Square, London WC2N 5DN';
+          mapsLink = '\nGoogle Maps: https://maps.app.goo.gl/ry8ea4tySBoah7d7A';
+        }
+
+        const discountMention = discountApplied ? '\nA welcome discount has been applied to your booking.' : '';
+        const infoMessage =
+          `Great news! I've put together ${itemNames} for your ${dateRange} booking.` +
+          `\n\nPickup address: ${pickupAddress}${mapsLink}` +
+          `\nOpening times: 10am–12pm & 7–9pm` +
+          `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
+          `\nDelivery available (separate charge) — let us know if needed.${discountMention}`;
+
+        await this.hyggloService.sendMessage(rental.listing_id, infoMessage);
+        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', infoMessage, { model: 'alt-conversion' });
+
+        const timeRequest = `What are your preferred pickup and return times? (Please include AM or PM)`;
+        await this.hyggloService.sendMessage(rental.listing_id, timeRequest);
+        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', timeRequest, { model: 'alt-conversion' });
+
+        // Mark time request sent
+        await this.prisma.follow_up_state.update({
+          where: { id: state.id },
+          data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'none' },
+        });
+
+        // If delivery was discussed, send the delivery info collection form
+        await this.sendDeliveryFormIfNeeded(rental);
+      } catch (msgErr) {
+        this.logger.warn(`Alt conversion: message send failed for ${rental.title}: ${msgErr.message}`);
+      }
+
+      // Log ai_decision
+      const earnings = availableItems.reduce((sum: number, i: any) => sum + (i.dailyPrice || 0), 0);
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: rental.id,
+          decision_type: 'alt_conversion',
+          input_summary: `Alt conversion: ${availableItems.map((i: any) => `${i.original} → ${i.alternative}`).join(', ')}`,
+          output_summary: `Accepted with alternative items${discountApplied ? ' + discount' : ''}`,
+          confidence: 1.0,
+          action_taken: `Auto-accepted with alternatives: ${availableItems.map((i: any) => i.alternative).join(', ')}`,
+          notified: true,
+        },
+      });
+
+      // Notify Daniel
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'alt_conversion_success' as any, priority: 'normal',
+        data: {
+          items: availableItems.map((i: any) => `${i.original} → ${i.alternative}`),
+          earnings: `~£${earnings}/day`,
+          discountApplied,
+        },
+      }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+
+      this.logger.log(`ALT CONVERSION SUCCESS: ${rental.title} → ${availableItems.map((i: any) => i.alternative).join(', ')}`);
+    } else {
+      // Acceptance failed
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'alt_conversion_failed' as any, priority: 'high',
+        data: { reason: `Accept failed: ${result.error}`, items: availableItems.map((i: any) => i.alternative) },
+      }, { rentalTitle: rental.title, renterName: rental.renter_info, account: rental.account });
+      this.logger.warn(`ALT CONVERSION FAILED (accept): ${rental.title} — ${result.error}`);
+    }
+
+    return true;
   }
 
   /**
@@ -750,6 +1053,53 @@ export class FollowUpService {
       newEarnings: targetEarnings,
       error: acceptResult.success ? undefined : acceptResult.error,
     };
+  }
+
+  /**
+   * After booking confirmed, check if delivery was discussed and send the delivery info form.
+   * Scans conversation history for delivery-related keywords.
+   */
+  private async sendDeliveryFormIfNeeded(rental: any): Promise<void> {
+    try {
+      // Check conversation for delivery discussion
+      const messages = await this.prisma.conversation.findMany({
+        where: { chat_id: { in: [rental.listing_id, `rental:${rental.id}`] } },
+        orderBy: { created_at: 'desc' },
+        take: 20,
+        select: { content: true, role: true },
+      });
+
+      const fullText = messages.map(m => m.content).join(' ').toLowerCase();
+      const deliveryKeywords = /\b(deliver|delivery|courier|addison\s*lee|send it|drop.?off.*address|postcode.*deliver)\b/i;
+
+      if (!deliveryKeywords.test(fullText)) {
+        return; // No delivery discussion — skip
+      }
+
+      // Check if form was already sent (idempotency)
+      const alreadySent = messages.some(m =>
+        m.role === 'assistant' && m.content.includes('courier pickup or drop off booked'),
+      );
+      if (alreadySent) return;
+
+      const deliveryForm =
+        `If you would like a courier pickup or drop off booked for your order, please provide the following info:\n\n` +
+        `Service needed: Pickup / Drop-off / Both\n` +
+        `Phone number:\n` +
+        `Email address:\n` +
+        `Full name:\n` +
+        `Address for delivery/pickup:\n` +
+        `Preferred time:\n` +
+        `Notes for driver (if any):\n\n` +
+        `We'll send you the quote once we have this info. Once paid, we book the courier close to dispatch and send you the tracking link.`;
+
+      await this.hyggloService.sendMessage(rental.listing_id, deliveryForm);
+      await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', deliveryForm, { model: 'follow-up' });
+
+      this.logger.log(`Delivery info form sent for ${rental.title} (delivery discussed in chat)`);
+    } catch (err) {
+      this.logger.warn(`sendDeliveryFormIfNeeded failed for ${rental.title}: ${err.message}`);
+    }
   }
 
   /**
@@ -978,6 +1328,52 @@ export class FollowUpService {
 
         this.logger.log(`First-time discount for ${rental.title}: £${originalPrice} → £${discountedPrice} (renter saves ~£${RENTER_DISCOUNT})`);
         return { applied: true, reason: 'First-time rental discount', percentage: ftPercentage };
+      }
+    }
+
+    // Check for loyalty voucher mentioned in conversation
+    const loyaltyVoucherDecision = await this.prisma.ai_decision.findFirst({
+      where: {
+        rental_id: rental.id,
+        decision_type: 'loyalty_voucher_mentioned',
+      },
+    });
+
+    if (loyaltyVoucherDecision) {
+      // Extract voucher code from the AI decision
+      const codeMatch = loyaltyVoucherDecision.input_summary?.match(/THANKYOU-[A-F0-9]{6}/i);
+      if (codeMatch) {
+        const voucherCode = codeMatch[0];
+        const validation = await this.couponService.validateLoyaltyVoucher(voucherCode);
+
+        if (validation.valid && validation.discountPercent) {
+          const originalPrice = rental.rental_price || 0;
+          const PLATFORM_RETENTION = 0.64;
+          const ownerReduction = validation.discountPercent * PLATFORM_RETENTION;
+          const lvPercentage = originalPrice > 0 ? Math.round((ownerReduction / originalPrice) * 10000) / 100 : 0;
+
+          if (lvPercentage > 0 && lvPercentage < 50) {
+            const discountedPrice = Math.round(originalPrice - ownerReduction);
+
+            await this.prisma.ai_decision.create({
+              data: {
+                rental_id: rental.id,
+                decision_type: 'analyze',
+                input_summary: `discount_applied: Loyalty voucher ${voucherCode} (${validation.discountPercent}% off, owner reduction ${lvPercentage}% of £${originalPrice} = £${discountedPrice})`,
+                output_summary: `Loyalty voucher discount applied. Original: £${originalPrice}, Discounted: £${discountedPrice}`,
+                confidence: 1.0,
+                action_taken: `Loyalty voucher ${voucherCode}: ${lvPercentage}% off earnings`,
+                notified: true,
+              },
+            });
+
+            // Redeem the voucher
+            await this.couponService.redeemVoucher(voucherCode, rental.id);
+
+            this.logger.log(`Loyalty voucher ${voucherCode} for ${rental.title}: £${originalPrice} → £${discountedPrice} (${validation.discountPercent}% renter discount)`);
+            return { applied: true, reason: `Loyalty voucher ${voucherCode}`, percentage: lvPercentage };
+          }
+        }
       }
     }
 

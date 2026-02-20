@@ -101,7 +101,18 @@ export class ContentionService {
     });
 
     // Include trigger rental in the competition pool
-    const allCompeting = [triggerRental, ...aliveCompetitors];
+    // Deduplicate by renter: same renter with multiple requests for the same item
+    // counts as ONE demand unit. Keep the highest-revenue rental per renter.
+    const allRaw = [triggerRental, ...aliveCompetitors];
+    const byRenter = new Map<string, any>();
+    for (const r of allRaw) {
+      const renterKey = r.renter_info || r.id; // fallback to rental id if no renter_info
+      const existing = byRenter.get(renterKey);
+      if (!existing || (r.rental_price || 0) > (existing.rental_price || 0)) {
+        byRenter.set(renterKey, r);
+      }
+    }
+    const allCompeting = [...byRenter.values()];
     const competingDemand = allCompeting.length;
 
     // Only contend if demand exceeds available supply

@@ -501,6 +501,82 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             } catch (err) {
               this.logger.warn(`Failed to auto-send confirmation info on confirmation: ${err.message}`);
             }
+
+            // DELIVERY ESCALATION: If delivery was discussed, notify Daniel with cost estimate + postcode
+            try {
+              const deliveryDecisions = await this.prisma.ai_decision.findMany({
+                where: {
+                  rental_id: existingRental.id,
+                  OR: [
+                    { input_summary: { contains: 'delivery', mode: 'insensitive' } },
+                    { output_summary: { contains: 'delivery', mode: 'insensitive' } },
+                    { input_summary: { contains: 'courier', mode: 'insensitive' } },
+                    { output_summary: { contains: 'postcode', mode: 'insensitive' } },
+                  ],
+                },
+                orderBy: { created_at: 'desc' },
+                take: 5,
+                select: { input_summary: true, output_summary: true, action_taken: true },
+              });
+
+              if (deliveryDecisions.length > 0) {
+                // Extract postcode and cost estimate from decision records
+                const allText = deliveryDecisions.map(d =>
+                  [d.input_summary, d.output_summary, d.action_taken].filter(Boolean).join(' ')
+                ).join(' ');
+
+                const postcodeMatch = allText.match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i);
+                const costMatch = allText.match(/£(\d+)\s*[-–]\s*£?(\d+)/);
+                const oneWayMatch = allText.match(/one[- ]?way[:\s]*£(\d+)/i);
+
+                const postcode = postcodeMatch ? postcodeMatch[0].toUpperCase() : 'not found';
+                let costEstimate = 'not calculated';
+                if (costMatch) {
+                  costEstimate = `£${costMatch[1]}-${costMatch[2]}`;
+                } else if (oneWayMatch) {
+                  costEstimate = `~£${oneWayMatch[1]} one-way`;
+                }
+
+                const renter = rental.renterInfo || updatedRental.renter_info || 'Renter';
+                const items = updatedRental.title || rental.title || 'gear';
+
+                // Check idempotency — don't send twice
+                const alreadyEscalated = await this.prisma.ai_decision.findFirst({
+                  where: {
+                    rental_id: existingRental.id,
+                    decision_type: 'delivery_escalation_sent',
+                  },
+                });
+
+                if (!alreadyEscalated) {
+                  await this.telegramService.sendProactiveMessage(
+                    `📦 Delivery booking needed!\n` +
+                    `${renter} — ${items}\n` +
+                    `Postcode: ${postcode}\n` +
+                    `Estimated cost: ${costEstimate}\n` +
+                    `Please verify and confirm actual delivery cost with the renter.`,
+                    'Markdown',
+                    { force: true },
+                  );
+
+                  await this.prisma.ai_decision.create({
+                    data: {
+                      rental_id: existingRental.id,
+                      decision_type: 'delivery_escalation_sent',
+                      input_summary: `Delivery escalation: ${postcode}, est ${costEstimate}`,
+                      output_summary: `Telegram notification sent for delivery verification`,
+                      confidence: 1.0,
+                      action_taken: 'delivery_escalation_sent',
+                      notified: true,
+                    },
+                  });
+
+                  this.logger.log(`Delivery escalation sent for ${items} (${postcode}, ${costEstimate})`);
+                }
+              }
+            } catch (delErr) {
+              this.logger.warn(`Delivery escalation check failed: ${delErr.message}`);
+            }
           }
         }
 

@@ -559,6 +559,8 @@ export class CalendarService implements OnModuleInit {
     returnTime?: string,
     pickupDate?: string,
     returnDate?: string,
+    pickupMethod?: string,
+    returnMethod?: string,
   ): Promise<any> {
     // Find bookings linked to this rental (include pending_review so times aren't lost before promotion)
     const bookings = await this.prisma.booking.findMany({
@@ -612,6 +614,14 @@ export class CalendarService implements OnModuleInit {
       }
     }
 
+    // Delivery method: only set if explicitly provided (confirmed, not just discussed)
+    if (pickupMethod && ['collection', 'delivery'].includes(pickupMethod)) {
+      updateData.pickup_method = pickupMethod;
+    }
+    if (returnMethod && ['collection', 'delivery'].includes(returnMethod)) {
+      updateData.return_method = returnMethod;
+    }
+
     if (Object.keys(updateData).length === 0) return null;
 
     const updated = await this.prisma.booking.updateMany({
@@ -619,7 +629,11 @@ export class CalendarService implements OnModuleInit {
       data: updateData,
     });
 
-    this.logger.log(`Updated ${updated.count} booking(s) for rental ${rentalId}: pickup=${updateData.pickup_time || 'unchanged'} ${updateData.pickup_date ? updateData.pickup_date.toISOString().split('T')[0] : ''}, return=${updateData.return_time || 'unchanged'} ${updateData.return_date ? updateData.return_date.toISOString().split('T')[0] : ''}`);
+    const methodInfo = [
+      updateData.pickup_method ? `pickup_method=${updateData.pickup_method}` : '',
+      updateData.return_method ? `return_method=${updateData.return_method}` : '',
+    ].filter(Boolean).join(', ');
+    this.logger.log(`Updated ${updated.count} booking(s) for rental ${rentalId}: pickup=${updateData.pickup_time || 'unchanged'} ${updateData.pickup_date ? updateData.pickup_date.toISOString().split('T')[0] : ''}, return=${updateData.return_time || 'unchanged'} ${updateData.return_date ? updateData.return_date.toISOString().split('T')[0] : ''}${methodInfo ? ', ' + methodInfo : ''}`);
     return updated;
   }
 
@@ -1701,8 +1715,10 @@ export class CalendarService implements OnModuleInit {
       'DZO ARLES': 'Anamorphic Blazar Remus lens set or Anamorphic Great Joy lens set',
       'DZO Vespid': 'Anamorphic Blazar Remus lens set or Anamorphic Great Joy lens set',
       // Aputure lighting (not in our stock — we have Nanlite)
-      'Aputure 300D II': 'Nanlite Forza 300 or Nanlite 500B',
-      'Aputure Amaran 300c': 'Nanlite Forza 300 or Nanlite 500B',
+      'Aputure 300D II': 'Nanlite Forza 300 (daylight only, not bi-color)',
+      'Aputure Amaran 300c': 'Nanlite 500B (bi-color)',
+      'Aputure 300x': 'Nanlite 500B (bi-color)',
+      'Aputure 300x II': 'Nanlite 500B (bi-color)',
       'Aputure MC Pro': 'Ambitful RGB light tubes 2x set',
       'Aputure Light Dome': 'Softbox 85cm',
       'Nanlite Forza 60C': 'Nanlite Forza 300',

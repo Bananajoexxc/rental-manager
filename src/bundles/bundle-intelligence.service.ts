@@ -359,7 +359,7 @@ export class BundleIntelligenceService {
       },
       'Nanlite 500B': {
         substitute: 'Nanlite Forza 300',
-        difference: 'Forza 300 is less powerful (300W vs 500W output) but lighter',
+        difference: 'Forza 300 is daylight-only (5600K fixed, NOT bi-color) and less powerful (300W vs 500W). Only substitute if renter does NOT need bi-color/tungsten',
       },
       'Sony FX3': {
         substitute: 'Sony A7 III',

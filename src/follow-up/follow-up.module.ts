@@ -10,6 +10,7 @@ import { CalendarModule } from '../calendar/calendar.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 import { ContentionModule } from '../contention/contention.module';
 import { MemoryModule } from '../memory/memory.module';
+import { CouponModule } from '../coupon/coupon.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { MemoryModule } from '../memory/memory.module';
     ConversationStageModule,
     ContentionModule,
     MemoryModule,
+    CouponModule,
   ],
   providers: [FollowUpService],
   exports: [FollowUpService],

@@ -5,6 +5,7 @@ import { BlacklistService } from './blacklist/blacklist.service';
 import { PlaywrightService } from './playwright/playwright.service';
 import { HyggloService } from './hygglo/hygglo.service';
 import { isAccessoryItem, findBestMatch, getInventoryItemNames } from './utils/item-matcher';
+import { CouponService } from './coupon/coupon.service';
 
 /** Filter photos_urls to only product images (exclude renter profile avatars) */
 function getProductPhoto(photosUrls: string[] | null | undefined): string | null {
@@ -47,6 +48,7 @@ export class AppService {
     private blacklistService: BlacklistService,
     private playwrightService: PlaywrightService,
     private hyggloService: HyggloService,
+    private couponService: CouponService,
   ) {}
 
   async getHealthStatus() {
@@ -429,6 +431,7 @@ export class AppService {
         account: true, revenue: true, rental_id: true,
         notes: true, pickup_time: true, return_time: true,
         pickup_date: true, return_date: true,
+        pickup_method: true, return_method: true,
         rental: {
           select: { photos_urls: true, parsed_items: true },
         },
@@ -453,6 +456,8 @@ export class AppService {
       returnTime: string | null;
       pickupDate: string | null;
       returnDate: string | null;
+      pickupMethod: string | null;
+      returnMethod: string | null;
     }>();
 
     for (const b of deduped) {
@@ -480,6 +485,8 @@ export class AppService {
         if (!existing.returnTime && (b as any).return_time) existing.returnTime = (b as any).return_time;
         if (!existing.pickupDate && (b as any).pickup_date) existing.pickupDate = (b as any).pickup_date.toISOString();
         if (!existing.returnDate && (b as any).return_date) existing.returnDate = (b as any).return_date.toISOString();
+        if (!existing.pickupMethod && (b as any).pickup_method) existing.pickupMethod = (b as any).pickup_method;
+        if (!existing.returnMethod && (b as any).return_method) existing.returnMethod = (b as any).return_method;
         for (const p of photos) { if (!existing.photos.includes(p)) existing.photos.push(p); }
         if (notesObj) {
           if (!existing.notes) existing.notes = notesObj;
@@ -516,6 +523,8 @@ export class AppService {
           returnTime: (b as any).return_time || null,
           pickupDate: (b as any).pickup_date ? (b as any).pickup_date.toISOString() : null,
           returnDate: (b as any).return_date ? (b as any).return_date.toISOString() : null,
+          pickupMethod: (b as any).pickup_method || null,
+          returnMethod: (b as any).return_method || null,
         });
       }
     }
@@ -916,9 +925,23 @@ export class AppService {
       }
 
       const reviewRequest = `\n\nIf you enjoyed the experience, we'd really appreciate a quick review on Hygglo — it helps us a lot!`;
+
+      // Issue decaying loyalty voucher if earnings >= £40 and renter has a profile
+      const profileLink = rental.renter_links?.[0];
+      const earnings = rental.rental_price || 0;
+      let voucherText = '';
+      if (profileLink && earnings >= 40) {
+        try {
+          const voucherCode = await this.couponService.issueVoucher(profileLink.renter_profile.id, rental.id);
+          voucherText = ` Here's your exclusive loyalty code: ${voucherCode}. It starts at 20% off and drops 1% each day — book sooner for the best deal!`;
+        } catch (err) {
+          this.logger.warn(`Failed to issue loyalty voucher for rental ${rentalId}: ${err.message}`);
+        }
+      }
+
       thankYouText = account === 'leo'
-        ? `Hey! Thanks so much for renting with me, really appreciate it! Hope the gear worked out great for your project. If you'd like to rent again, use code db15off for 15% off your next booking. Cheers!` + reviewRequest
-        : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production. As a thank you, here's 15% off your next rental — just use code db15off when booking. Looking forward to working with you again!` + reviewRequest;
+        ? `Hey! Thanks so much for renting with me, really appreciate it! Hope the gear worked out great for your project.${voucherText}` + (voucherText ? '' : ` If you'd like to rent again, use code db15off for 15% off your next booking.`) + ` Cheers!` + reviewRequest
+        : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production.${voucherText}` + (voucherText ? '' : ` As a thank you, here's 15% off your next rental — just use code db15off when booking.`) + ` Looking forward to working with you again!` + reviewRequest;
 
       try {
         thankYouSent = await this.hyggloService.sendMessage(rental.listing_id, thankYouText, !!body.dashboardApproved);
