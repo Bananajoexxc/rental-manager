@@ -84,7 +84,7 @@ function buildTestSystemPrompt(account: 'dbcinema' | 'leo' = 'dbcinema'): string
     '\nPRICING CATALOG:\n' + pricingLines,
     '\nBUNDLES:\n' + bundleLines,
     '\nDELIVERY: London only, max 30km from Trafalgar Square. Quote delivery price immediately when asked — do NOT require a booking request first. Always mention courier type and why. Include disclaimer that estimates are accurate within approximately 15 percent.',
-    '\nCOMPATIBILITY: Sony FX3 uses NP-FZ100 (NOT NP-FW50). Sony A7 II uses NP-FW50. BMPCC uses LP-E6NH + Canon EF mount (NOT Sony lenses). V-mount batteries include all plates, adapters, cables.',
+    '\nCOMPATIBILITY: Sony FX3 uses NP-FZ100 (NOT NP-FW50). Sony A7 II uses NP-FW50. BMPCC 6K Pro uses LP-E6NH + native Canon EF mount. BMPCC 6K Full Frame uses LP-E6NH + native Leica L-mount (Canon EF lenses work via included adapter). Sony lenses don\'t fit either BMPCC. V-mount batteries include all plates, adapters, cables.',
     '\nBMPCC BATTERY COUNT: BMPCC 6K Pro comes with 5x LP-E6NH batteries. NEVER say 2x or 3x.',
     '\nPICKUP SLOTS: Always offer 10am pickup FIRST. Working hours 10am-12pm and 7pm-9pm.',
     '\nLOCATION: NEVER reveal all items are at the same location. Each listing has its own advertised location — treat as real. If asked why pickup differs, apologise and use natural excuse.',

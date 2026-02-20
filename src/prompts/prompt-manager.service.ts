@@ -124,7 +124,7 @@ IF THEY ADD ITEMS LATER: Update the delivery price if it changes the courier typ
 Common ones to remember:
 - FX3 = NP-FZ100 batteries (NOT FW50)
 - A7 II = NP-FW50 (different from FX3/A7III)
-- BMPCC = LP-E6NH batteries + Canon EF mount (Sony lenses don't fit). BMPCC 6K Pro and 6K Full Frame come with 5x LP-E6NH batteries. NEVER say 2x or 3x.
+- BMPCC 6K Pro = LP-E6NH batteries + native Canon EF mount. BMPCC 6K Full Frame = LP-E6NH batteries + native Leica L-mount (Canon EF lenses work via included adapter). Sony lenses don't fit either BMPCC. Both come with 5x LP-E6NH batteries. NEVER say 2x or 3x.
 
 V-MOUNT: V-mount battery rentals ALWAYS include plates, adapters, and cables. Never say "via plate" or imply renters need separate accessories. V-mount 95mAh (~£11-15/day) and V-mount 150mAh (~£20-28/day) have DIFFERENT prices. When adding V-mounts to a bundle, check if a bundle variant already includes them.
 
@@ -300,9 +300,9 @@ SUBSTITUTION PRICING (IMPORTANT): When offering a slight upgrade or downgrade as
         name: 'scheduling_rules',
         version: '1.0',
         category: 'context',
-        content: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
+        content: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). ALWAYS proactively offer evening-before pickup as an additional option when discussing times — e.g. "You could also pick up the evening before from 7-9pm if that's easier." Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
 
-RETURN: Suggest earliest possible return. Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
+RETURN: Suggest earliest possible return. ALWAYS proactively offer morning-after return as an additional option — e.g. "For return you can do [end date] evening 7-9pm, or the morning after from 10am-12pm." Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
 STRICT SLOT ENFORCEMENT: ONLY two time windows exist — 10am-12pm and 7pm-9pm. ANY time outside these slots (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm) MUST be rejected. NEVER say "that works" or accept off-hours times. Instead: "My available slots are 10am-12pm and 7-9pm — which one works best for you?" If the renter insists on an off-hours time, escalate to Daniel — do NOT agree to it.
 
@@ -363,9 +363,9 @@ NO CONTEXT HALLUCINATION (CRITICAL): NEVER assume or mention what camera, equipm
       {
         name: 'scheduling_rules',
         staleFragment: 'had in mind.\n\nSAME-DAY',
-        updatedContent: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
+        updatedContent: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). ALWAYS proactively offer evening-before pickup as an additional option when discussing times — e.g. "You could also pick up the evening before from 7-9pm if that's easier." Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
 
-RETURN: Suggest earliest possible return. Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
+RETURN: Suggest earliest possible return. ALWAYS proactively offer morning-after return as an additional option — e.g. "For return you can do [end date] evening 7-9pm, or the morning after from 10am-12pm." Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
 STRICT SLOT ENFORCEMENT: ONLY two time windows exist — 10am-12pm and 7pm-9pm. ANY time outside these slots (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm) MUST be rejected. NEVER say "that works" or accept off-hours times. Instead: "My available slots are 10am-12pm and 7-9pm — which one works best for you?" If the renter insists on an off-hours time, escalate to Daniel — do NOT agree to it.
 
@@ -489,9 +489,9 @@ AFTER BOOKING VERIFIED: Exact address disclosed in booking confirmation template
       {
         name: 'scheduling_rules',
         staleFragment: 'NEVER auto-approve. Ask for pickup time',
-        updatedContent: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
+        updatedContent: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). ALWAYS proactively offer evening-before pickup as an additional option when discussing times — e.g. "You could also pick up the evening before from 7-9pm if that's easier." Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
 
-RETURN: Suggest earliest possible return. Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
+RETURN: Suggest earliest possible return. ALWAYS proactively offer morning-after return as an additional option — e.g. "For return you can do [end date] evening 7-9pm, or the morning after from 10am-12pm." Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
 STRICT SLOT ENFORCEMENT: ONLY two time windows exist — 10am-12pm and 7pm-9pm. ANY time outside these slots (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm) MUST be rejected. NEVER say "that works" or accept off-hours times. Instead: "My available slots are 10am-12pm and 7-9pm — which one works best for you?" If the renter insists on an off-hours time, escalate to Daniel — do NOT agree to it.
 
@@ -597,9 +597,9 @@ TRAVEL DISCOUNT RECOVERY: When a renter goes silent after initial contact and th
         name: 'scheduling_rules',
         version: '1.0',
         category: 'context',
-        content: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
+        content: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). ALWAYS proactively offer evening-before pickup as an additional option when discussing times — e.g. "You could also pick up the evening before from 7-9pm if that's easier." Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
 
-RETURN: Suggest earliest possible return. Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
+RETURN: Suggest earliest possible return. ALWAYS proactively offer morning-after return as an additional option — e.g. "For return you can do [end date] evening 7-9pm, or the morning after from 10am-12pm." Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
 
 STRICT SLOT ENFORCEMENT: ONLY two time windows exist — 10am-12pm and 7pm-9pm. ANY time outside these slots (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm) MUST be rejected. NEVER say "that works" or accept off-hours times. Instead: "My available slots are 10am-12pm and 7-9pm — which one works best for you?" If the renter insists on an off-hours time, escalate to Daniel — do NOT agree to it.
 
@@ -736,7 +736,7 @@ PACKAGING: All items come in bags. Mention this naturally after booking is confi
 Common ones to remember:
 - FX3 = NP-FZ100 batteries (NOT FW50)
 - A7 II = NP-FW50 (different from FX3/A7III)
-- BMPCC = LP-E6NH batteries + Canon EF mount (Sony lenses don't fit). BMPCC 6K Pro and 6K Full Frame come with 5x LP-E6NH batteries. NEVER say 2x or 3x.
+- BMPCC 6K Pro = LP-E6NH batteries + native Canon EF mount. BMPCC 6K Full Frame = LP-E6NH batteries + native Leica L-mount (Canon EF lenses work via included adapter). Sony lenses don't fit either BMPCC. Both come with 5x LP-E6NH batteries. NEVER say 2x or 3x.
 
 V-MOUNT: V-mount battery rentals ALWAYS include plates, adapters, and cables. Never say "via plate" or imply renters need separate accessories. V-mount 95mAh (~£11-15/day) and V-mount 150mAh (~£20-28/day) have DIFFERENT prices. When adding V-mounts to a bundle, check if a bundle variant already includes them.
 

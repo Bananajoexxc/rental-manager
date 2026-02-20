@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { getSpecHighlight, findItemsByFeature, FEATURE_KEYWORD_MAP } from '../data/item-specs';
+import { ITEM_COMPATIBILITY, CompatibilityEntry } from '../data/item-compatibility';
 
 interface UpsellRecommendation {
   items: string[];
@@ -88,11 +89,10 @@ export class UpsellService {
       }
     },
     drone: {
-      essential: ['Sony NPF 970 batteries 2x sets', 'ND filter'],
+      essential: ['256GB card'],
       recommended: [],
       reasoning: {
-        batteries: "Drone batteries run out fast - extras are essential",
-        filters: "ND filters are crucial for cinematic drone footage",
+        storage: "Extra memory card is useful for longer flights and higher quality recording",
       }
     },
   };
@@ -437,6 +437,60 @@ export class UpsellService {
   }
 
   /**
+   * Filter recommendations through ITEM_COMPATIBILITY data.
+   * Removes items that are NOT in the compatible_accessories/batteries/cards/lenses
+   * of any requested item. Only filters when at least one requested item has
+   * compatibility data; items with no compat entry pass through unfiltered.
+   */
+  private filterIncompatibleRecommendations(
+    recommendations: string[],
+    requestedItemNames: string[],
+  ): string[] {
+    // Find compatibility entries for requested items (fuzzy lowercase match)
+    const compatEntries: CompatibilityEntry[] = [];
+    for (const name of requestedItemNames) {
+      const nameLower = name.toLowerCase();
+      const entry = ITEM_COMPATIBILITY.find(c => {
+        const cLower = c.item_name.toLowerCase();
+        return cLower === nameLower || cLower.includes(nameLower) || nameLower.includes(cLower);
+      });
+      if (entry) compatEntries.push(entry);
+    }
+
+    // If no requested items have compatibility data, can't filter
+    if (compatEntries.length === 0) return recommendations;
+
+    // Build union of all compatible items (lowercased for matching)
+    const allowedSet = new Set<string>();
+    for (const entry of compatEntries) {
+      for (const item of [
+        ...entry.compatible_batteries,
+        ...entry.compatible_cards,
+        ...entry.compatible_accessories,
+        ...entry.compatible_lenses,
+      ]) {
+        allowedSet.add(item.toLowerCase());
+      }
+    }
+
+    return recommendations.filter(rec => {
+      const recLower = rec.toLowerCase();
+
+      // Keep if compatible with any requested item
+      for (const allowed of allowedSet) {
+        if (allowed === recLower || allowed.includes(recLower) || recLower.includes(allowed)) {
+          return true;
+        }
+      }
+
+      this.logger.debug(
+        `Filtered incompatible upsell "${rec}" for [${requestedItemNames.join(', ')}]`,
+      );
+      return false;
+    });
+  }
+
+  /**
    * Build comprehensive recommendations
    */
   private async buildRecommendations(
@@ -570,8 +624,14 @@ export class UpsellService {
       }
     }
 
+    // Filter out items incompatible with the requested equipment
+    const filteredItems = this.filterIncompatibleRecommendations(
+      recommendations,
+      itemCategories.map(i => i.name),
+    );
+
     return {
-      items: recommendations.slice(0, 5), // Top 5 recommendations
+      items: filteredItems.slice(0, 5),
       reasoning: reasoning.trim(),
       priority,
       questionsToAsk: questionsToAsk.length > 0 ? questionsToAsk : undefined,
