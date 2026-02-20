@@ -1247,11 +1247,12 @@ export class AppController {
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
+    // Re-extract ALL active bookings — conversation-level AI is source of truth
+    // and can correct previously wrong times from the old per-message system
     const bookings = await this.prisma.booking.findMany({
       where: {
         status: { in: ['confirmed', 'pending_review'] },
         end_date: { gte: oneWeekAgo }, // Only ongoing or upcoming (ended within last week or future)
-        OR: [{ pickup_time: null }, { return_time: null }, { pickup_date: null }, { return_date: null }],
       },
       select: {
         id: true, rental_id: true, renter_name: true, pickup_time: true, return_time: true,
@@ -1276,7 +1277,7 @@ export class AppController {
           });
           if (!rental) return { renter: b.renter_name, status: 'no_rental' };
 
-          const extracted = await this.autonomousService.extractTimesFromChatHistory(rental);
+          const extracted = await this.autonomousService.extractAndUpdateTimes(rental);
           if (extracted && (extracted.pickupTime || extracted.returnTime)) {
             return {
               renter: b.renter_name,
@@ -1837,6 +1838,23 @@ export class AppController {
   @ApiResponse({ status: 200, description: 'Batch image generation result' })
   async generateAllMarketingListingImages() {
     return this.listingCreatorService.generateAllPendingImages();
+  }
+
+  @Post('marketing-listings/re-estimate')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Re-estimate pricing and revenue for all listings using improved fuzzy matching' })
+  @ApiResponse({ status: 200, description: 'Re-estimation result' })
+  async reEstimateMarketingListings() {
+    return this.listingCreatorService.reEstimateAll();
+  }
+
+  @Post('marketing-listings/reset-images')
+  @ApiTags('Marketing Listings')
+  @ApiOperation({ summary: 'Reset image statuses to pending for re-processing' })
+  @ApiResponse({ status: 200, description: 'Number of listings reset' })
+  async resetMarketingListingImages() {
+    const count = await this.listingCreatorService.resetImageStatuses();
+    return { reset: count };
   }
 
   @Delete('marketing-listings/:id')

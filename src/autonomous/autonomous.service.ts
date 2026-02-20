@@ -700,141 +700,6 @@ export class AutonomousService {
     return deferralPatterns.some(p => p.test(content));
   }
 
-  /**
-   * Try regex-based time extraction before falling back to AI.
-   * Returns extracted times if confidence is high, null otherwise.
-   */
-  private tryRegexTimeExtraction(content: string): {
-    pickupTime?: string; returnTime?: string;
-    pickupDate?: string; returnDate?: string;
-    confidence: 'high' | 'low';
-  } | null {
-    const result: { pickupTime?: string; returnTime?: string; pickupDate?: string; returnDate?: string; confidence: 'high' | 'low' } = { confidence: 'low' };
-
-    // Reject time ranges — we need exact times
-    if (this.detectTimeRange(content)) {
-      return null;
-    }
-
-    // Helper: parse hours/minutes/ampm into HH:MM
-    const parseTime = (match: RegExpMatchArray): string | null => {
-      let hours = parseInt(match[1]);
-      const minutes = match[2] ? parseInt(match[2]) : 0;
-      const ampm = match[3]?.toLowerCase();
-      if (ampm === 'pm' && hours < 12) hours += 12;
-      if (ampm === 'am' && hours === 12) hours = 0;
-      if (hours > 23 || minutes > 59) return null;
-      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    };
-
-    // Match patterns like "pickup at 10am", "collect at 7pm", "pick up at 11:00"
-    // IMPORTANT: Use matchAll + take LAST match — renters often correct themselves in the same message
-    const pickupPattern = /(?:pickup|pick\s*up|collect|picking\s*up|collection|come\s*(?:at|by|around))\s*(?:(?:will\s*be|at|by|around|is)\s*)*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
-    const returnPattern = /(?:return|drop\s*off|dropoff|bring\s*(?:it\s*)?back|returning|give\s*(?:it\s*)?back|back\s*(?:to\s*you\s*)?(?:at|by)|drop\s*(?:it\s*)?(?:back|off))\s*(?:(?:will\s*be|at|by|around|is)\s*)*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
-
-    const pickupMatches = [...content.matchAll(pickupPattern)];
-    const pickupMatch = pickupMatches.length > 0 ? pickupMatches[pickupMatches.length - 1] : null;
-    if (pickupMatch) result.pickupTime = parseTime(pickupMatch) || undefined;
-
-    const returnMatches = [...content.matchAll(returnPattern)];
-    const returnMatch = returnMatches.length > 0 ? returnMatches[returnMatches.length - 1] : null;
-    if (returnMatch) result.returnTime = parseTime(returnMatch) || undefined;
-
-    // Reverse patterns: time-first, e.g. "11am pickup", "7pm return", "10:30am collection"
-    if (!result.pickupTime) {
-      const pickupReversePattern = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:pickup|pick\s*up|collect|collection)/i;
-      const pickupRevMatch = content.match(pickupReversePattern);
-      if (pickupRevMatch) result.pickupTime = parseTime(pickupRevMatch) || undefined;
-    }
-    if (!result.returnTime) {
-      const returnReversePattern = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:return|drop\s*off|dropoff|bring\s*back)/i;
-      const returnRevMatch = content.match(returnReversePattern);
-      if (returnRevMatch) result.returnTime = parseTime(returnRevMatch) || undefined;
-    }
-
-    // Fallback: "I'll be there at 10am" / "see you at 7pm" — treat as pickup if no pickup yet
-    if (!result.pickupTime && !result.returnTime) {
-      const genericTimePattern = /(?:i'?ll\s*(?:be\s*)?(?:there|over|around)|see\s*you|coming|arrive|come\s*(?:over|by|around)?)\s*(?:at\s*|by\s*|around\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
-      const genericMatch = content.match(genericTimePattern);
-      if (genericMatch) result.pickupTime = parseTime(genericMatch) || undefined;
-    }
-
-    // Fallback: "morning"/"afternoon"/"evening"/"noon" with pickup/return context
-    if (!result.pickupTime) {
-      const pickupVague = content.match(/(?:pickup|pick\s*up|collect)\s*(?:in\s*the\s*)?(?:the\s*)?(morning|afternoon|evening|noon|midday)/i);
-      if (pickupVague) {
-        const word = pickupVague[1].toLowerCase();
-        const timeMap: Record<string, string> = { morning: '10:00', afternoon: '14:00', evening: '19:00', noon: '12:00', midday: '12:00' };
-        result.pickupTime = timeMap[word];
-      }
-    }
-    if (!result.returnTime) {
-      const returnVague = content.match(/(?:return|drop\s*off|bring\s*back)\s*(?:in\s*the\s*)?(?:the\s*)?(morning|afternoon|evening|noon|midday)/i);
-      if (returnVague) {
-        const word = returnVague[1].toLowerCase();
-        const timeMap: Record<string, string> = { morning: '10:00', afternoon: '14:00', evening: '19:00', noon: '12:00', midday: '12:00' };
-        result.returnTime = timeMap[word];
-      }
-    }
-
-    // Dual time pattern: "10am and return 7pm" or "pickup 10am, drop off 7pm"
-    if (!result.pickupTime && !result.returnTime) {
-      const dualPattern = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:and|,|\.)\s*(?:return|drop\s*off|bring\s*(?:it\s*)?back)\s*(?:at\s*|by\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
-      const dualMatch = content.match(dualPattern);
-      if (dualMatch) {
-        result.pickupTime = parseTime({ ...dualMatch, 1: dualMatch[1], 2: dualMatch[2], 3: dualMatch[3] } as any) || undefined;
-        const returnArr = [dualMatch[0], dualMatch[4], dualMatch[5], dualMatch[6]] as unknown as RegExpMatchArray;
-        result.returnTime = parseTime(returnArr) || undefined;
-      }
-    }
-
-    // Date patterns — multiple formats renters actually use
-    // 1. ISO format: "on 2025-01-15"
-    const isoDatePattern = /(?:on\s+(?:the\s+)?)?(\d{4}-\d{2}-\d{2})/gi;
-    const isoMatches = [...content.matchAll(isoDatePattern)];
-    if (isoMatches.length >= 1) result.pickupDate = isoMatches[0][1];
-    if (isoMatches.length >= 2) result.returnDate = isoMatches[1][1];
-
-    // 2. DD/MM or DD/MM/YYYY format: "22/02", "22/02/2026", "22/2"
-    if (!result.pickupDate) {
-      const ddmmPattern = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g;
-      const ddmmMatches = [...content.matchAll(ddmmPattern)];
-      // Filter out likely non-date matches (addresses etc) — day must be 1-31, month 1-12
-      const validDates: string[] = [];
-      const currentYear = new Date().getFullYear();
-      for (const m of ddmmMatches) {
-        const day = parseInt(m[1], 10);
-        const month = parseInt(m[2], 10);
-        if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-          let year = currentYear;
-          if (m[3]) {
-            year = m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10);
-          }
-          validDates.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
-        }
-      }
-      if (validDates.length >= 1) result.pickupDate = validDates[0];
-      if (validDates.length >= 2) result.returnDate = validDates[1];
-    }
-
-    if (!result.pickupTime && !result.returnTime) return null;
-
-    // Evaluate confidence per-time: keep any time that has explicit AM/PM, :MM, or is from vague-word mapping
-    const pickupExplicit = pickupMatch && (pickupMatch[3] || pickupMatch[2]);
-    const returnExplicit = returnMatch && (returnMatch[3] || returnMatch[2]);
-    // Vague time words (morning/afternoon/evening) are treated as medium confidence — keep them
-    const pickupFromVague = result.pickupTime && !pickupMatch;
-    const returnFromVague = result.returnTime && !returnMatch;
-    // Drop ONLY times that came from keyword match WITHOUT am/pm or :MM and NOT from vague mapping
-    if (result.pickupTime && !pickupExplicit && !pickupFromVague) result.pickupTime = undefined;
-    if (result.returnTime && !returnExplicit && !returnFromVague) result.returnTime = undefined;
-
-    if (!result.pickupTime && !result.returnTime) return null;
-    result.confidence = 'high';
-
-    return result;
-  }
-
   // --- Triggered by scanner when new rental detected ---
 
   async onNewRental(rental: any) {
@@ -1542,7 +1407,7 @@ export class AutonomousService {
       const isConfirmedRental = ['upcoming', 'ongoing', 'completed', 'confirmed'].some(s => rentalStatus.includes(s));
       if (isConfirmedRental) {
         try {
-          extractedTimes = await this.extractTimesFromChatHistory(rental, initialMessages);
+          extractedTimes = await this.extractAndUpdateTimes(rental);
         } catch (timeErr) {
           this.logger.warn(`Chat time extraction failed for ${rental.title}: ${timeErr.message}`);
         }
@@ -4267,7 +4132,7 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
 
           if (this.conversationStageService.isActionAllowed(timeStage, 'time_extraction_full')) {
             await this.ensureTimeRequestSent(rental);
-            await this.extractPickupReturnTimes(msg, rental);
+            await this.extractAndUpdateTimes(rental, msg);
           } else if (this.conversationStageService.isActionAllowed(timeStage, 'time_extraction_tentative')) {
             await this.noteTentativeTimes(msg, rental);
           }
@@ -4493,14 +4358,17 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
   // --- Tentative time tracking (pre-confirmation, regex-only, no AI call) ---
 
   private async noteTentativeTimes(msg: HyggloMessage, rental: any): Promise<void> {
-    const regexResult = this.tryRegexTimeExtraction(msg.content);
-    if (!regexResult || (!regexResult.pickupTime && !regexResult.returnTime)) return;
+    // Simple inline time detection for tentative memory — no AI call needed
+    const content = msg.content;
+    const timeMatch = content.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/gi);
+    if (!timeMatch || timeMatch.length === 0) return;
 
     // Store as tentative memory (lower importance than confirmed)
     const renterName = rental.renter_info || msg.sender;
     const memoryParts: string[] = [];
-    if (regexResult.pickupTime) memoryParts.push(`pickup at ${regexResult.pickupTime}`);
-    if (regexResult.returnTime) memoryParts.push(`return at ${regexResult.returnTime}`);
+    for (const t of timeMatch.slice(0, 2)) {
+      memoryParts.push(t.trim());
+    }
 
     const memoryContent = `TENTATIVE: ${renterName} mentioned ${memoryParts.join(' and ')} for ${rental.title} (not yet confirmed)`;
     await this.memoryService.storeMemory('fact', `Tentative times: ${rental.title}`, memoryContent, 5);
@@ -4518,429 +4386,16 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     this.logger.debug(`Tentative times noted for ${rental.title}: ${memoryParts.join(', ')}`);
   }
 
-  // --- Extract pickup/return times from chat messages ---
+  // --- Unified time extraction from full conversation — single source of truth ---
 
-  async extractPickupReturnTimes(
-    msg: HyggloMessage,
+  async extractAndUpdateTimes(
     rental: any,
-  ): Promise<void> {
-    const content = msg.content;
-
-    // Quick pre-filter: skip if the message doesn't seem to mention times
-    const timePatterns = /\b(\d{1,2}\s*(am|pm|:\d{2})|\bpickup\b|\breturn\b|\bcollect\b|\bdrop\s*off\b|\bbring\s*back\b|\breturning\b|\bmorning\b|\bevening\b|\bafternoon\b|\bnoon\b|\bmidday\b|\blater\b|\btbd\b|\bconfirm\b|\bdecide\b|\bnot\s+sure\b)/i;
-    if (!timePatterns.test(content)) return;
-
-    // TIMES LOCKED GATE: Once both pickup AND return are confirmed, time changes
-    // must be escalated to Daniel — never auto-accepted by the system.
-    const existingBooking = await this.prisma.booking.findFirst({
-      where: { rental_id: rental.id, status: 'confirmed' },
-      select: { pickup_time: true, return_time: true, item_name: true, start_date: true, end_date: true },
-    });
-    const timesAlreadyConfirmed = !!(existingBooking?.pickup_time && existingBooking?.return_time);
-
-    // Deferral detection: if renter defers while we still need times, push back firmly
-    if (!timesAlreadyConfirmed && this.detectTimeDeferral(content)) {
-      const missingBoth = !existingBooking?.pickup_time && !existingBooking?.return_time;
-      const missing = missingBoth ? 'pickup and return times'
-        : !existingBooking?.pickup_time ? 'pickup time' : 'return time';
-      this.logger.log(`Time deferral detected from ${msg.sender} for ${rental.title}, still need ${missing}`);
-      if (!this.isWriteBlocked(msg.rentalId)) {
-        try {
-          await this.hyggloService.sendMessage(msg.rentalId,
-            `I do need your exact ${missing} to lock in the booking — we have morning slots (10am-12pm) and evening slots (7pm-9pm). Which works best for you?`);
-        } catch { /* best-effort */ }
-      }
-      return;
-    }
-
-    if (timesAlreadyConfirmed) {
-      // Check if the message actually proposes a NEW time (not just discussing existing ones)
-      const regexCheck = this.tryRegexTimeExtraction(content);
-      if (regexCheck) {
-        const proposedPickup = regexCheck.pickupTime;
-        const proposedReturn = regexCheck.returnTime;
-        const isNewPickup = proposedPickup && proposedPickup !== existingBooking.pickup_time;
-        const isNewReturn = proposedReturn && proposedReturn !== existingBooking.return_time;
-
-        if (isNewPickup || isNewReturn) {
-          // Check if proposed time has a hard conflict (items needed on another rental, <1h buffer, no stock)
-          const conflictItems: string[] = [];
-          const bookings = await this.prisma.booking.findMany({
-            where: { rental_id: rental.id, status: 'confirmed' },
-          });
-          for (const bk of bookings) {
-            if (isNewReturn && proposedReturn && bk.end_date) {
-              const conflict = await this.calendarService.checkTimeConflict(
-                bk.item_name, bk.end_date, proposedReturn, 'return', rental.id,
-              );
-              if (conflict.conflict) conflictItems.push(bk.item_name);
-            }
-            if (isNewPickup && proposedPickup && bk.start_date) {
-              const conflict = await this.calendarService.checkTimeConflict(
-                bk.item_name, bk.start_date, proposedPickup, 'pickup', rental.id,
-              );
-              if (conflict.conflict) conflictItems.push(bk.item_name);
-            }
-          }
-
-          if (conflictItems.length > 0) {
-            // Auto-deny: items needed on another rental with <1h buffer
-            this.logger.warn(`TIME CHANGE AUTO-DENIED for ${rental.title}: conflict on ${conflictItems.join(', ')}`);
-            if (!this.isWriteBlocked(msg.rentalId)) {
-              try {
-                await this.hyggloService.sendMessage(msg.rentalId,
-                  `Sorry, that time change won't work — those items are needed for another rental and there isn't enough buffer time. The confirmed times are pickup at ${existingBooking.pickup_time} and return at ${existingBooking.return_time}.`);
-              } catch { /* best-effort */ }
-            }
-            return;
-          }
-
-          // No hard conflict, but still escalate to Daniel — never auto-accept time changes
-          const changeDesc = [
-            isNewPickup ? `pickup ${existingBooking.pickup_time} → ${proposedPickup}` : '',
-            isNewReturn ? `return ${existingBooking.return_time} → ${proposedReturn}` : '',
-          ].filter(Boolean).join(', ');
-
-          this.logger.log(`TIME CHANGE ESCALATED for ${rental.title}: ${changeDesc}`);
-          this.telegramService.sendDecisionPrompt({
-            type: 'escalation',
-            rentalId: String(rental.id),
-            listingId: msg.rentalId,
-            account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
-            renterName: msg.sender || rental.renter_info || 'Unknown',
-            renterLastMessage: content,
-            contextSummary: `Time change request: ${changeDesc}. Current confirmed: pickup ${existingBooking.pickup_time}, return ${existingBooking.return_time}`,
-            displayText:
-              `\u23f0 *TIME CHANGE REQUEST*\n\n` +
-              `\u251c \ud83d\udce6 ${rental.title}\n` +
-              `\u251c \ud83d\udc64 ${msg.sender || rental.renter_info || 'Unknown'}\n` +
-              `\u251c \ud83d\udcc5 Current: pickup ${existingBooking.pickup_time}, return ${existingBooking.return_time}\n` +
-              `\u2514 \u27a1\ufe0f Requested: ${changeDesc}\n\n` +
-              `\ud83d\udcac "${content.substring(0, 200)}"`,
-            holdMessageSent: true,
-            options: [
-              { label: 'Approve change', emoji: '\u2705', intent: 'approve', aiInstruction: `Update the booking times as requested: ${changeDesc}` },
-              { label: 'Keep current times', emoji: '\u274c', intent: 'decline', aiInstruction: `Inform the renter the time change was not approved. Current times remain: pickup ${existingBooking.pickup_time}, return ${existingBooking.return_time}` },
-              { label: 'Respond manually', emoji: '\ud83d\udc41', intent: 'custom', aiInstruction: '' },
-            ],
-          });
-
-          // Tell renter we're checking
-          if (!this.isWriteBlocked(msg.rentalId)) {
-            try {
-              await this.hyggloService.sendMessage(msg.rentalId,
-                `Let me check on that time change and get back to you.`);
-            } catch { /* best-effort */ }
-          }
-
-          // Store the requested change in memory for chat reference
-          await this.memoryService.storeMemory('fact',
-            `Time change requested: ${rental.title}`,
-            `${msg.sender} requested time change: ${changeDesc}. Awaiting Daniel's approval. Original times: pickup ${existingBooking.pickup_time}, return ${existingBooking.return_time}.`,
-            8,
-          );
-          return; // Don't overwrite confirmed times
-        }
-      }
-      // If no new time detected, just return — existing times stay locked
-      return;
-    }
-
-    // Reject time ranges — ask renter for an exact time instead
-    const detectedRange = this.detectTimeRange(content);
-    if (detectedRange) {
-      this.logger.log(`Time range detected ("${detectedRange}") from ${msg.sender}, asking for exact time`);
-      if (!this.isWriteBlocked(msg.rentalId)) {
-        try {
-          await this.hyggloService.sendMessage(msg.rentalId,
-            `I just need an exact time rather than a range - could you confirm a specific time? For example, 'pickup at 10am' works great.`);
-        } catch {
-          // Best-effort
-        }
-      }
-      return;
-    }
-
-    // Try regex extraction first to avoid AI call
-    const regexResult = this.tryRegexTimeExtraction(content);
-    let pickupTime: string | undefined;
-    let returnTime: string | undefined;
-    let pickupDateMatch: RegExpMatchArray | null = null;
-    let returnDateMatch: RegExpMatchArray | null = null;
-    let confidence: string;
-
-    // Check if message has date-like content that regex should have captured
-    const hasDateContent = /\b\d{1,2}\/\d{1,2}\b|\b\d{1,2}(?:st|nd|rd|th)\s*(?:of\s*)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(content)
-      || /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|day\s*before)\b/i.test(content);
-
-    if (regexResult && regexResult.confidence === 'high' && (regexResult.pickupTime || regexResult.returnTime)) {
-      pickupTime = regexResult.pickupTime;
-      returnTime = regexResult.returnTime;
-      confidence = 'high';
-      // If regex found times but missed dates and message has date content,
-      // fall through to AI for date-only extraction
-      if (hasDateContent && !regexResult.pickupDate && !regexResult.returnDate) {
-        this.logger.debug(`Regex found times but missed dates for ${msg.sender}, using AI for date extraction`);
-        try {
-          const datePrompt =
-            `Extract ONLY the pickup and return DATES from this renter message.\n\n` +
-            `Renter message: "${content}"\n` +
-            `Rental: ${rental.title}\n` +
-            `Rental period: ${rental.start_date ? new Date(rental.start_date).toISOString().split('T')[0] : '?'} to ${rental.end_date ? new Date(rental.end_date).toISOString().split('T')[0] : '?'}\n\n` +
-            `CRITICAL:\n` +
-            `- Pickup can be the EVENING BEFORE the rental starts (common for evening pickups)\n` +
-            `- DD/MM means day/month (European format), NOT month/day\n` +
-            `- "22/02" means 22 February, "the 22nd" means the 22nd of the rental month\n` +
-            `- If the renter mentions a date before the rental start, it's likely an evening-before pickup\n\n` +
-            `Respond ONLY:\n` +
-            `PICKUP_DATE: YYYY-MM-DD or NONE\n` +
-            `RETURN_DATE: YYYY-MM-DD or NONE`;
-          const dateResponse = await this.aiService.processExtraction(datePrompt);
-          pickupDateMatch = dateResponse.content.match(/PICKUP_DATE:\s*(\d{4}-\d{2}-\d{2})/);
-          returnDateMatch = dateResponse.content.match(/RETURN_DATE:\s*(\d{4}-\d{2}-\d{2})/);
-        } catch { /* best-effort — dates are supplementary */ }
-      } else {
-        // Wire regex dates through as synthetic matches for downstream code
-        if (regexResult.pickupDate) pickupDateMatch = [regexResult.pickupDate, regexResult.pickupDate] as unknown as RegExpMatchArray;
-        if (regexResult.returnDate) returnDateMatch = [regexResult.returnDate, regexResult.returnDate] as unknown as RegExpMatchArray;
-      }
-      this.logger.debug(`Regex extraction succeeded for ${msg.sender}: pickup=${pickupTime}, return=${returnTime}, pDate=${pickupDateMatch?.[1]}, rDate=${returnDateMatch?.[1]}`);
-    } else {
-      // Fall back to AI extraction (lightweight)
-      const extractionPrompt =
-        `Extract pickup and return times from this renter message.\n\n` +
-        `Renter message: "${content}"\n` +
-        `Rental: ${rental.title}\n` +
-        `Renter: ${rental.renter_info || msg.sender}\n\n` +
-        `Common patterns (pickup):\n` +
-        `- "pickup at 10am", "collect at 7pm", "I'll come at 11:00", "picking up at 2pm"\n` +
-        `Common patterns (return):\n` +
-        `- "return at 7pm", "bring it back at 6pm", "I'll drop it off at 5pm", "back to you by 8pm"\n` +
-        `- "returning at 11am", "drop off at 3pm", "give it back at noon"\n` +
-        `- When two times mentioned: first is usually pickup, second is return\n\n` +
-        `IGNORE these — they are NOT pickup/return times:\n` +
-        `- Arrival ETAs: "on my way, be there at 11:32", "5 mins away", "arriving at 3"\n` +
-        `- Addresses: "11 trafalgar square", "at number 7"\n` +
-        `- If the message is about arriving/being on the way, return ALL BLANK\n\n` +
-        `Respond ONLY in this exact format (use 24h time HH:MM). Leave blank if not mentioned:\n` +
-        `PICKUP_TIME: <HH:MM or blank>\n` +
-        `PICKUP_DATE: <YYYY-MM-DD or blank>\n` +
-        `RETURN_TIME: <HH:MM or blank>\n` +
-        `RETURN_DATE: <YYYY-MM-DD or blank>\n` +
-        `CONFIDENCE: <low|medium|high>`;
-
-      const response = await this.aiService.processExtraction(extractionPrompt);
-
-      const pickupTimeM = response.content.match(/PICKUP_TIME:\s*(\d{1,2}:\d{2})/);
-      pickupDateMatch = response.content.match(/PICKUP_DATE:\s*(\d{4}-\d{2}-\d{2})/);
-      const returnTimeM = response.content.match(/RETURN_TIME:\s*(\d{1,2}:\d{2})/);
-      returnDateMatch = response.content.match(/RETURN_DATE:\s*(\d{4}-\d{2}-\d{2})/);
-      const confidenceMatch = response.content.match(/CONFIDENCE:\s*(low|medium|high)/i);
-
-      pickupTime = pickupTimeM ? pickupTimeM[1] : undefined;
-      returnTime = returnTimeM ? returnTimeM[1] : undefined;
-      confidence = confidenceMatch ? confidenceMatch[1].toLowerCase() : 'low';
-    }
-
-    // Only proceed if we found at least one time with medium+ confidence
-    if (!pickupTime && !returnTime) return;
-    if (confidence === 'low') {
-      // Low confidence from AI — try to salvage individual times that look valid (HH:MM format)
-      if (pickupTime && /^\d{2}:\d{2}$/.test(pickupTime)) { /* keep pickup */ } else pickupTime = undefined;
-      if (returnTime && /^\d{2}:\d{2}$/.test(returnTime)) { /* keep return */ } else returnTime = undefined;
-      if (!pickupTime && !returnTime) {
-        this.logger.debug(`Time extraction confidence too low for message from ${msg.sender}, skipping`);
-        return;
-      }
-    }
-
-    // Slot enforcement: times must be within morning (10-12) or evening (7-9) windows
-    const pickupOutsideSlot = pickupTime && !this.isWithinSlot(pickupTime);
-    const returnOutsideSlot = returnTime && !this.isWithinSlot(returnTime);
-    if (pickupOutsideSlot || returnOutsideSlot) {
-      const parts: string[] = [];
-      if (pickupOutsideSlot) parts.push(`pickup at ${pickupTime}`);
-      if (returnOutsideSlot) parts.push(`return at ${returnTime}`);
-      this.logger.log(`Time(s) outside slots for ${rental.title}: ${parts.join(', ')}, redirecting renter`);
-      if (!this.isWriteBlocked(msg.rentalId)) {
-        try {
-          await this.hyggloService.sendMessage(msg.rentalId,
-            `I can only do morning (10am-12pm) or evening (7pm-9pm) for pickups and returns. Could you pick a time in one of those windows?`);
-        } catch { /* best-effort */ }
-      }
-      return;
-    }
-
-    // Availability validation: check for time conflicts before saving
-    const bookings = await this.prisma.booking.findMany({
-      where: { rental_id: rental.id, status: 'confirmed' },
-    });
-
-    for (const booking of bookings) {
-      if (pickupTime && booking.start_date) {
-        const pickupConflict = await this.calendarService.checkTimeConflict(
-          booking.item_name, booking.start_date, pickupTime, 'pickup', rental.id,
-        );
-        if (pickupConflict.conflict) {
-          this.logger.warn(`Time conflict for ${rental.title}: ${pickupConflict.reason}`);
-          if (!this.isWriteBlocked(msg.rentalId)) {
-            try {
-              await this.hyggloService.sendMessage(msg.rentalId,
-                `That pickup time won't quite work — I need a 1-hour buffer between rentals for that item. Could you try a slightly different time?`);
-            } catch { /* best-effort */ }
-          }
-          return;
-        }
-      }
-      if (returnTime && booking.end_date) {
-        const returnConflict = await this.calendarService.checkTimeConflict(
-          booking.item_name, booking.end_date, returnTime, 'return', rental.id,
-        );
-        if (returnConflict.conflict) {
-          this.logger.warn(`Time conflict for ${rental.title}: ${returnConflict.reason}`);
-          if (!this.isWriteBlocked(msg.rentalId)) {
-            try {
-              await this.hyggloService.sendMessage(msg.rentalId,
-                `That return time won't quite work — I need a 1-hour buffer between rentals for that item. Could you try a slightly different time?`);
-            } catch { /* best-effort */ }
-          }
-          return;
-        }
-      }
-    }
-
-    // Update booking times + dates
-    const pickupDateStr = pickupDateMatch ? pickupDateMatch[1] : undefined;
-    const returnDateStr = returnDateMatch ? returnDateMatch[1] : undefined;
-    const updated = await this.calendarService.updateBookingTimes(rental.id, pickupTime, returnTime, pickupDateStr, returnDateStr);
-
-    if (!updated || updated.count === 0) {
-      this.logger.debug(`No bookings updated for rental ${rental.id} (may not have linked bookings yet)`);
-    }
-
-    // Extension detection: if pickup/return dates fall outside rental period, alert Daniel
-    const rentalStartDate = rental.start_date ? new Date(rental.start_date) : null;
-    const rentalEndDate = rental.end_date ? new Date(rental.end_date) : null;
-
-    if (rentalStartDate && pickupDateStr) {
-      const pDate = new Date(pickupDateStr);
-      const daysBefore = (rentalStartDate.getTime() - pDate.getTime()) / 86400000;
-      // Evening-before pickup (≤1 day early) is normal. More than that needs extension.
-      if (daysBefore > 1.5) {
-        this.logger.warn(`Extension needed: ${rental.title} pickup ${pickupDateStr} is ${daysBefore.toFixed(1)}d before start`);
-        this.telegramService.sendDecisionPrompt({
-          type: 'escalation',
-          rentalId: String(rental.id),
-          listingId: msg.rentalId,
-          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
-          renterName: msg.sender || rental.renter_info || 'Unknown',
-          renterLastMessage: content,
-          contextSummary: `Pickup ${pickupDateStr} is ${daysBefore.toFixed(0)}d before rental start ${rentalStartDate.toISOString().slice(0, 10)}. Extension needed?`,
-          displayText:
-            `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
-            `\u251c \ud83d\udce6 ${rental.title}\n` +
-            `\u251c \ud83d\udc64 ${msg.sender || rental.renter_info}\n` +
-            `\u251c \ud83d\udcc5 Rental: ${rentalStartDate.toISOString().slice(0, 10)} to ${rentalEndDate?.toISOString().slice(0, 10) || '?'}\n` +
-            `\u2514 \u26a0\ufe0f Pickup: ${pickupDateStr} (${daysBefore.toFixed(0)} days early)`,
-          holdMessageSent: false,
-          options: [
-            { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover pickup date ${pickupDateStr}` },
-            { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept early pickup without extension` },
-            { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
-          ],
-        });
-      }
-    }
-    if (rentalEndDate && returnDateStr) {
-      const rDate = new Date(returnDateStr);
-      const daysAfter = (rDate.getTime() - rentalEndDate.getTime()) / 86400000;
-      if (daysAfter > 0.5) {
-        this.logger.warn(`Extension needed: ${rental.title} return ${returnDateStr} is ${daysAfter.toFixed(1)}d after end`);
-        this.telegramService.sendDecisionPrompt({
-          type: 'escalation',
-          rentalId: String(rental.id),
-          listingId: msg.rentalId,
-          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
-          renterName: msg.sender || rental.renter_info || 'Unknown',
-          renterLastMessage: content,
-          contextSummary: `Return ${returnDateStr} is ${daysAfter.toFixed(0)}d after rental end ${rentalEndDate.toISOString().slice(0, 10)}. Extension needed?`,
-          displayText:
-            `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
-            `\u251c \ud83d\udce6 ${rental.title}\n` +
-            `\u251c \ud83d\udc64 ${msg.sender || rental.renter_info}\n` +
-            `\u251c \ud83d\udcc5 Rental: ${rentalStartDate?.toISOString().slice(0, 10) || '?'} to ${rentalEndDate.toISOString().slice(0, 10)}\n` +
-            `\u2514 \u26a0\ufe0f Return: ${returnDateStr} (${daysAfter.toFixed(0)} days late)`,
-          holdMessageSent: false,
-          options: [
-            { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover return date ${returnDateStr}` },
-            { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept late return without extension` },
-            { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
-          ],
-        });
-      }
-    }
-
-    // Check what we now have in the booking after this update
-    const currentBooking = await this.prisma.booking.findFirst({
-      where: { rental_id: rental.id, status: 'confirmed' },
-      select: { pickup_time: true, return_time: true },
-    });
-    const hasBothTimes = !!(currentBooking?.pickup_time && currentBooking?.return_time);
-
-    // Store as memory
-    const renterName = rental.renter_info || msg.sender;
-    const memoryParts: string[] = [];
-    if (pickupTime) {
-      const dateStr = pickupDateMatch ? ` on ${pickupDateMatch[1]}` : '';
-      memoryParts.push(`pickup at ${pickupTime}${dateStr}`);
-    }
-    if (returnTime) {
-      const dateStr = returnDateMatch ? ` on ${returnDateMatch[1]}` : '';
-      memoryParts.push(`return at ${returnTime}${dateStr}`);
-    }
-
-    const memoryContent = `${renterName} confirmed ${memoryParts.join(' and ')} for ${rental.title}`;
-    await this.memoryService.storeMemory('fact', `Time confirmed: ${rental.title}`, memoryContent, 7);
-
-    // ONLY set times_status=confirmed when BOTH pickup AND return are set
-    try {
-      await this.prisma.follow_up_state.updateMany({
-        where: { rental_id: rental.id },
-        data: { times_status: hasBothTimes ? 'confirmed' : 'tentative' },
-      });
-    } catch { /* state might not exist */ }
-
-    // Confirm back to renter — and ask for the missing time if only one was provided
-    if (!this.isWriteBlocked(msg.rentalId)) {
-      const confirmParts: string[] = [];
-      if (pickupTime) confirmParts.push(`pickup at ${pickupTime}`);
-      if (returnTime) confirmParts.push(`return at ${returnTime}`);
-
-      let replyMsg = `${confirmParts.join(' and ')} — locked in!`;
-      if (!hasBothTimes) {
-        const missing = !currentBooking?.pickup_time ? 'pickup' : 'return';
-        replyMsg += ` I still need your ${missing} time — morning (10am-12pm) or evening (7pm-9pm) slots available. Which works?`;
-      }
-      try {
-        await this.hyggloService.sendMessage(msg.rentalId, replyMsg);
-      } catch { /* best-effort */ }
-    }
-
-    this.logger.log(`Time ${hasBothTimes ? 'CONFIRMED' : 'partial'} for ${rental.title}: pickup=${currentBooking?.pickup_time || 'N/A'}, return=${currentBooking?.return_time || 'N/A'} (confidence: ${confidence})`);
-  }
-
-  // --- Extract times from chat history — DB-first, regex-only, fast & fail-safe ---
-
-  async extractTimesFromChatHistory(
-    rental: any,
-    prefetchedMessages?: { sender: string; content: string; timestamp: string }[],
+    triggerMsg?: HyggloMessage,
   ): Promise<{ pickupTime?: string; returnTime?: string; pickupDate?: string; returnDate?: string } | null> {
-    // 1. Get messages — try DB first, then Hygglo API as fallback, then prefetched
+    // 1. Fetch full conversation (Hygglo API → DB fallback)
     const chatId = `rental:${rental.id}`;
     let messages: { sender?: string; role?: string; content: string; timestamp?: string }[] = [];
 
-    // Try Hygglo API FIRST — it has the COMPLETE chat (including Daniel's direct messages)
-    // DB conversation table only stores bot-processed messages and misses direct exchanges
     if (rental.listing_id) {
       try {
         const hyggloMessages = await Promise.race([
@@ -4949,21 +4404,14 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
         ]);
         if (hyggloMessages.length > 0) {
           messages = hyggloMessages.slice(-20);
-          // Cache in DB for future reads
           this.cacheMessagesInDb(chatId, hyggloMessages).catch(() => {});
         }
       } catch (err) {
-        this.logger.debug(`extractTimesFromChatHistory: Hygglo API failed for ${rental.title}: ${err.message}`);
+        this.logger.debug(`extractAndUpdateTimes: Hygglo API failed for ${rental.title}: ${err.message}`);
       }
     }
 
-    // Fallback 1: use prefetched messages if Hygglo failed
-    if (messages.length === 0 && prefetchedMessages && prefetchedMessages.length > 0) {
-      messages = prefetchedMessages.slice(-20);
-      this.cacheMessagesInDb(chatId, prefetchedMessages).catch(() => {});
-    }
-
-    // Fallback 2: DB-stored conversation history (incomplete but better than nothing)
+    // Fallback: DB-stored conversation history
     if (messages.length === 0) {
       try {
         const dbMessages = await this.prisma.conversation.findMany({
@@ -4985,22 +4433,60 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     }
 
     if (messages.length === 0) {
-      this.logger.debug(`extractTimesFromChatHistory: no messages for ${rental.title}`);
+      this.logger.debug(`extractAndUpdateTimes: no messages for ${rental.title}`);
       return null;
     }
 
-    // 2. Use AI to find the LAST AGREED AND CONFIRMED pickup & return times
-    //    Renters change times, leave out AM/PM, negotiate — only AI can read context.
+    // 2. Build transcript and pre-filter
     const transcript = messages
-      .map(m => `${m.role === 'assistant' ? 'Bot' : 'Renter'}: ${m.content}`)
+      .map(m => {
+        const role = m.sender ? (m.sender === 'Owner' ? 'Owner' : 'Renter') : (m.role === 'assistant' ? 'Owner' : 'Renter');
+        return `${role}: ${m.content}`;
+      })
       .join('\n');
 
-    // Quick pre-filter: skip if no time-like content at all
     if (!/\d{1,2}\s*(am|pm|:\d{2})|\bmorning\b|\bevening\b|\bafternoon\b|\bnoon\b/i.test(transcript)) {
-      this.logger.debug(`extractTimesFromChatHistory: no time content in ${messages.length} msgs for ${rental.title}`);
+      this.logger.debug(`extractAndUpdateTimes: no time content in ${messages.length} msgs for ${rental.title}`);
       return null;
     }
 
+    // Deferral detection on trigger message
+    if (triggerMsg && this.detectTimeDeferral(triggerMsg.content)) {
+      const existingBooking = await this.prisma.booking.findFirst({
+        where: { rental_id: rental.id, status: 'confirmed' },
+        select: { pickup_time: true, return_time: true },
+      });
+      const missingBoth = !existingBooking?.pickup_time && !existingBooking?.return_time;
+      const missing = missingBoth ? 'pickup and return times'
+        : !existingBooking?.pickup_time ? 'pickup time' : 'return time';
+      if (!existingBooking?.pickup_time || !existingBooking?.return_time) {
+        this.logger.log(`Time deferral detected from ${triggerMsg.sender} for ${rental.title}, still need ${missing}`);
+        if (!this.isWriteBlocked(triggerMsg.rentalId)) {
+          try {
+            await this.hyggloService.sendMessage(triggerMsg.rentalId,
+              `I do need your exact ${missing} to lock in the booking — we have morning slots (10am-12pm) and evening slots (7pm-9pm). Which works best for you?`);
+          } catch { /* best-effort */ }
+        }
+        return null;
+      }
+    }
+
+    // Reject time ranges on trigger message
+    if (triggerMsg) {
+      const detectedRange = this.detectTimeRange(triggerMsg.content);
+      if (detectedRange) {
+        this.logger.log(`Time range detected ("${detectedRange}") from ${triggerMsg.sender}, asking for exact time`);
+        if (!this.isWriteBlocked(triggerMsg.rentalId)) {
+          try {
+            await this.hyggloService.sendMessage(triggerMsg.rentalId,
+              `I just need an exact time rather than a range - could you confirm a specific time? For example, 'pickup at 10am' works great.`);
+          } catch { /* best-effort */ }
+        }
+        return null;
+      }
+    }
+
+    // 3. AI extraction from full conversation
     const startDateStr = rental.start_date ? new Date(rental.start_date).toISOString().split('T')[0] : '?';
     const endDateStr = rental.end_date ? new Date(rental.end_date).toISOString().split('T')[0] : '?';
 
@@ -5011,6 +4497,7 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       `=== CONVERSATION ===\n${transcript}\n=== END ===\n\n` +
       `INSTRUCTIONS:\n` +
       `- Find the LAST pickup and return times that were AGREED or CONFIRMED by both parties.\n` +
+      `- If the renter changed times during the conversation, use the MOST RECENT agreed time, not the first one.\n` +
       `- Renters often change their mind, negotiate, or give vague times — only use the FINAL agreed version.\n` +
       `- If the renter said a time and the bot confirmed/acknowledged it, that counts as agreed.\n` +
       `- Pickup and return are SEPARATE events — extract each independently from the conversation.\n` +
@@ -5021,7 +4508,8 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       `- Times like "7pm" = 19:00, "10am" = 10:00, "6.30" with PM context = 18:30.\n` +
       `- If no times were discussed at all, output NONE for both.\n` +
       `- IMPORTANT: Do NOT confuse arrival ETAs ("I'll be there at 20:32", "on my way, 10 mins") with the AGREED pickup/return time slot. ETAs are ad-hoc and should be IGNORED.\n` +
-      `- If the renter corrected themselves (e.g., first said 11am then 8pm), use the LAST corrected time.\n\n` +
+      `- If the renter corrected themselves (e.g., first said 11am then 8pm), use the LAST corrected time.\n` +
+      `- Morning pickup slots are 10am-12pm, evening slots are 7pm-9:30pm. Flag if the renter's time falls outside these windows.\n\n` +
       `CRITICAL — DATES:\n` +
       `- The rental period is ${startDateStr} to ${endDateStr}, but pickup/return dates may DIFFER.\n` +
       `- Pickup can be the EVENING BEFORE the rental starts (e.g., evening of ${startDateStr} minus 1 day).\n` +
@@ -5036,14 +4524,23 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       `- IMPORTANT: Delivery can be ONE-WAY (pickup only or return only). If they say "one-way delivery" or "only need 1 way", mark only the relevant direction as DELIVERY.\n` +
       `- If delivery was discussed but NOT confirmed/agreed, output COLLECTION (the default).\n` +
       `- If delivery was never discussed, output UNKNOWN.\n\n` +
-      `Respond ONLY with these six lines:\n` +
+      `CANCELLATION/CHANGE DETECTION:\n` +
+      `- If the renter's LATEST message(s) indicate they want to CANCEL, can't make it, need to reschedule, or are backing out, set STATUS to CANCELLED.\n` +
+      `- Signals: "I can't make it", "need to cancel", "something came up", "won't be able to", "I'm going to have to cancel", "can we reschedule", "not going to work anymore", "I need to pull out".\n` +
+      `- If the renter just changed times (not cancelled), that's still ACTIVE — extract the new times.\n` +
+      `- If conversation is proceeding normally, set STATUS to ACTIVE.\n\n` +
+      `Respond ONLY with these nine lines:\n` +
       `PICKUP_TIME: HH:MM or NONE\n` +
       `PICKUP_DATE: YYYY-MM-DD or NONE\n` +
       `PICKUP_METHOD: DELIVERY or COLLECTION or UNKNOWN\n` +
       `RETURN_TIME: HH:MM or NONE\n` +
       `RETURN_DATE: YYYY-MM-DD or NONE\n` +
-      `RETURN_METHOD: DELIVERY or COLLECTION or UNKNOWN`;
+      `RETURN_METHOD: DELIVERY or COLLECTION or UNKNOWN\n` +
+      `STATUS: ACTIVE or CANCELLED\n` +
+      `CONFIDENCE: HIGH or LOW\n` +
+      `NOTES: <any relevant context about time changes, cancellation signals, or ambiguity>`;
 
+    const listingId = triggerMsg?.rentalId || rental.listing_id;
     let pickupTime: string | undefined;
     let returnTime: string | undefined;
     let pickupDate: string | undefined;
@@ -5059,60 +4556,278 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       const rdMatch = response.content.match(/RETURN_DATE:\s*(\d{4}-\d{2}-\d{2})/);
       const pmMatch = response.content.match(/PICKUP_METHOD:\s*(DELIVERY|COLLECTION)/i);
       const rmMatch = response.content.match(/RETURN_METHOD:\s*(DELIVERY|COLLECTION)/i);
+      const confMatch = response.content.match(/CONFIDENCE:\s*(HIGH|LOW)/i);
+      const statusMatch = response.content.match(/STATUS:\s*(ACTIVE|CANCELLED)/i);
+      const notesMatch = response.content.match(/NOTES:\s*(.+)/i);
       pickupTime = pMatch ? pMatch[1].padStart(5, '0') : undefined;
       returnTime = rMatch ? rMatch[1].padStart(5, '0') : undefined;
       pickupDate = pdMatch ? pdMatch[1] : undefined;
       returnDate = rdMatch ? rdMatch[1] : undefined;
       pickupMethod = pmMatch ? pmMatch[1].toLowerCase() : undefined;
       returnMethod = rmMatch ? rmMatch[1].toLowerCase() : undefined;
+
+      // CANCELLATION detected — escalate to Daniel immediately
+      if (statusMatch && statusMatch[1].toUpperCase() === 'CANCELLED') {
+        const notes = notesMatch ? notesMatch[1].trim() : 'Renter appears to be cancelling';
+        this.logger.warn(`CANCELLATION DETECTED for ${rental.title}: ${notes}`);
+        this.telegramService.sendDecisionPrompt({
+          type: 'escalation',
+          rentalId: String(rental.id),
+          listingId: listingId || '',
+          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+          renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
+          renterLastMessage: triggerMsg?.content || notes,
+          contextSummary: `Renter may be cancelling: ${notes}`,
+          displayText:
+            `\ud83d\udea8 *POSSIBLE CANCELLATION*\n\n` +
+            `\u251c \ud83d\udce6 ${rental.title}\n` +
+            `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info || 'Unknown'}\n` +
+            `\u2514 \ud83d\udcdd ${notes.substring(0, 200)}`,
+          holdMessageSent: false,
+          options: [
+            { label: 'Contact renter', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
+            { label: 'Cancel rental', emoji: '\u274c', intent: 'decline', aiInstruction: 'Process the cancellation and inform the renter' },
+            { label: 'Keep rental', emoji: '\u2705', intent: 'approve', aiInstruction: 'Rental stays active, check in with renter' },
+          ],
+        });
+        // Don't update times — wait for Daniel's decision
+        return null;
+      }
+
+      // LOW confidence — skip the update entirely
+      if (confMatch && confMatch[1].toUpperCase() === 'LOW') {
+        this.logger.debug(`extractAndUpdateTimes: LOW confidence for ${rental.title}, skipping`);
+        return null;
+      }
     } catch (aiErr) {
-      this.logger.debug(`extractTimesFromChatHistory AI failed for ${rental.title}: ${aiErr.message}`);
+      this.logger.debug(`extractAndUpdateTimes AI failed for ${rental.title}: ${aiErr.message}`);
       return null;
     }
 
     if (!pickupTime && !returnTime) {
-      this.logger.debug(`extractTimesFromChatHistory: AI found no confirmed times in ${messages.length} msgs for ${rental.title}`);
+      this.logger.debug(`extractAndUpdateTimes: AI found no confirmed times in ${messages.length} msgs for ${rental.title}`);
       return null;
     }
 
-    // 3. GUARD: Don't overwrite already-confirmed times with potentially wrong AI extraction.
-    //    If both times are already set, only update dates (which are supplementary).
-    //    Existing times come from real-time regex extraction on the actual message — more reliable.
+    // 4. Slot validation — times must be within morning (9:45-12:00) or evening (19:00-21:30)
+    //    Only enforce for real-time messages (triggerMsg present).
+    //    For batch re-extraction, accept whatever the conversation agreed — just log a warning.
+    const pickupOutsideSlot = pickupTime && !this.isWithinSlot(pickupTime);
+    const returnOutsideSlot = returnTime && !this.isWithinSlot(returnTime);
+    if (pickupOutsideSlot || returnOutsideSlot) {
+      const parts: string[] = [];
+      if (pickupOutsideSlot) parts.push(`pickup at ${pickupTime}`);
+      if (returnOutsideSlot) parts.push(`return at ${returnTime}`);
+
+      if (triggerMsg) {
+        // Real-time: reject and ask renter to pick a valid slot
+        this.logger.log(`Time(s) outside slots for ${rental.title}: ${parts.join(', ')}, redirecting renter`);
+        if (listingId && !this.isWriteBlocked(listingId)) {
+          try {
+            await this.hyggloService.sendMessage(listingId,
+              `I can only do morning (10am-12pm) or evening (7pm-9pm) for pickups and returns. Could you pick a time in one of those windows?`);
+          } catch { /* best-effort */ }
+        }
+        // Drop invalid times but keep valid ones
+        if (pickupOutsideSlot) pickupTime = undefined;
+        if (returnOutsideSlot) returnTime = undefined;
+        if (!pickupTime && !returnTime) return null;
+      } else {
+        // Batch re-extraction: accept the time (already agreed in conversation) but warn Daniel
+        this.logger.warn(`Time(s) outside slots for ${rental.title}: ${parts.join(', ')} — accepted from conversation history`);
+        try {
+          await this.telegramService.sendProactiveMessage(
+            `\u26a0\ufe0f *Out-of-slot time* — ${rental.title}\n${parts.join(', ')}\nAccepted from conversation (already agreed)`,
+          );
+        } catch { /* best-effort */ }
+      }
+    }
+
+    // 5. Change detection — compare AI-extracted times against current DB times
     const existingBooking = await this.prisma.booking.findFirst({
       where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
-      select: { pickup_time: true, return_time: true, pickup_date: true, return_date: true, pickup_method: true, return_method: true },
+      select: { pickup_time: true, return_time: true, pickup_date: true, return_date: true, pickup_method: true, return_method: true, item_name: true, start_date: true, end_date: true },
     });
-    if (existingBooking?.pickup_time && existingBooking?.return_time) {
-      // Both times already set — only update dates and delivery methods if they're missing
-      const needPickupDate = !existingBooking.pickup_date && pickupDate;
-      const needReturnDate = !existingBooking.return_date && returnDate;
-      const needPickupMethod = !existingBooking.pickup_method && pickupMethod;
-      const needReturnMethod = !existingBooking.return_method && returnMethod;
-      if (needPickupDate || needReturnDate || needPickupMethod || needReturnMethod) {
-        await this.calendarService.updateBookingTimes(
-          rental.id,
-          undefined, // don't touch pickup_time
-          undefined, // don't touch return_time
-          needPickupDate ? pickupDate : undefined,
-          needReturnDate ? returnDate : undefined,
-          needPickupMethod ? pickupMethod : undefined,
-          needReturnMethod ? returnMethod : undefined,
-        );
-        this.logger.log(`extractTimesFromChatHistory: times already set for ${rental.title}, only updated dates/methods: pDate=${pickupDate}, rDate=${returnDate}, pMethod=${pickupMethod}, rMethod=${returnMethod}`);
-      } else {
-        this.logger.debug(`extractTimesFromChatHistory: skipping ${rental.title} — times already confirmed (pickup=${existingBooking.pickup_time}, return=${existingBooking.return_time})`);
+
+    const isPickupChanged = pickupTime && existingBooking?.pickup_time && pickupTime !== existingBooking.pickup_time;
+    const isReturnChanged = returnTime && existingBooking?.return_time && returnTime !== existingBooking.return_time;
+    const isRearrangement = isPickupChanged || isReturnChanged;
+
+    // 6. Conflict check for changed times
+    if (isRearrangement) {
+      const bookings = await this.prisma.booking.findMany({
+        where: { rental_id: rental.id, status: 'confirmed' },
+      });
+      const conflictItems: string[] = [];
+      for (const bk of bookings) {
+        if (isReturnChanged && returnTime && bk.end_date) {
+          const conflict = await this.calendarService.checkTimeConflict(
+            bk.item_name, bk.end_date, returnTime, 'return', rental.id,
+          );
+          if (conflict.conflict) conflictItems.push(bk.item_name);
+        }
+        if (isPickupChanged && pickupTime && bk.start_date) {
+          const conflict = await this.calendarService.checkTimeConflict(
+            bk.item_name, bk.start_date, pickupTime, 'pickup', rental.id,
+          );
+          if (conflict.conflict) conflictItems.push(bk.item_name);
+        }
       }
-      return { pickupTime: existingBooking.pickup_time, returnTime: existingBooking.return_time, pickupDate, returnDate };
+
+      if (conflictItems.length > 0) {
+        // Hard conflict — escalate to Daniel
+        const changeDesc = [
+          isPickupChanged ? `pickup ${existingBooking.pickup_time} → ${pickupTime}` : '',
+          isReturnChanged ? `return ${existingBooking.return_time} → ${returnTime}` : '',
+        ].filter(Boolean).join(', ');
+
+        this.logger.warn(`TIME CHANGE CONFLICT for ${rental.title}: ${changeDesc} — conflicts on ${conflictItems.join(', ')}`);
+        this.telegramService.sendDecisionPrompt({
+          type: 'escalation',
+          rentalId: String(rental.id),
+          listingId: listingId || '',
+          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+          renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
+          renterLastMessage: triggerMsg?.content || '',
+          contextSummary: `Time change CONFLICT: ${changeDesc}. Conflicts with: ${conflictItems.join(', ')}`,
+          displayText:
+            `\u23f0 *TIME CHANGE CONFLICT*\n\n` +
+            `\u251c \ud83d\udce6 ${rental.title}\n` +
+            `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info || 'Unknown'}\n` +
+            `\u251c \ud83d\udcc5 Current: pickup ${existingBooking.pickup_time}, return ${existingBooking.return_time}\n` +
+            `\u251c \u27a1\ufe0f Requested: ${changeDesc}\n` +
+            `\u2514 \u26a0\ufe0f Conflict: ${conflictItems.join(', ')}`,
+          holdMessageSent: false,
+          options: [
+            { label: 'Approve change', emoji: '\u2705', intent: 'approve', aiInstruction: `Update the booking times as requested: ${changeDesc}` },
+            { label: 'Keep current times', emoji: '\u274c', intent: 'decline', aiInstruction: `Inform the renter the time change was not approved due to scheduling conflict. Current times remain: pickup ${existingBooking.pickup_time}, return ${existingBooking.return_time}` },
+            { label: 'Respond manually', emoji: '\ud83d\udc41', intent: 'custom', aiInstruction: '' },
+          ],
+        });
+        return { pickupTime: existingBooking.pickup_time || undefined, returnTime: existingBooking.return_time || undefined, pickupDate, returnDate };
+      }
+
+      // No conflict — auto-save + info notification to Daniel
+      const changeDesc = [
+        isPickupChanged ? `pickup ${existingBooking.pickup_time} → ${pickupTime}` : '',
+        isReturnChanged ? `return ${existingBooking.return_time} → ${returnTime}` : '',
+      ].filter(Boolean).join(', ');
+      this.logger.log(`TIME REARRANGED for ${rental.title}: ${changeDesc} (auto-saved, no conflict)`);
+
+      // Info notification (not escalation — no action needed)
+      try {
+        await this.telegramService.sendProactiveMessage(
+          `\u2139\ufe0f *Time rearranged* — ${rental.title}\n` +
+          `${changeDesc}\n` +
+          `Auto-saved (no conflicts)`,
+        );
+      } catch { /* best-effort */ }
     }
 
-    // Only update times that are currently missing
-    const finalPickup = existingBooking?.pickup_time ? undefined : pickupTime;
-    const finalReturn = existingBooking?.return_time ? undefined : returnTime;
-    if (finalPickup || finalReturn || pickupDate || returnDate || pickupMethod || returnMethod) {
-      await this.calendarService.updateBookingTimes(rental.id, finalPickup, finalReturn, pickupDate, returnDate, pickupMethod, returnMethod);
+    // 7. Availability validation for NEW times (not rearrangements — those were checked above)
+    if (!isRearrangement) {
+      const bookings = await this.prisma.booking.findMany({
+        where: { rental_id: rental.id, status: 'confirmed' },
+      });
+      for (const booking of bookings) {
+        if (pickupTime && booking.start_date) {
+          const pickupConflict = await this.calendarService.checkTimeConflict(
+            booking.item_name, booking.start_date, pickupTime, 'pickup', rental.id,
+          );
+          if (pickupConflict.conflict) {
+            this.logger.warn(`Time conflict for ${rental.title}: ${pickupConflict.reason}`);
+            if (listingId && !this.isWriteBlocked(listingId)) {
+              try {
+                await this.hyggloService.sendMessage(listingId,
+                  `That pickup time won't quite work — I need a 1-hour buffer between rentals for that item. Could you try a slightly different time?`);
+              } catch { /* best-effort */ }
+            }
+            return null;
+          }
+        }
+        if (returnTime && booking.end_date) {
+          const returnConflict = await this.calendarService.checkTimeConflict(
+            booking.item_name, booking.end_date, returnTime, 'return', rental.id,
+          );
+          if (returnConflict.conflict) {
+            this.logger.warn(`Time conflict for ${rental.title}: ${returnConflict.reason}`);
+            if (listingId && !this.isWriteBlocked(listingId)) {
+              try {
+                await this.hyggloService.sendMessage(listingId,
+                  `That return time won't quite work — I need a 1-hour buffer between rentals for that item. Could you try a slightly different time?`);
+              } catch { /* best-effort */ }
+            }
+            return null;
+          }
+        }
+      }
     }
 
-    // 4. Update follow_up_state
+    // 8. Save times — always overwrite with conversation-level truth
+    await this.calendarService.updateBookingTimes(rental.id, pickupTime, returnTime, pickupDate, returnDate, pickupMethod, returnMethod);
+
+    // 9. Extension detection: if pickup/return dates fall outside rental period, alert Daniel
+    const rentalStartDate = rental.start_date ? new Date(rental.start_date) : null;
+    const rentalEndDate = rental.end_date ? new Date(rental.end_date) : null;
+
+    if (rentalStartDate && pickupDate) {
+      const pDate = new Date(pickupDate);
+      const daysBefore = (rentalStartDate.getTime() - pDate.getTime()) / 86400000;
+      if (daysBefore > 1.5) {
+        this.logger.warn(`Extension needed: ${rental.title} pickup ${pickupDate} is ${daysBefore.toFixed(1)}d before start`);
+        this.telegramService.sendDecisionPrompt({
+          type: 'escalation',
+          rentalId: String(rental.id),
+          listingId: listingId || '',
+          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+          renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
+          renterLastMessage: triggerMsg?.content || '',
+          contextSummary: `Pickup ${pickupDate} is ${daysBefore.toFixed(0)}d before rental start ${rentalStartDate.toISOString().slice(0, 10)}. Extension needed?`,
+          displayText:
+            `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
+            `\u251c \ud83d\udce6 ${rental.title}\n` +
+            `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info}\n` +
+            `\u251c \ud83d\udcc5 Rental: ${rentalStartDate.toISOString().slice(0, 10)} to ${rentalEndDate?.toISOString().slice(0, 10) || '?'}\n` +
+            `\u2514 \u26a0\ufe0f Pickup: ${pickupDate} (${daysBefore.toFixed(0)} days early)`,
+          holdMessageSent: false,
+          options: [
+            { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover pickup date ${pickupDate}` },
+            { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept early pickup without extension` },
+            { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
+          ],
+        });
+      }
+    }
+    if (rentalEndDate && returnDate) {
+      const rDate = new Date(returnDate);
+      const daysAfter = (rDate.getTime() - rentalEndDate.getTime()) / 86400000;
+      if (daysAfter > 0.5) {
+        this.logger.warn(`Extension needed: ${rental.title} return ${returnDate} is ${daysAfter.toFixed(1)}d after end`);
+        this.telegramService.sendDecisionPrompt({
+          type: 'escalation',
+          rentalId: String(rental.id),
+          listingId: listingId || '',
+          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+          renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
+          renterLastMessage: triggerMsg?.content || '',
+          contextSummary: `Return ${returnDate} is ${daysAfter.toFixed(0)}d after rental end ${rentalEndDate.toISOString().slice(0, 10)}. Extension needed?`,
+          displayText:
+            `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
+            `\u251c \ud83d\udce6 ${rental.title}\n` +
+            `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info}\n` +
+            `\u251c \ud83d\udcc5 Rental: ${rentalStartDate?.toISOString().slice(0, 10) || '?'} to ${rentalEndDate.toISOString().slice(0, 10)}\n` +
+            `\u2514 \u26a0\ufe0f Return: ${returnDate} (${daysAfter.toFixed(0)} days late)`,
+          holdMessageSent: false,
+          options: [
+            { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover return date ${returnDate}` },
+            { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept late return without extension` },
+            { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
+          ],
+        });
+      }
+    }
+
+    // 10. Update follow_up_state
     const currentBooking = await this.prisma.booking.findFirst({
       where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
       select: { pickup_time: true, return_time: true },
@@ -5125,7 +4840,7 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       });
     } catch { /* state might not exist */ }
 
-    // 5. Store as memory
+    // 11. Store as memory
     const renterName = rental.renter_info || 'Unknown';
     const memoryParts: string[] = [];
     if (pickupTime) memoryParts.push(`pickup at ${pickupTime}${pickupMethod === 'delivery' ? ' (Addison Lee delivery)' : ''}`);
@@ -5133,8 +4848,26 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     const memoryContent = `${renterName} agreed ${memoryParts.join(' and ')} for ${rental.title} (from chat)`;
     await this.memoryService.storeMemory('fact', `Agreed times: ${rental.title}`, memoryContent, 8);
 
+    // 12. Confirm back to renter — and ask for the missing time if only one was provided
+    if (listingId && !this.isWriteBlocked(listingId) && triggerMsg) {
+      const confirmParts: string[] = [];
+      if (pickupTime) confirmParts.push(`pickup at ${pickupTime}`);
+      if (returnTime) confirmParts.push(`return at ${returnTime}`);
+
+      let replyMsg = isRearrangement
+        ? `Updated — ${confirmParts.join(' and ')} now.`
+        : `${confirmParts.join(' and ')} — locked in!`;
+      if (!hasBothTimes) {
+        const missing = !currentBooking?.pickup_time ? 'pickup' : 'return';
+        replyMsg += ` I still need your ${missing} time — morning (10am-12pm) or evening (7pm-9pm) slots available. Which works?`;
+      }
+      try {
+        await this.hyggloService.sendMessage(listingId, replyMsg);
+      } catch { /* best-effort */ }
+    }
+
     this.logger.log(
-      `extractTimesFromChatHistory for ${rental.title}: pickup=${pickupTime || 'N/A'}[${pickupMethod || '?'}], return=${returnTime || 'N/A'}[${returnMethod || '?'}] (${messages.length} msgs scanned, DB-first)`,
+      `extractAndUpdateTimes for ${rental.title}: pickup=${pickupTime || 'N/A'}[${pickupMethod || '?'}], return=${returnTime || 'N/A'}[${returnMethod || '?'}]${isRearrangement ? ' (REARRANGED)' : ''} (${messages.length} msgs scanned)`,
     );
 
     return { pickupTime, returnTime, pickupDate, returnDate };
@@ -5246,7 +4979,9 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       const now = new Date();
       const next7d = new Date(now.getTime() + 7 * 86400000);
 
-      // Find confirmed bookings with missing times starting within 7 days or ongoing
+      // Find confirmed bookings starting within 7 days or ongoing
+      // Re-extract ALL (not just null times) — conversation-level extraction
+      // is the source of truth and can fix previously wrong times
       const bookingsNeedingTimes = await this.prisma.booking.findMany({
         where: {
           status: 'confirmed',
@@ -5254,7 +4989,6 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
             { start_date: { gte: now, lte: next7d } },
             { start_date: { lte: now }, end_date: { gte: now } },
           ],
-          AND: [{ OR: [{ pickup_time: null }, { return_time: null }] }],
         },
         include: { rental: true },
       });
@@ -5271,7 +5005,7 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
         if (!rental) continue;
 
         try {
-          const result = await this.extractTimesFromChatHistory(rental);
+          const result = await this.extractAndUpdateTimes(rental);
           if (result && (result.pickupTime || result.returnTime)) {
             extracted++;
             this.logger.log(

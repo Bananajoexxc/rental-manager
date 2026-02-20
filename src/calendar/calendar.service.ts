@@ -537,7 +537,8 @@ export class CalendarService implements OnModuleInit {
   }
 
   /**
-   * Sanitize an extracted time: reject times outside business hours (07:00-22:00).
+   * Sanitize an extracted time: reject times outside allowed pickup/return slots.
+   * Morning: 9:45-12:00, Evening: 19:00-21:30.
    * If time is 01:00-06:59, assume AM/PM conversion error and add 12 hours.
    */
   private sanitizeTime(time: string): string | null {
@@ -549,8 +550,12 @@ export class CalendarService implements OnModuleInit {
     if (hour >= 1 && hour <= 6) {
       hour += 12;
     }
-    if (hour < 7 || hour > 22) return null; // outside 07:00-22:00
-    return `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+    // Must be within operational slots: morning 9:45-12:00 OR evening 19:00-21:30
+    const mins = hour * 60 + min;
+    if ((mins >= 585 && mins <= 720) || (mins >= 1140 && mins <= 1290)) {
+      return `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+    }
+    return null; // reject anything outside slots
   }
 
   async updateBookingTimes(
@@ -581,7 +586,7 @@ export class CalendarService implements OnModuleInit {
       if (sanitized) {
         updateData.pickup_time = sanitized;
       } else {
-        this.logger.warn(`updateBookingTimes: rejected pickup time ${pickupTime} (outside 07:00-22:00) for rental ${rentalId}`);
+        this.logger.warn(`updateBookingTimes: rejected pickup time ${pickupTime} (outside allowed slots) for rental ${rentalId}`);
       }
     }
     if (returnTime) {
@@ -589,7 +594,7 @@ export class CalendarService implements OnModuleInit {
       if (sanitized) {
         updateData.return_time = sanitized;
       } else {
-        this.logger.warn(`updateBookingTimes: rejected return time ${returnTime} (outside 07:00-22:00) for rental ${rentalId}`);
+        this.logger.warn(`updateBookingTimes: rejected return time ${returnTime} (outside allowed slots) for rental ${rentalId}`);
       }
     }
 
@@ -1750,6 +1755,56 @@ export class CalendarService implements OnModuleInit {
     this.compactInventoryCache = result;
     this.compactInventoryCacheTime = now;
     return result;
+  }
+
+  /**
+   * Recompute booking revenue for a single rental when its rental_price changes.
+   * Called by the scanner whenever ownerEarnings is updated from Hygglo.
+   */
+  async recomputeRentalRevenue(rentalId: string, newRentalPrice: number): Promise<number> {
+    const DEFAULT_DAILY_PRICE = 15;
+
+    const bookings = await this.prisma.booking.findMany({
+      where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
+      select: { id: true, item_name: true, revenue: true, quantity: true },
+    });
+    if (bookings.length === 0) return 0;
+
+    // Single-item: revenue = rental_price directly
+    if (bookings.length === 1) {
+      if (bookings[0].revenue !== newRentalPrice) {
+        await this.prisma.booking.update({
+          where: { id: bookings[0].id },
+          data: { revenue: newRentalPrice, net_profit: newRentalPrice },
+        });
+        return 1;
+      }
+      return 0;
+    }
+
+    // Multi-item: proportional split by catalog daily price
+    const itemWeights = bookings.map(b => ({
+      id: b.id,
+      item: b.item_name,
+      weight: getOneDayPrice(b.item_name) || DEFAULT_DAILY_PRICE,
+      quantity: b.quantity || 1,
+    }));
+    const totalWeight = itemWeights.reduce((sum, iw) => sum + iw.weight * iw.quantity, 0);
+    if (totalWeight <= 0) return 0;
+
+    let updated = 0;
+    for (const iw of itemWeights) {
+      const newRevenue = Math.round((iw.weight * iw.quantity / totalWeight) * newRentalPrice * 100) / 100;
+      await this.prisma.booking.update({
+        where: { id: iw.id },
+        data: { revenue: newRevenue, net_profit: newRevenue },
+      });
+      updated++;
+    }
+    if (updated > 0) {
+      this.logger.log(`Revenue recomputed for rental ${rentalId}: £${newRentalPrice} across ${updated} booking(s)`);
+    }
+    return updated;
   }
 
   /**

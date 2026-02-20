@@ -462,7 +462,11 @@ export class AppService {
 
     for (const b of deduped) {
       const renterNorm = b.renter_name.trim().toLowerCase().replace(/\s+/g, ' ');
-      const key = `${renterNorm}|${b.account}|${b.start_date.toISOString().split('T')[0]}`;
+      // Use actual pickup/return dates when available — these reflect the real handover,
+      // which may be the evening before or morning after the Hygglo booking dates
+      const effectiveStart = (b as any).pickup_date || b.start_date;
+      const effectiveEnd = (b as any).return_date || b.end_date;
+      const key = `${renterNorm}|${b.account}|${effectiveStart.toISOString().split('T')[0]}`;
 
       let notesObj: any = null;
       try { notesObj = (b as any).notes ? JSON.parse((b as any).notes) : null; } catch { /* ignore */ }
@@ -479,8 +483,8 @@ export class AppService {
       if (existing) {
         existing.items.push(b.item_name);
         existing.earnings += b.revenue || 0;
-        if (b.start_date.toISOString() < existing.startDate) existing.startDate = b.start_date.toISOString();
-        if (b.end_date.toISOString() > existing.endDate) existing.endDate = b.end_date.toISOString();
+        if (effectiveStart.toISOString() < existing.startDate) existing.startDate = effectiveStart.toISOString();
+        if (effectiveEnd.toISOString() > existing.endDate) existing.endDate = effectiveEnd.toISOString();
         if (!existing.pickupTime && (b as any).pickup_time) existing.pickupTime = (b as any).pickup_time;
         if (!existing.returnTime && (b as any).return_time) existing.returnTime = (b as any).return_time;
         if (!existing.pickupDate && (b as any).pickup_date) existing.pickupDate = (b as any).pickup_date.toISOString();
@@ -492,7 +496,14 @@ export class AppService {
           if (!existing.notes) existing.notes = notesObj;
           else if (notesObj.ownerNotes) {
             if (!existing.notes.ownerNotes) existing.notes.ownerNotes = [];
-            existing.notes.ownerNotes.push(...notesObj.ownerNotes);
+            // Deduplicate by note text — each booking in a rental has identical ownerNotes
+            const existingTexts = new Set(existing.notes.ownerNotes.map((n: any) => n.note || n));
+            for (const n of notesObj.ownerNotes) {
+              if (!existingTexts.has(n.note || n)) {
+                existing.notes.ownerNotes.push(n);
+                existingTexts.add(n.note || n);
+              }
+            }
           }
         }
         if (parsedItems.length > 0) {
@@ -514,8 +525,8 @@ export class AppService {
           account: b.account,
           items: [b.item_name],
           pendingItems: [],
-          startDate: b.start_date.toISOString(),
-          endDate: b.end_date.toISOString(),
+          startDate: effectiveStart.toISOString(),
+          endDate: effectiveEnd.toISOString(),
           earnings: b.revenue || 0,
           photos,
           notes: notesObj,

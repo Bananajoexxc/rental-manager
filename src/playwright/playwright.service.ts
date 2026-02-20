@@ -1238,4 +1238,73 @@ export class PlaywrightService implements OnModuleDestroy {
       return { isFirstTime: false, reviewCount: -1 };
     }
   }
+
+  // ────────────── MARKETING LISTING UPLOAD ──────────────
+
+  /**
+   * Create a new listing on Hygglo from a marketing listing.
+   * Gated behind MARKETING_UPLOAD_ENABLED=true env var.
+   * Safety: READ_ONLY_MODE blocks all uploads.
+   *
+   * Flow:
+   * 1. Login to appropriate account (DB Cinema or Leo)
+   * 2. Navigate to create listing page
+   * 3. Upload composed image
+   * 4. Fill in: title, description, category, daily price
+   * 5. Set estimated value
+   * 6. Submit listing
+   */
+  async createMarketingListing(data: {
+    account: HyggloAccount;
+    title: string;
+    description: string;
+    dailyPrice: number;
+    estimatedValue: number;
+    imagePath: string;
+  }): Promise<{ success: boolean; hyggloListingId?: string; error?: string }> {
+    // Safety gates
+    if (process.env.MARKETING_UPLOAD_ENABLED !== 'true') {
+      return { success: false, error: 'MARKETING_UPLOAD_ENABLED is not true. Set env var to enable uploads.' };
+    }
+    if (this.isReadOnly) {
+      return { success: false, error: 'READ_ONLY_MODE is active. Cannot upload listings.' };
+    }
+    if (!this.isEnabled) {
+      return { success: false, error: 'PLAYWRIGHT_ENABLED is not true.' };
+    }
+
+    this.logger.log(`Marketing listing upload requested: "${data.title}" → ${data.account}`);
+
+    try {
+      const context = await this.getContext(data.account);
+      const page = await context.newPage();
+
+      try {
+        // Navigate to create listing page
+        await page.goto(`${this.baseUrl}/new-listing`, {
+          waitUntil: 'networkidle',
+          timeout: 30000,
+        });
+
+        // Screenshot before
+        const screenshotBefore = `/tmp/marketing-upload-${Date.now()}-before.png`;
+        await page.screenshot({ path: screenshotBefore, fullPage: true });
+        this.logger.log(`Pre-upload screenshot: ${screenshotBefore}`);
+
+        // TODO: Fill in form fields when Hygglo's create listing flow is mapped
+        // This requires mapping the exact form selectors on Hygglo's create listing page.
+        // For now, return a placeholder indicating the method is ready but needs form mapping.
+
+        return {
+          success: false,
+          error: 'Upload form mapping not yet complete. Screenshot saved at: ' + screenshotBefore,
+        };
+      } finally {
+        await page.close();
+      }
+    } catch (error) {
+      this.logger.error(`Marketing listing upload failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
 }

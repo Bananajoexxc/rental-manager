@@ -189,72 +189,192 @@ export class ListingCreatorService {
 
   /**
    * Estimate monthly revenue for a marketing listing item.
-   * Uses competitor review frequency and pricing data.
+   * Uses competitor review frequency and pricing data with FUZZY matching.
+   * Enriched estimation_basis with competitor names, review counts, and account info.
    */
   async estimateRevenue(
     itemName: string,
     competitorNames: string[],
   ): Promise<{ low: number; high: number; basis: string }> {
     const parts: string[] = [];
+    const modelSigs = this.extractModelSignature(itemName);
 
-    // Look up competitor pricing for similar items
+    // Look up ALL active competitor listings — model-specific matching
     const competitorListings = await this.prisma.competitor_listing.findMany({
-      where: {
-        is_active: true,
-        competitor: { name: { in: competitorNames } },
-      },
+      where: { is_active: true },
       include: { competitor: true },
     });
 
-    // Find listings with similar items
-    const similarListings = competitorListings.filter(l => {
-      const title = l.title.toLowerCase();
-      const item = itemName.toLowerCase();
-      // Simple substring match for finding related listings
-      const itemTokens = item.split(/\s+/).filter(t => t.length > 2);
-      const matchCount = itemTokens.filter(t => title.includes(t)).length;
-      return matchCount >= Math.ceil(itemTokens.length * 0.5);
-    });
+    const similarListings = this.findMatchingCompetitorListings(competitorListings, itemName);
 
     let avgDailyPrice = 0;
+    const competitorPriceDetails: string[] = [];
+    parts.push(`Model signature: [${modelSigs.join(', ')}]`);
+
     if (similarListings.length > 0) {
-      const prices = similarListings.filter(l => l.daily_price).map(l => l.daily_price!);
-      avgDailyPrice = prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
-      parts.push(`Competitor avg daily price: £${avgDailyPrice.toFixed(0)} (${prices.length} listings)`);
+      const priceByCompetitor = new Map<string, { prices: number[]; titles: string[] }>();
+      for (const l of similarListings) {
+        const name = l.competitor?.name || 'Unknown';
+        if (!priceByCompetitor.has(name)) priceByCompetitor.set(name, { prices: [], titles: [] });
+        const entry = priceByCompetitor.get(name)!;
+        if (l.daily_price) entry.prices.push(l.daily_price);
+        entry.titles.push((l.title || '').substring(0, 60));
+      }
+
+      const allPrices: number[] = [];
+      for (const [name, data] of priceByCompetitor) {
+        if (data.prices.length > 0) {
+          const avg = data.prices.reduce((a, b) => a + b, 0) / data.prices.length;
+          allPrices.push(...data.prices);
+          competitorPriceDetails.push(`${name}: £${avg.toFixed(0)}/day (${data.prices.length} listings: ${data.titles[0]}${data.titles.length > 1 ? '...' : ''})`);
+        }
+      }
+
+      if (allPrices.length > 0) {
+        allPrices.sort((a, b) => a - b);
+        const median = allPrices[Math.floor(allPrices.length / 2)];
+        avgDailyPrice = median; // Use median, not mean — resistant to outliers
+        parts.push(`Competitor pricing: ${competitorPriceDetails.join('; ')}`);
+        parts.push(`Market median: £${median}/day across ${allPrices.length} listings`);
+      }
     }
 
-    // Count reviews per month for demand estimation
-    const reviewsLast90 = await this.prisma.competitor_review.count({
+    // Model-specific review matching
+    const allRecentReviews = await this.prisma.competitor_review.findMany({
       where: {
-        item_rented: itemName,
-        review_date: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
+        item_rented: { not: null },
+        review_date: { gte: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000) },
       },
+      include: { competitor: true },
+      orderBy: { review_date: 'desc' },
     });
-    const reviewsPerMonth = reviewsLast90 / 3;
-    parts.push(`Review frequency: ${reviewsPerMonth.toFixed(1)}/month (${reviewsLast90} in 90 days)`);
+
+    const matchingReviews = allRecentReviews.filter(r => {
+      const rented = (r.item_rented || '').toLowerCase();
+      // Require ALL model signature tokens to match
+      return modelSigs.length > 0 && modelSigs.every(sig => rented.includes(sig));
+    });
+
+    const reviewsByCompetitor = new Map<string, number>();
+    for (const r of matchingReviews) {
+      const name = r.competitor?.name || 'Unknown';
+      reviewsByCompetitor.set(name, (reviewsByCompetitor.get(name) || 0) + 1);
+    }
+
+    const reviewsPerMonth = matchingReviews.length / 6; // 180 days = 6 months
+    const reviewDetails = Array.from(reviewsByCompetitor.entries())
+      .map(([name, count]) => `${name}: ${count} reviews`)
+      .join('; ');
+    parts.push(`Demand signal (6mo): ${matchingReviews.length} reviews (${reviewsPerMonth.toFixed(1)}/mo). ${reviewDetails || 'No matching reviews'}`);
+
+    // If no competitor pricing, estimate from category
+    if (avgDailyPrice === 0) {
+      avgDailyPrice = this.estimateCategoryPrice(itemName);
+      if (avgDailyPrice > 0) {
+        parts.push(`Category-based price estimate: £${avgDailyPrice.toFixed(0)}/day`);
+      }
+    }
 
     // Estimate: avg 2.5 rental days per booking, owner takes 64%
     const avgRentalDays = 2.5;
     const dailyOwnerEarnings = avgDailyPrice * HYGGLO_OWNER_TAKE;
-    const baseMonthly = dailyOwnerEarnings * avgRentalDays * reviewsPerMonth;
+    const effectiveReviewsPerMonth = Math.max(reviewsPerMonth, 0.5); // Floor at 0.5 if unknown
+    const baseMonthly = dailyOwnerEarnings * avgRentalDays * effectiveReviewsPerMonth;
 
-    // ±30% variance for low/high
     const low = Math.round(baseMonthly * 0.7);
     const high = Math.round(baseMonthly * 1.3);
 
-    parts.push(`Calc: £${dailyOwnerEarnings.toFixed(0)}/day × ${avgRentalDays} days × ${reviewsPerMonth.toFixed(1)} bookings/mo × 0.7-1.3`);
+    parts.push(`Calc: £${dailyOwnerEarnings.toFixed(0)} owner/day × ${avgRentalDays} days × ${effectiveReviewsPerMonth.toFixed(1)} bookings/mo`);
 
     return {
       low: Math.max(low, 0),
       high: Math.max(high, 0),
-      basis: parts.join('. '),
+      basis: parts.join('\n'),
     };
+  }
+
+  /**
+   * Rough price estimate by item category when no competitor data exists.
+   */
+  private estimateCategoryPrice(itemName: string): number {
+    const t = itemName.toLowerCase();
+    if (/fx[0-9]|red\b|arri|bmpcc.*6k|cinema/i.test(t)) return 75;
+    if (/a7|gh[0-9]|r[0-9].*mark|eos r|z[0-9]/i.test(t)) return 50;
+    if (/drone|mavic|phantom/i.test(t)) return 45;
+    if (/70.200|24.70|gm\b|f\/?1\.[24]/i.test(t)) return 30;
+    if (/lens|mm\b/i.test(t)) return 20;
+    if (/gimbal|ronin|rs[0-9]/i.test(t)) return 30;
+    if (/light|aputure|nanlite|godox/i.test(t)) return 25;
+    if (/mic|audio|wireless/i.test(t)) return 15;
+    return 25; // default
   }
 
   // ────────────── PRICING ──────────────
 
   /**
+   * Extract the "model signature" from an item name — the specific identifying part
+   * that distinguishes this item from others sharing the same brand.
+   *
+   * Returns an array of required patterns that ALL must match in a competitor title.
+   * e.g. "Canon R6 Mark III" → ["r6", "mark iii"] — both must appear
+   *      "Canon RF 24-70mm f2.8" → ["24-70"] — the focal range is the key identifier
+   *      "Sony A7s III" → ["a7s"] — the model
+   */
+  private extractModelSignature(itemName: string): string[] {
+    const t = itemName.toLowerCase();
+    const sigs: string[] = [];
+
+    // Camera model numbers — brand + specific model
+    const cameraMatch = t.match(/\b(fx[0-9]+|a[0-9]+[a-z]*|r[0-9]+|gh[0-9]+|z[0-9]+|bmpcc|pyxis|c[0-9]{2}|x-?[tshp][0-9]+|x100|gopro|mavic|mini\s*\d|red\s*\w+|komodo|venice|alexa)\b/i);
+    if (cameraMatch) sigs.push(cameraMatch[1]);
+
+    // Mark/version (Mark II, Mark III, etc.)
+    const markMatch = t.match(/\b(mark\s*[iv]+|mk\s*[iv]+)\b/i);
+    if (markMatch) sigs.push(markMatch[1].replace(/\s+/g, ' '));
+
+    // Lens focal length — THE key identifier for lenses
+    const focalMatch = t.match(/\b(\d+-\d+mm|\d+mm)\b/i);
+    if (focalMatch) sigs.push(focalMatch[1]);
+
+    // Aperture for disambiguation (f1.2 vs f2.8 vs f4)
+    const apertureMatch = t.match(/\bf\/?(\d+\.?\d*)(?=[^0-9]|$)/i);
+    if (apertureMatch) sigs.push(`f${apertureMatch[1]}`);
+
+    // If no signatures found, fall back to the first 2-3 significant words
+    if (sigs.length === 0) {
+      const words = t.split(/\s+/).filter(w => w.length > 2 && !/^(the|and|for|with|set|kit|pro|mark|camera|lens|light|rental)$/i.test(w));
+      sigs.push(...words.slice(0, 3));
+    }
+
+    return sigs;
+  }
+
+  /**
+   * Find competitor listings that match a specific item by model signature.
+   * Requires ALL signature parts to appear in the listing title.
+   * Filters out service listings (operator, DP, photographer, etc.)
+   */
+  private findMatchingCompetitorListings(
+    allListings: Array<{ title: string; daily_price: number | null; competitor?: { name: string } | null }>,
+    itemName: string,
+  ): typeof allListings {
+    const sigs = this.extractModelSignature(itemName);
+    if (sigs.length === 0) return [];
+
+    return allListings.filter(l => {
+      const title = l.title?.toLowerCase() || '';
+
+      // Filter out service/operator listings — these include labour costs, not just equipment
+      if (/operator|cinematographer|photographer|gaffer|focus puller|dp\b|\bdop\b|£\d+\/hour/i.test(title)) return false;
+
+      // ALL signatures must match
+      return sigs.every(sig => title.includes(sig));
+    });
+  }
+
+  /**
    * Estimate pricing for a marketing listing item based on competitor data and our catalog.
+   * Uses MODEL-SPECIFIC matching (not keyword matching) to find the right competitor prices.
    */
   private async estimatePricing(itemName: string): Promise<{
     price1Day: number | null;
@@ -275,22 +395,31 @@ export class ListingCreatorService {
       };
     }
 
-    // Look up competitor pricing
-    const competitorListings = await this.prisma.competitor_listing.findMany({
-      where: {
-        is_active: true,
-        title: { contains: itemName.split(' ').slice(0, 2).join(' '), mode: 'insensitive' },
-      },
+    // Look up competitor pricing — model-specific matching
+    const allListings = await this.prisma.competitor_listing.findMany({
+      where: { is_active: true },
+      include: { competitor: true },
     });
 
-    if (competitorListings.length > 0) {
-      const prices = competitorListings.filter(l => l.daily_price).map(l => l.daily_price!);
+    const matchingListings = this.findMatchingCompetitorListings(allListings, itemName);
+
+    if (matchingListings.length > 0) {
+      // Extract equipment-only prices (filter outlier high prices likely including operator)
+      const prices = matchingListings
+        .filter(l => l.daily_price && l.daily_price > 0)
+        .map(l => l.daily_price!);
+
       if (prices.length > 0) {
-        const avgPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+        // Use median instead of mean to reduce outlier impact
+        prices.sort((a, b) => a - b);
+        const median = prices[Math.floor(prices.length / 2)];
+
+        // Competitive pricing: 5-10% below median
+        const competitivePrice = Math.round(median * 0.92);
         return {
-          price1Day: avgPrice,
-          price3Day: Math.round(avgPrice * 2.5),
-          price7Day: Math.round(avgPrice * 5),
+          price1Day: competitivePrice,
+          price3Day: Math.round(competitivePrice * 2.4),
+          price7Day: Math.round(competitivePrice * 4.8),
           estimatedValue: null,
         };
       }
@@ -355,16 +484,31 @@ export class ListingCreatorService {
   // ────────────── TITLE GENERATION ──────────────
 
   /**
-   * Generate a listing title matching existing account patterns.
-   * DB Cinema pattern: "Sony FX3 + GM 24-70mm f2.8 + DJI RS3 Pro Gimbal | Cinema Kit"
-   * Leo pattern: "Sony FX3 Camera + 28-70mm Lens | Interview Set"
+   * Generate a listing title matching Daniel's actual style.
+   * DB Cinema: "SONY A7 V CAMERA + 24-70MM + FLASH SET"
+   * Leo: "SONY FX3 CAMERA + 28-70MM LENS | INTERVIEW SET"
+   *
+   * Cleans up raw review data artifacts (random codes, duplicates).
    */
   private generateListingTitle(itemName: string, category: string): string {
+    // Clean up the item name — remove artifacts from review scraping
+    let cleaned = itemName
+      .replace(/\b[A-Z0-9]{2,4}\b(?=\s|$)/g, (m) => {
+        // Keep legitimate model numbers (A7, FX3, R5, GH6, Z8, RS3, etc.)
+        if (/^(A[0-9]|FX[0-9]|R[0-9]|GH[0-9]|Z[0-9]|RS[0-9]|XT[0-9]|S[0-9]|XH[0-9])/i.test(m)) return m;
+        // Keep known brands/models
+        if (/^(GM|II|III|IV|MK|PRO|DJI|LED|RGB|USB|4K|6K|8K|SD|CF|MIC)$/i.test(m)) return m;
+        return m; // Keep by default — only strip truly random-looking codes later
+      })
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    // Build title in Daniel's style
     const categoryLabels: Record<string, string> = {
       camera: 'Camera',
       lens: 'Lens',
-      drone: 'Drone',
-      lighting: 'Light',
+      drone: 'Drone Kit',
+      lighting: 'Light Kit',
       audio: 'Mic Kit',
       gimbal: 'Gimbal',
       accessory: 'Kit',
@@ -372,7 +516,77 @@ export class ListingCreatorService {
     };
 
     const label = categoryLabels[category] || 'Equipment';
-    return `${itemName} ${label} | Rental`;
+
+    // If the item already contains the category word, don't duplicate it
+    const hasCategory = cleaned.toLowerCase().includes(label.toLowerCase().replace(' kit', ''));
+    if (hasCategory) {
+      return `${cleaned} | Rental Set`;
+    }
+    return `${cleaned} ${label} | Rental Set`;
+  }
+
+  // ────────────── DESCRIPTION GENERATOR ──────────────
+
+  /**
+   * Generate a listing description matching existing account templates.
+   * DB Cinema: Professional cinema-focused, mentions quality and support.
+   * Leo: Friendly, mentions flexibility and location convenience.
+   *
+   * GUARD: Never includes internal address (23 Whitcomb Street).
+   * GUARD: Never claims items are "in stock" or "immediately available".
+   */
+  generateDescription(
+    account: 'dbcinema' | 'leo',
+    title: string,
+    items: Array<{ item: string; qty?: number }>,
+    accessories?: Array<{ item: string; qty: number }>,
+    pricing?: { price1Day?: number; price3Day?: number; price7Day?: number },
+  ): string {
+    const mainItems = items.map(i => `${i.qty && i.qty > 1 ? i.qty + 'x ' : ''}${i.item}`).join(', ');
+    const accList = accessories?.map(a => `${a.qty > 1 ? a.qty + 'x ' : ''}${a.item}`).join(', ');
+
+    const pickupLocation = account === 'dbcinema'
+      ? 'Statue of James II, 11 Trafalgar Square, London'
+      : '5 Pall Mall East, London';
+
+    const accountName = account === 'dbcinema' ? 'DB Cinema Rentals' : 'Leo Adams';
+
+    const priceLine = pricing?.price1Day
+      ? `From £${pricing.price1Day}/day (multi-day discounts available).`
+      : '';
+
+    if (account === 'dbcinema') {
+      return [
+        `Professional rental set from ${accountName}.`,
+        '',
+        `Includes: ${mainItems}`,
+        accList ? `Accessories included: ${accList}` : '',
+        '',
+        `All equipment is tested and prepared before each rental. We provide full support throughout your booking.`,
+        '',
+        priceLine,
+        '',
+        `Pickup: Central London — near ${pickupLocation}.`,
+        '',
+        `Questions? Message us directly through the platform.`,
+      ].filter(Boolean).join('\n');
+    }
+
+    // Leo account
+    return [
+      `${title} — available for rental from ${accountName}.`,
+      '',
+      `What's included: ${mainItems}`,
+      accList ? `Plus: ${accList}` : '',
+      '',
+      `Flexible rental periods available. All gear checked and ready to go.`,
+      '',
+      priceLine,
+      '',
+      `Collection: Central London — near ${pickupLocation}.`,
+      '',
+      `Drop me a message if you have any questions!`,
+    ].filter(Boolean).join('\n');
   }
 
   // ────────────── CRUD OPERATIONS ──────────────
@@ -418,13 +632,23 @@ export class ListingCreatorService {
     const pricing = await this.estimatePricing(data.itemName);
     const revenueEst = await this.estimateRevenue(data.itemName, []);
 
+    const items = [{ item: data.itemName, qty: 1 }];
+    const description = this.generateDescription(
+      account as 'dbcinema' | 'leo',
+      title,
+      items,
+      accessories.length > 0 ? accessories : undefined,
+      { price1Day: pricing.price1Day ?? undefined, price3Day: pricing.price3Day ?? undefined, price7Day: pricing.price7Day ?? undefined },
+    );
+
     const result = await this.prisma.marketing_listing.create({
       data: {
         title,
-        items: [{ item: data.itemName, qty: 1 }],
+        items,
         accessories: accessories.length > 0 ? accessories : undefined,
         account,
         source: 'manual',
+        description,
         price_1day: pricing.price1Day,
         price_3day: pricing.price3Day,
         price_7day: pricing.price7Day,
@@ -514,25 +738,145 @@ export class ListingCreatorService {
 
   /**
    * Record a demand signal for a marketing listing.
+   * Writes to demand_record table with source='marketing_listing'.
    */
   async recordMarketingDemand(hyggloListingId: string, renterName?: string): Promise<void> {
     const listing = await this.prisma.marketing_listing.findFirst({
       where: { hygglo_listing_id: hyggloListingId },
-      select: { id: true, title: true, items: true },
+      select: { id: true, title: true, items: true, account: true, price_1day: true },
     });
     if (!listing) return;
 
     const items = (listing.items as Array<{ item: string }>) || [];
     const itemNames = items.map(i => i.item);
 
-    this.logger.log(`Marketing demand: "${listing.title}" requested by ${renterName || 'unknown'}`);
+    // Write to demand_record for lost revenue tracking
+    await this.prisma.demand_record.create({
+      data: {
+        items: itemNames,
+        bundle_label: listing.title,
+        renter_name: renterName,
+        account: listing.account,
+        outcome: 'rejected',
+        rejection_reason: 'Marketing-only listing — item not in physical inventory',
+        rental_value: listing.price_1day,
+        source: 'marketing_listing',
+      },
+    });
+
+    this.logger.log(`Marketing demand recorded: "${listing.title}" requested by ${renterName || 'unknown'}`);
+  }
+
+  // ────────────── ITEM PARSING & ACCESSORY DETECTION ──────────────
+
+  /**
+   * Parse a compound item name into distinct products.
+   * "Canon R6 mark II Canon RF 24-70mm f2.8" → ["Canon R6 Mark II", "Canon RF 24-70mm f2.8"]
+   * "Sony A7s iii + 3 batteries +256GB V90"  → ["Sony A7s III"] (batteries/cards extracted as accessories)
+   * "Aputure LS 600c Pro + Lantern"          → ["Aputure LS 600c Pro", "Lantern"]
+   */
+  private parseMainProducts(rawItem: string): string[] {
+    // First, try splitting on explicit delimiters: + , " - " and "and"
+    let segments = rawItem.split(/\s*[\+]\s*|\s*,\s*|\s+\-\s+|\s+and\s+/i)
+      .map(s => s.trim())
+      .filter(s => s.length > 2);
+
+    // If only 1 segment, try to detect concatenated camera+lens patterns
+    // e.g. "Canon R6 mark II Canon RF 24-70mm f2.8" → ["Canon R6 mark II", "Canon RF 24-70mm f2.8"]
+    if (segments.length === 1) {
+      const text = segments[0];
+      // Split where a brand name starts a lens/second product mid-string
+      // Pattern: "<anything> <Brand> <lens/RF/EF/FE/XF pattern>"
+      const splitMatch = text.match(
+        /^(.+?)\s+((?:Canon|Sony|Nikon|Fuji\w*|Sigma|Tamron|Panasonic|Leica|Zeiss)\s+(?:RF|EF|FE|XF|GF|E|Z|S|GM|Art|DG)\s+\d+.*)$/i
+      );
+      if (splitMatch && splitMatch[1].length > 4 && splitMatch[2].length > 4) {
+        segments = [splitMatch[1].trim(), splitMatch[2].trim()];
+      }
+    }
+
+    const products: string[] = [];
+    for (const seg of segments) {
+      const lower = seg.toLowerCase();
+      // Skip pure accessories — batteries, SD cards, cables, memory, qty prefixes
+      if (/^\d+x?\s/i.test(seg) && /batter|card|cable|charger|sd|cf|memory/i.test(lower)) continue;
+      if (/^\d+gb\b|^\d+tb\b|^v90\b|^v60\b/i.test(lower)) continue;
+      if (/^batter|^sd card|^memory card|^cable|^charger|^strap/i.test(lower)) continue;
+      products.push(seg);
+    }
+
+    return products.length > 0 ? products.slice(0, 3) : [rawItem]; // Max 3 main products
+  }
+
+  /**
+   * Determine standard accessories for a camera/device based on brand/type.
+   * Returns search-friendly names for the image finder.
+   *
+   * Context-aware rules:
+   * - Cinema cameras (FX3, FX6, RED, ARRI, BMPCC): 3x batteries + V90 SD card
+   * - Photo/hybrid cameras (A7, R6, Z8): 3x batteries + V90 SD card
+   * - Action/compact (GoPro, DJI): 1x battery + standard SD
+   * - Lenses/lights/audio: no accessories
+   */
+  private determineAccessoriesForSearch(mainProducts: string[]): string[] {
+    const accessories: string[] = [];
+    const allText = mainProducts.join(' ').toLowerCase();
+
+    // Cinema/professional cameras get 3x batteries; compact get 1x
+    const isCinemaKit = /fx[0-9]|a7|a9|a1|r[0-9]|bmpcc|blackmagic|pyxis|red\b|komodo|arri|alexa|gh[0-9]|z[0-9]|s[0-9]h|x-h/i.test(allText);
+    const isCompactCam = /gopro|osmo|insta360|x100|zv-/i.test(allText);
+    const isCamera = isCinemaKit || isCompactCam || /camera|drone|mavic/i.test(allText);
+
+    // Detect camera brand for correct battery type
+    const batteryMap: Array<[RegExp, string]> = [
+      [/sony\s*(fx|a7|a9|a1|zv)/i, 'Sony NP-FZ100 battery'],
+      [/canon\s*(r[0-9]|eos\s*r|c[0-9])/i, 'Canon LP-E6NH battery'],
+      [/canon\s*r[0-9].*mark/i, 'Canon LP-E6NH battery'],
+      [/fuji|x-t[0-9]|x-h[0-9]|x100/i, 'Fujifilm NP-W235 battery'],
+      [/nikon\s*z/i, 'Nikon EN-EL15c battery'],
+      [/panasonic|lumix|gh[0-9]|s[0-9]h/i, 'Panasonic DMW-BLK22 battery'],
+      [/bmpcc|blackmagic|pyxis/i, 'Canon LP-E6NH battery'],
+      [/red\b|komodo/i, 'V-mount battery'],
+      [/arri|alexa/i, 'V-mount battery'],
+    ];
+
+    let batteryName = '';
+    for (const [pattern, battery] of batteryMap) {
+      if (pattern.test(allText)) {
+        batteryName = battery;
+        break;
+      }
+    }
+
+    // Cinema/pro cameras: 3x batteries. Compact: 1x.
+    if (batteryName) {
+      const batteryCount = isCinemaKit ? 3 : 1;
+      for (let i = 0; i < batteryCount; i++) {
+        accessories.push(batteryName);
+      }
+    }
+
+    // SD card: Cinema cameras need V90 high-speed cards, not generic SD
+    if (isCamera) {
+      if (isCinemaKit) {
+        accessories.push('Lexar Professional 256GB V90 SD card');
+      } else {
+        accessories.push('128GB SD card');
+      }
+    }
+
+    return accessories;
   }
 
   // ────────────── IMAGE PIPELINE ORCHESTRATION ──────────────
 
   /**
    * Generate listing images for a marketing listing.
-   * Pipeline: find product images → remove backgrounds → compose final image.
+   * Pipeline: parse items → find images (main + accessories) → remove backgrounds → compose.
+   *
+   * The composer expects SEPARATE mainPaths and accPaths arrays.
+   * Main = camera bodies, lenses, gimbals, lights (the hero products)
+   * Acc = batteries, SD cards, cables (small supporting items)
    */
   async generateImages(listingId: string): Promise<{ success: boolean; composedImage?: string; error?: string }> {
     const listing = await this.prisma.marketing_listing.findUnique({ where: { id: listingId } });
@@ -542,15 +886,41 @@ export class ListingCreatorService {
     if (!items || items.length === 0) return { success: false, error: 'No items in listing' };
 
     try {
-      // Step 1: Find product images for each item
-      this.logger.log(`[${listingId}] Step 1: Finding product images...`);
-      const allSourcePaths: string[] = [];
+      // Step 1: Collect main products from ALL items entries + determine accessories
+      // For bundles: each items[] entry is a main product
+      // For single items: parse the compound name into separate products
+      let mainProducts: string[];
+      if (items.length > 1) {
+        // Bundle: each item entry is a main product
+        mainProducts = items.map(e => e.item).slice(0, 3); // Max 3 main items for layout
+      } else {
+        // Single item: parse compound names (e.g., "Canon R6 + Canon RF 24-70mm")
+        mainProducts = this.parseMainProducts(items[0]?.item || '');
+      }
+      const accessorySearchTerms = this.determineAccessoriesForSearch(mainProducts);
 
-      for (const entry of items) {
-        const paths = await this.imageFinderService.findProductImages(listingId, entry.item);
-        allSourcePaths.push(...paths);
+      this.logger.log(`[${listingId}] Parsed: ${mainProducts.length} main products, ${accessorySearchTerms.length} accessories`);
+      this.logger.log(`[${listingId}]   Main: ${mainProducts.join(' | ')}`);
+      if (accessorySearchTerms.length > 0) {
+        this.logger.log(`[${listingId}]   Acc: ${accessorySearchTerms.join(' | ')}`);
       }
 
+      // Step 2: Find product images — main items first, then accessories
+      this.logger.log(`[${listingId}] Step 2: Finding product images...`);
+      const mainSourcePaths: string[] = [];
+      const accSourcePaths: string[] = [];
+
+      for (let i = 0; i < mainProducts.length; i++) {
+        const paths = await this.imageFinderService.findProductImages(listingId, mainProducts[i], `main${i}`);
+        if (paths.length > 0) mainSourcePaths.push(paths[0]); // 1 image per main product
+      }
+
+      for (let i = 0; i < accessorySearchTerms.length; i++) {
+        const paths = await this.imageFinderService.findProductImages(listingId, accessorySearchTerms[i], `acc${i}`);
+        if (paths.length > 0) accSourcePaths.push(paths[0]); // 1 image per accessory
+      }
+
+      const allSourcePaths = [...mainSourcePaths, ...accSourcePaths];
       if (allSourcePaths.length === 0) {
         await this.prisma.marketing_listing.update({
           where: { id: listingId },
@@ -566,18 +936,24 @@ export class ListingCreatorService {
           product_images: allSourcePaths,
         },
       });
-      this.logger.log(`[${listingId}] Found ${allSourcePaths.length} source images`);
+      this.logger.log(`[${listingId}] Found ${mainSourcePaths.length} main + ${accSourcePaths.length} accessory images`);
 
-      // Step 2: Remove backgrounds
-      this.logger.log(`[${listingId}] Step 2: Removing backgrounds...`);
-      const transparentPaths: string[] = [];
+      // Step 3: Remove backgrounds — track main vs acc separately
+      this.logger.log(`[${listingId}] Step 3: Removing backgrounds...`);
+      const mainTransparent: string[] = [];
+      const accTransparent: string[] = [];
 
-      for (const sourcePath of allSourcePaths) {
+      for (const sourcePath of mainSourcePaths) {
         const transparent = await this.backgroundRemoverService.removeBackground(listingId, sourcePath);
-        if (transparent) transparentPaths.push(transparent);
+        if (transparent) mainTransparent.push(transparent);
       }
 
-      if (transparentPaths.length === 0) {
+      for (const sourcePath of accSourcePaths) {
+        const transparent = await this.backgroundRemoverService.removeBackground(listingId, sourcePath);
+        if (transparent) accTransparent.push(transparent);
+      }
+
+      if (mainTransparent.length === 0 && accTransparent.length === 0) {
         return { success: false, error: 'Background removal failed for all images' };
       }
 
@@ -585,10 +961,10 @@ export class ListingCreatorService {
         where: { id: listingId },
         data: { image_status: 'bg_removed' },
       });
-      this.logger.log(`[${listingId}] ${transparentPaths.length} transparent images ready`);
+      this.logger.log(`[${listingId}] ${mainTransparent.length} main + ${accTransparent.length} acc transparent images`);
 
-      // Step 3: Compose final listing image
-      this.logger.log(`[${listingId}] Step 3: Composing listing image...`);
+      // Step 4: Compose final listing image — mainPaths and accPaths separately
+      this.logger.log(`[${listingId}] Step 4: Composing listing image...`);
       const account = (listing.account || 'dbcinema') as 'dbcinema' | 'leo';
       const title = listing.title || 'Untitled Listing';
 
@@ -596,20 +972,26 @@ export class ListingCreatorService {
         listingId,
         account,
         title,
-        transparentPaths,
+        mainTransparent,
+        accTransparent,
       );
 
       if (!composedPath) {
         return { success: false, error: 'Image composition failed' };
       }
 
-      // Step 4: Update listing with final image
+      // Step 5: Update listing with final image + store accessories if not set
+      const updateData: any = {
+        image_status: 'ready',
+        composed_image: composedPath,
+      };
+      if (!listing.accessories && accessorySearchTerms.length > 0) {
+        updateData.accessories = accessorySearchTerms.map(a => ({ item: a, qty: 1 }));
+      }
+
       await this.prisma.marketing_listing.update({
         where: { id: listingId },
-        data: {
-          image_status: 'ready',
-          composed_image: composedPath,
-        },
+        data: updateData,
       });
 
       this.logger.log(`[${listingId}] Image pipeline complete: ${composedPath}`);
@@ -641,5 +1023,136 @@ export class ListingCreatorService {
     }
 
     return { processed: pending.length, succeeded, failed };
+  }
+
+  // ────────────── BATCH RE-ESTIMATION ──────────────
+
+  /**
+   * Re-estimate pricing and revenue for ALL existing marketing listings.
+   * Uses updated fuzzy matching logic and competitive pricing.
+   * Also cleans up titles with artifacts.
+   */
+  async reEstimateAll(): Promise<{ updated: number; errors: number }> {
+    const listings = await this.prisma.marketing_listing.findMany();
+    let updated = 0;
+    let errors = 0;
+
+    for (const listing of listings) {
+      try {
+        const items = listing.items as Array<{ item: string; qty?: number }>;
+        const isBundle = items && items.length > 1;
+        const mainItem = items?.[0]?.item || listing.title;
+        const competitorNames = listing.source_competitor
+          ? listing.source_competitor.split(', ')
+          : [];
+
+        // For BUNDLES: estimate pricing by summing individual items
+        // For SINGLE items: estimate as before
+        let totalPrice1Day: number | null = null;
+        let pricingBasis: string[] = [];
+
+        if (isBundle) {
+          let sum = 0;
+          let foundAny = false;
+          for (const entry of items) {
+            const itemPricing = await this.estimatePricing(entry.item);
+            const qty = entry.qty || 1;
+            if (itemPricing.price1Day) {
+              sum += itemPricing.price1Day * qty;
+              foundAny = true;
+              pricingBasis.push(`${entry.item}: £${itemPricing.price1Day}/day × ${qty}`);
+            } else {
+              // Fallback to category price
+              const catPrice = this.estimateCategoryPrice(entry.item);
+              sum += catPrice * qty;
+              pricingBasis.push(`${entry.item}: £${catPrice}/day (category est.) × ${qty}`);
+            }
+          }
+          // Bundle discount: 10% off sum (bundling incentive)
+          totalPrice1Day = foundAny ? Math.round(sum * 0.9) : null;
+          if (totalPrice1Day) {
+            pricingBasis.push(`Bundle total: £${sum}/day → £${totalPrice1Day}/day (10% bundle discount)`);
+          }
+        } else {
+          const pricing = await this.estimatePricing(mainItem);
+          totalPrice1Day = pricing.price1Day;
+        }
+
+        const price1Day = totalPrice1Day;
+        const price3Day = price1Day ? Math.round(price1Day * 2.4) : null;
+        const price7Day = price1Day ? Math.round(price1Day * 4.8) : null;
+
+        // Re-estimate revenue with model-specific matching on primary item
+        const revenueEst = await this.estimateRevenue(mainItem, competitorNames);
+        if (pricingBasis.length > 0) {
+          revenueEst.basis = `Bundle pricing:\n${pricingBasis.join('\n')}\n\n${revenueEst.basis}`;
+        }
+        // Adjust revenue for bundle price if different
+        if (isBundle && price1Day) {
+          const dailyOwnerEarnings = price1Day * HYGGLO_OWNER_TAKE;
+          const avgRentalDays = 2.5;
+          const effectiveBookings = Math.max(0.5, revenueEst.high / (dailyOwnerEarnings * avgRentalDays * 1.3) || 0.5);
+          revenueEst.low = Math.round(dailyOwnerEarnings * avgRentalDays * effectiveBookings * 0.7);
+          revenueEst.high = Math.round(dailyOwnerEarnings * avgRentalDays * effectiveBookings * 1.3);
+        }
+
+        // Title: NEVER overwrite bundle titles (multi-item) or manual titles
+        // Only auto-clean single-item titles from automated sources (competitor_review)
+        const preserveTitle = isBundle || listing.source === 'manual';
+        const cleanTitle = preserveTitle
+          ? listing.title
+          : this.generateListingTitle(mainItem, this.categorizeItem(mainItem));
+
+        // Generate description
+        const account = (listing.account || 'dbcinema') as 'dbcinema' | 'leo';
+        const accessories = listing.accessories as Array<{ item: string; qty: number }> | null;
+        const description = this.generateDescription(
+          account,
+          cleanTitle,
+          items || [{ item: mainItem, qty: 1 }],
+          accessories || undefined,
+          { price1Day: price1Day ?? undefined, price3Day: price3Day ?? undefined, price7Day: price7Day ?? undefined },
+        );
+
+        await this.prisma.marketing_listing.update({
+          where: { id: listing.id },
+          data: {
+            title: cleanTitle,
+            description,
+            price_1day: price1Day ?? listing.price_1day,
+            price_3day: price3Day ?? listing.price_3day,
+            price_7day: price7Day ?? listing.price_7day,
+            est_monthly_rev_low: revenueEst.low,
+            est_monthly_rev_high: revenueEst.high,
+            estimation_basis: revenueEst.basis,
+          },
+        });
+
+        updated++;
+        this.logger.debug(`Re-estimated: ${cleanTitle} → £${revenueEst.low}-${revenueEst.high}/mo`);
+      } catch (error) {
+        errors++;
+        this.logger.warn(`Failed to re-estimate ${listing.id}: ${error.message}`);
+      }
+    }
+
+    this.logger.log(`Re-estimation complete: ${updated} updated, ${errors} errors`);
+    return { updated, errors };
+  }
+
+  /**
+   * Reset image status for all listings so they can be re-processed.
+   */
+  async resetImageStatuses(): Promise<number> {
+    const result = await this.prisma.marketing_listing.updateMany({
+      where: { image_status: { not: 'ready' } },
+      data: {
+        image_status: 'pending',
+        product_images: [],
+        composed_image: null,
+      },
+    });
+    this.logger.log(`Reset ${result.count} listings to pending image status`);
+    return result.count;
   }
 }

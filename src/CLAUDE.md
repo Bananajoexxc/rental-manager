@@ -34,4 +34,11 @@
 | #1113 | 12:31 PM | 🔵 | Dashboard Calendar Booking Aggregation with Parsed Items Integration | ~250 |
 | #1051 | 11:21 AM | ⚖️ | Plan to Replace Hardcoded AI Boost Baselines with Data-Derived Calculations | ~859 |
 | #1050 | 11:10 AM | 🔵 | AI Boost Monthly vs Yearly Period Calculation Discrepancy Explained | ~623 |
+
+### Feb 20, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1902 | 5:53 PM | 🔵 | Static File Serving Configured for Generated Listing Images | ~371 |
+| #1901 | " | 🔵 | Generate Image Endpoint Directly Calls ListingCreatorService Pipeline | ~370 |
 </claude-mem-context>

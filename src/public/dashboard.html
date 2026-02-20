@@ -447,6 +447,36 @@
       .stat-card:hover .stat-expand { max-height: 0; opacity: 0; margin-top: 0; }
       .stat-card.expanded .stat-expand { max-height: 500px; opacity: 1; margin-top: 10px; }
     }
+    @media (max-width: 768px) {
+      .main { padding: 10px 10px; }
+      .header { padding: 10px 12px; }
+      .header h1 { font-size: 15px; }
+      .header-right { font-size: 11px; gap: 8px; }
+      .account-filter, .refresh-btn { padding: 5px 8px; font-size: 11px; }
+      .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+      .stat-card { padding: 12px 14px; }
+      .stat-card .value { font-size: 22px; }
+      .stat-card .label { font-size: 10px; }
+      .section { padding: 14px 12px; margin-bottom: 14px; }
+      .section h2 { font-size: 14px; }
+      table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      thead th { padding: 6px 10px; font-size: 10px; }
+      tbody td { padding: 6px 10px; font-size: 11px; }
+      .chart-container { height: 200px; padding: 6px; }
+      .cal-detail { padding: 10px 12px; }
+      .cal-rental-card { padding: 10px; }
+      .cal-items-row { gap: 4px; }
+      .cal-item-chip { font-size: 9px; padding: 2px 6px; }
+      .truncate { max-width: 150px; }
+    }
+    @media (max-width: 480px) {
+      .main { padding: 6px 6px; }
+      .stats-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+      .stat-card .value { font-size: 20px; }
+      .cal-day-card { min-width: calc(25% - 5px); padding: 8px 4px; }
+      .cal-day-date { font-size: 16px; }
+      .mktg-detail-panel { padding: 16px; width: 96%; }
+    }
 
     /* Tables */
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -2100,8 +2130,8 @@
     }
 
     // ---- Data fetching ----
-    function fetchJSON(url) {
-      return fetch(url).then(function(r) {
+    function fetchJSON(url, opts) {
+      return fetch(url, opts || {}).then(function(r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       });
@@ -3335,20 +3365,22 @@
         html += '</div>';
         html += '<div class="cal-progress-label"><span>' + progressLabel + '</span><span class="pct">' + progressPct + '%</span></div>';
 
-        // Owner notes
+        // Owner notes — condensed single-line format, deduped
         var ownerNotes = (notes.ownerNotes || []);
         if (ownerNotes.length > 0) {
-          html += '<div class="cal-detail-notes">';
+          var seen = {};
+          var uniqueNotes = [];
           for (var j = 0; j < ownerNotes.length; j++) {
-            var n = ownerNotes[j];
-            html += '<div class="note-item">' + escapeHtml(n.note || n);
-            if (n.timestamp) {
-              var nd = new Date(n.timestamp);
-              html += '<span class="note-time">' + nd.toLocaleDateString('en-GB', {day:'numeric',month:'short'}) + '</span>';
+            var txt = ownerNotes[j].note || ownerNotes[j];
+            if (!seen[txt]) { seen[txt] = true; uniqueNotes.push(txt); }
+          }
+          if (uniqueNotes.length > 0) {
+            html += '<div class="cal-detail-notes">';
+            for (var j = 0; j < uniqueNotes.length; j++) {
+              html += '<div class="note-item">\u2022 ' + escapeHtml(uniqueNotes[j]) + '</div>';
             }
             html += '</div>';
           }
-          html += '</div>';
         }
 
         // Included extras (teal chips)
@@ -5654,7 +5686,7 @@
         var l = listings[i];
         var imgHtml = '';
         if (l.composed_image) {
-          var imgUrl = '/listing-images/' + l.id + '/composed/listing.png';
+          var imgUrl = '/listing-images/' + l.id + '/composed/listing.jpg';
           imgHtml = '<div class="mktg-card-img"><img src="' + imgUrl + '" alt="" onerror="this.parentNode.innerHTML=\'&#128247;\'"></div>';
         } else {
           imgHtml = '<div class="mktg-card-img" style="color:#8b8fa3;font-size:24px;">&#128247;</div>';
@@ -5760,7 +5792,7 @@
 
       var imgHtml = '';
       if (listing.composed_image) {
-        var imgUrl = '/listing-images/' + listing.id + '/composed/listing.png';
+        var imgUrl = '/listing-images/' + listing.id + '/composed/listing.jpg';
         imgHtml = '<img src="' + imgUrl + '" style="width:100%;border-radius:8px;margin-bottom:12px;" onerror="this.style.display=\'none\'">';
       }
 

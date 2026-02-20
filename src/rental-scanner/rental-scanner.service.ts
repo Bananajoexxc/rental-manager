@@ -376,6 +376,57 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
+        // Cascade rental_price changes to booking revenue — ownerEarnings may arrive or change
+        // after bookings were already created, leaving booking revenue stale
+        const newPrice = updatedRental.rental_price;
+        const oldPrice = existingRental.rental_price;
+        if (newPrice && newPrice > 0 && oldPrice !== newPrice) {
+          try {
+            const recomputed = await this.calendarService.recomputeRentalRevenue(existingRental.id, newPrice);
+            if (recomputed > 0) {
+              this.logger.log(`💰 Revenue recomputed for ${updatedRental.title}: £${oldPrice || 0} → £${newPrice} (${recomputed} booking(s))`);
+            }
+          } catch (err) {
+            this.logger.warn(`Revenue recompute failed for ${existingRental.id}: ${err.message}`);
+          }
+        }
+
+        // Cascade rental date changes to bookings — Hygglo extensions/modifications must propagate
+        // This ensures calendar shows actual rental period, not stale initial dates
+        const oldStart = existingRental.start_date?.toISOString();
+        const newStart = updatedRental.start_date?.toISOString();
+        const oldEnd = existingRental.end_date?.toISOString();
+        const newEnd = updatedRental.end_date?.toISOString();
+        if ((newStart && oldStart !== newStart) || (newEnd && oldEnd !== newEnd)) {
+          try {
+            const dateUpdate: any = {};
+            if (newStart && oldStart !== newStart) dateUpdate.start_date = updatedRental.start_date;
+            if (newEnd && oldEnd !== newEnd) {
+              dateUpdate.end_date = updatedRental.end_date;
+              // Also update return_date if it was still matching old end_date
+              // (return_date may have been manually set to a different day — don't overwrite those)
+              dateUpdate.return_date = updatedRental.end_date;
+            }
+            const cascaded = await this.prisma.booking.updateMany({
+              where: {
+                rental_id: existingRental.id,
+                status: { in: ['confirmed', 'pending_review'] },
+                // Only cascade if return_date matches old end_date (wasn't manually adjusted)
+                ...(dateUpdate.return_date ? { OR: [
+                  { return_date: existingRental.end_date },
+                  { return_date: null },
+                ] } : {}),
+              },
+              data: dateUpdate,
+            });
+            if (cascaded.count > 0) {
+              this.logger.log(`📅 Cascaded date change to ${cascaded.count} booking(s) for ${updatedRental.title}: end ${oldEnd?.slice(0, 10)} → ${newEnd?.slice(0, 10)}`);
+            }
+          } catch (err) {
+            this.logger.warn(`Date cascade failed for ${existingRental.id}: ${err.message}`);
+          }
+        }
+
         // Cascade renter name updates to bookings and profile (Hygglo verification may change name)
         if (rental.renterInfo && rental.renterInfo !== existingRental.renter_info) {
           const oldName = existingRental.renter_info;

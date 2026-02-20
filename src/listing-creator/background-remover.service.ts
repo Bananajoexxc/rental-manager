@@ -56,24 +56,31 @@ export class BackgroundRemoverService {
   }
 
   /**
-   * Remove background using rembg CLI (local ML model, no API key needed).
+   * Remove background using rembg Python API (local ML model, no API key needed).
+   * Uses /usr/bin/python3 directly to avoid CLI dependency issues (gradio, watchdog).
    */
   private async removeWithRembg(inputPath: string, outputPath: string): Promise<void> {
+    const script = `
+from rembg import remove
+from PIL import Image
+img = Image.open("${inputPath.replace(/"/g, '\\"')}")
+result = remove(img)
+result.save("${outputPath.replace(/"/g, '\\"')}")
+print("OK")
+`.trim();
+
     try {
-      await execFileAsync('rembg', ['i', inputPath, outputPath], {
-        timeout: 60000, // 60s timeout per image
+      const { stdout, stderr } = await execFileAsync('/usr/bin/python3', ['-c', script], {
+        timeout: 120000, // 120s timeout — first run downloads model
       });
-      this.logger.debug(`rembg processed: ${inputPath} → ${outputPath}`);
-    } catch (error: any) {
-      // If rembg not found, try with python -m
-      if (error.code === 'ENOENT') {
-        await execFileAsync('python3', ['-m', 'rembg', 'i', inputPath, outputPath], {
-          timeout: 60000,
-        });
-        this.logger.debug(`rembg (via python3) processed: ${inputPath} → ${outputPath}`);
+      if (stdout.includes('OK')) {
+        this.logger.debug(`rembg processed: ${inputPath} → ${outputPath}`);
       } else {
-        throw error;
+        throw new Error(`rembg output: ${stdout} ${stderr}`);
       }
+    } catch (error: any) {
+      this.logger.error(`rembg failed: ${error.message}`);
+      throw error;
     }
   }
 

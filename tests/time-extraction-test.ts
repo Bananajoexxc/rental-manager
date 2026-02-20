@@ -161,7 +161,7 @@ async function main() {
       };
 
       try {
-        await autonomousService.extractPickupReturnTimes(hyggloMsg, rental);
+        await autonomousService.extractAndUpdateTimes(rental, hyggloMsg);
       } catch (err) {
         console.log(`  ⚠️ Extraction error: ${err.message}`);
       }

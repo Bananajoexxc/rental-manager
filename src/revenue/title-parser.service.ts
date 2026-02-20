@@ -30,54 +30,20 @@ export class TitleParserService {
   }
 
   /**
-   * Call Cerebras API directly with llama-3.3-70b (non-reasoning, fast, token-efficient).
-   * Separate from GeminiService to avoid interfering with autolearn's model/quota.
+   * Call Claude Haiku for title parsing. Reliable JSON output, follows instructions precisely.
    */
-  private async callCerebras(prompt: string): Promise<string | null> {
-    if (!this.apiKey) return null;
+  private async callHaiku(prompt: string): Promise<string | null> {
+    if (!this.anthropicClient) return null;
 
     try {
-      const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b',
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 512,
-        }),
+      const response = await this.anthropicClient.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 512,
+        messages: [{ role: 'user', content: prompt }],
       });
-
-      if (!res.ok) {
-        if (res.status === 429) {
-          // Rate limited — wait and retry once
-          this.logger.warn('Cerebras rate limited, waiting 10s...');
-          await new Promise(r => setTimeout(r, 10_000));
-          const retry = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${this.apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: 'llama-3.3-70b',
-              messages: [{ role: 'user', content: prompt }],
-              max_tokens: 512,
-            }),
-          });
-          if (!retry.ok) return null;
-          const data = await retry.json();
-          return data.choices?.[0]?.message?.content || null;
-        }
-        return null;
-      }
-
-      const data = await res.json();
-      return data.choices?.[0]?.message?.content || null;
+      return response.content[0]?.type === 'text' ? response.content[0].text : null;
     } catch (error: any) {
-      this.logger.error(`Cerebras API error: ${error.message}`);
+      this.logger.error(`Claude Haiku API error: ${error.message}`);
       return null;
     }
   }
@@ -175,16 +141,21 @@ export class TitleParserService {
    * Parse a Hygglo rental title into structured inventory items using AI.
    * Results are cached in-memory to avoid duplicate calls for the same title.
    */
-  async parseTitleWithAI(title: string): Promise<ParsedItem[]> {
+  async parseTitleWithAI(title: string, force = false): Promise<ParsedItem[]> {
     if (!title || title.trim().length === 0) return [];
 
-    // Strip SEO noise: "(like X / Y)", "(similar to X)", "(comparable to X)"
-    // These parenthetical comparisons cause the AI to extract the comparison items instead of the actual item
-    const normalizedTitle = title.trim().replace(/\(\s*(?:like|similar to|comparable to|replaces|vs|or)\s[^)]+\)/gi, '').trim();
+    // Strip SEO noise: parenthetical comparisons, sensor references, model comparisons
+    // These cause the AI to extract comparison items instead of the actual product
+    const normalizedTitle = title.trim()
+      .replace(/\(\s*(?:like|similar to|comparable to|replaces|vs|or|same\s+(?:sensor|chip|quality|level|class)\s+as|equivalent to|alternative to|beats|better than|compared to|upgrade from)\s[^)]+\)/gi, '')
+      .replace(/\(\s*(?:same\s+as|works\s+like|competes\s+with|rival\s+to|matching)\s[^)]+\)/gi, '')
+      .trim();
 
-    // Check in-memory cache
-    const cached = this.cache.get(normalizedTitle);
-    if (cached) return cached;
+    // Check in-memory cache (skip if force re-parse)
+    if (!force) {
+      const cached = this.cache.get(normalizedTitle);
+      if (cached) return cached;
+    }
 
     // Pattern-based overrides for titles the AI consistently fails on
     const patternMatch = this.matchTitlePatterns(normalizedTitle);
@@ -195,26 +166,40 @@ export class TitleParserService {
     }
 
     // Check if any rental with this exact title already has non-empty parsed_items (DB lookup)
-    const existingWithItems = await this.prisma.$queryRaw<{ parsed_items: any }[]>`
-      SELECT parsed_items FROM rental
-      WHERE (title = ${normalizedTitle} OR title = ${title.trim()})
-      AND parsed_items IS NOT NULL AND parsed_items::text != '[]' AND parsed_items::text != 'null'
-      LIMIT 1
-    `;
-    if (existingWithItems.length > 0 && existingWithItems[0].parsed_items) {
-      const items = existingWithItems[0].parsed_items as ParsedItem[];
-      if (items.length > 0) {
-        this.cache.set(normalizedTitle, items);
-        return items;
+    if (!force) {
+      const existingWithItems = await this.prisma.$queryRaw<{ parsed_items: any }[]>`
+        SELECT parsed_items FROM rental
+        WHERE (title = ${normalizedTitle} OR title = ${title.trim()})
+        AND parsed_items IS NOT NULL AND parsed_items::text != '[]' AND parsed_items::text != 'null'
+        LIMIT 1
+      `;
+      if (existingWithItems.length > 0 && existingWithItems[0].parsed_items) {
+        const items = existingWithItems[0].parsed_items as ParsedItem[];
+        if (items.length > 0) {
+          this.cache.set(normalizedTitle, items);
+          return items;
+        }
       }
     }
 
-    if (!this.apiKey) {
-      this.logger.warn('No CEREBRAS_API_KEY — title parsing unavailable');
+    if (!this.anthropicClient) {
+      this.logger.warn('No ANTHROPIC_API_KEY — title parsing unavailable');
       return [];
     }
 
     const inventoryNames = getInventoryItemNames();
+
+    // Estimate expected item count from title structure
+    const plusCount = (normalizedTitle.match(/\+/g) || []).length;
+    // For '+' separated titles: strict count. For comma/ampersand titles: count equipment keywords.
+    let maxItems: number;
+    if (plusCount > 0) {
+      maxItems = plusCount + 2;
+    } else {
+      // Count equipment category keywords mentioned in title (Lens, Gimbal, Monitor, Mic, Light, Camera, etc.)
+      const equipmentKeywords = normalizedTitle.match(/\b(lens|gimbal|monitor|mic|mics|microphone|light|lighting|camera|stabilizer|tripod|slider|transmitter|wireless|speaker|DJ|controller)\b/gi) || [];
+      maxItems = Math.max(3, Math.min(10, equipmentKeywords.length + 2));
+    }
 
     const prompt = `Match this rental listing title to items from my inventory. Titles are SEO-heavy with synonyms and noise words — focus on the CORE product identity (brand + model/focal length).
 
@@ -222,6 +207,16 @@ TITLE: "${normalizedTitle}"
 
 INVENTORY:
 ${inventoryNames.map(n => `- ${n}`).join('\n')}
+
+CRITICAL RULES — READ CAREFULLY:
+1. ONLY extract items that are EXPLICITLY named in the title. NEVER infer or assume accessories.
+2. If the title says "Sony FX3 + 24-70mm lens", that's EXACTLY 2 items. Not 2 items + batteries + shoulder rig + cards.
+3. Items are separated by "+" in bundle titles. Each "+" marks a NEW distinct item. "Camera + Mic" = 2 items, "Camera + Lens + Mic" = 3 items. You MUST return an item for EACH segment separated by "+".
+4. IGNORE parenthetical SEO comparisons like "(same sensor as...)", "(like...)", "(similar to...)" — but DO NOT ignore quantity markers like "(2x)", "(3x)" — those indicate item quantity.
+5. IGNORE descriptive words that aren't items: "cinema", "full frame", "4k", "professional", "ultimate", "complete kit/set".
+6. Words like "kit", "set", "bundle", "complete" do NOT mean extra items — they describe the listing itself.
+7. "a7siii" / "a7s iii" / "a7s3" appearing as a COMPARISON (e.g., "same sensor as a7siii") is NOT an actual item.
+8. Return at most ${maxItems} items. If you find more, you are probably hallucinating.
 
 MATCHING GUIDE:
 - "fx 3" / "fx3" → "Sony FX3"
@@ -236,19 +231,19 @@ MATCHING GUIDE:
 - "nanlite 500" / "nanlite 500b" / "nanlite bi color" → "Nanlite 500B"
 - "v-mount" / "v mount" / "vmount" batteries → "V-mount 95mAh" or "V-mount 150mAh" (150wh/150wah=150mAh, 95wh=95mAh)
 - "sennheiser" / "MKE" / "MKE600" → "Audio boom mic Sennheiser"
+- "DJI wireless mic" / "DJI mic" / "wireless mic DJI" → "DJI Mic 2 wireless"
 - "rode wireless" → "Rode Wireless Mic Pro set"
 - "suction cup" / "suction mount" → "Suction cups"
 - "7artisans" / "7.5mm fisheye" → "7Artisans 7.5mm f2.8 Fisheye"
 - "8-15mm fisheye" → "8-15mm f2.8 Fisheye Zoom"
-- "a7s iii" / "a7siii" / "a7s3" → "Sony A7 III" (we map all A7 variants to this)
+- "a7s iii" / "a7siii" / "a7s3" → "Sony A7 III" (ONLY if used as the primary item, NOT in comparisons)
 - "2x" or "3x" prefix → set qty accordingly
 - Bundle listings with "+" separate multiple items
-- Ignore items NOT in inventory (tripods, stands, cables, cards unless 256GB, cases, adapters unless PL mount)
 
 Return ONLY a JSON array. Example: [{"item": "Sony FX3", "qty": 1}, {"item": "Sony GM 24-70mm f2.8", "qty": 1}]`;
 
     try {
-      const content = await this.callCerebras(prompt);
+      const content = await this.callHaiku(prompt);
       if (!content) return [];
 
       // Extract JSON from response (handle markdown code blocks)
@@ -262,11 +257,56 @@ Return ONLY a JSON array. Example: [{"item": "Sony FX3", "qty": 1}, {"item": "So
 
       const parsed: ParsedItem[] = JSON.parse(jsonStr);
 
-      // Validate: only keep items that exist in inventory
-      const inventorySet = new Set(inventoryNames);
-      const validated = parsed
-        .filter(p => inventorySet.has(p.item) && p.qty > 0)
-        .map(p => ({ item: p.item, qty: Math.round(p.qty) }));
+      // Validate: fuzzy match to inventory (handles AI returning close-but-not-exact names)
+      const seen = new Set<string>();
+      let validated: ParsedItem[] = [];
+      for (const p of parsed) {
+        if (p.qty <= 0) continue;
+        const matched = findBestMatch(p.item, inventoryNames);
+        if (matched && !seen.has(matched)) {
+          seen.add(matched);
+          validated.push({ item: matched, qty: Math.round(p.qty) });
+        }
+      }
+
+      // Structural constraint: AI should not return more items than the title suggests.
+      if (validated.length > maxItems) {
+        this.logger.warn(`AI returned ${validated.length} items for "${normalizedTitle.substring(0, 60)}" (max expected: ${maxItems}). Trimming to first ${maxItems}.`);
+        validated = validated.slice(0, maxItems);
+      }
+
+      // Post-processing: if title has '+' segments, ensure each segment is represented.
+      // If the AI missed a segment, try fuzzy matching that segment directly.
+      if (plusCount > 0) {
+        const segments = normalizedTitle.split(/\s*\+\s*/);
+        for (const seg of segments) {
+          // Clean segment: strip trailing SEO noise (after ' – ', ' | ', ' -')
+          const cleanSeg = seg.split(/\s*[–|]\s*/)[0].trim();
+          if (!cleanSeg) continue;
+          // Check if any validated item could represent this segment
+          const segLower = cleanSeg.toLowerCase();
+          const alreadyCovered = validated.some(v => {
+            const vLower = v.item.toLowerCase();
+            // Check if segment keywords overlap with item name
+            const segWords = segLower.split(/\s+/).filter(w => w.length > 2);
+            return segWords.some(w => vLower.includes(w));
+          });
+          if (!alreadyCovered) {
+            // Strip quantity markers like "(2x)" before fuzzy matching
+            const matchableSeg = cleanSeg.replace(/\(\d+x?\)/gi, '').trim();
+            // Try fuzzy matching the segment text directly
+            const matched = findBestMatch(matchableSeg, inventoryNames);
+            if (matched && !seen.has(matched)) {
+              this.logger.log(`Post-process: segment "${cleanSeg.substring(0, 40)}" → "${matched}"`);
+              seen.add(matched);
+              // Try to extract quantity from segment (e.g., "(2x)")
+              const qtyMatch = cleanSeg.match(/\((\d+)x?\)/i);
+              const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
+              validated.push({ item: matched, qty });
+            }
+          }
+        }
+      }
 
       this.cache.set(normalizedTitle, validated);
       return validated;
