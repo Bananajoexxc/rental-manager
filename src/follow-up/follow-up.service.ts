@@ -23,6 +23,7 @@ export interface ConversationState {
   upsellItems?: string[];           // What was upsold
   priceQuoted?: number;             // Last price quoted
   deliveryDiscussed?: boolean;
+  rentalNotes?: string[];           // Noteworthy details: extras requested, special conditions, delivery preferences, anything owner should know
 }
 
 @Injectable()
