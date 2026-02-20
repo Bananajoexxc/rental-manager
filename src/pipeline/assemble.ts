@@ -96,8 +96,7 @@ function buildFactsSection(facts: FactPack, classification: MessageClassificatio
     }
     parts.push(`Rental: ${r.title} | Status: ${r.status} | Dates: ${startStr} to ${endStr}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}${returnMorningStr}`);
     parts.push(`Renter: ${r.renterName}`);
-    if (r.renterPrice) parts.push(`Renter pays: £${r.renterPrice}`);
-    if (r.rentalPrice) parts.push(`Owner profit: £${Math.round(r.rentalPrice)}`);
+    if (r.renterPrice) parts.push(`Total price: £${r.renterPrice}`);
   }
 
   // Resolved items
@@ -114,7 +113,7 @@ function buildFactsSection(facts: FactPack, classification: MessageClassificatio
   // Pricing
   if (facts.pricing) {
     for (const p of facts.pricing.itemPrices) {
-      parts.push(`${p.itemName}: £${p.dailyMin}-${p.dailyMax}/day (renter pays ~£${p.renterPays}, owner earns ~£${p.ownerEarns})`);
+      parts.push(`${p.itemName}: £${p.dailyMin}-${p.dailyMax}/day`);
     }
     if (facts.pricing.bundlePrices) {
       for (const b of facts.pricing.bundlePrices) {

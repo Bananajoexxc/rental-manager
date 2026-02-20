@@ -269,7 +269,6 @@ export async function gatherFacts(
                 dailyMin: entry.daily_price_min,
                 dailyMax: entry.daily_price_max,
                 renterPays: entry.daily_price_max,
-                ownerEarns: Math.round(entry.daily_price_max * 0.64),
               });
             }
           }
@@ -284,7 +283,6 @@ export async function gatherFacts(
                 dailyMin: entry.daily_price_min,
                 dailyMax: entry.daily_price_max,
                 renterPays: entry.daily_price_max,
-                ownerEarns: Math.round(entry.daily_price_max * 0.64),
               });
             }
           }

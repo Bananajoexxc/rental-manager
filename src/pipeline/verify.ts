@@ -21,17 +21,14 @@ export function verifyResponse(response: string, facts: FactPack): VerificationR
     for (const p of facts.pricing.itemPrices) {
       knownPrices.push(p.dailyMin, p.dailyMax);
       if (p.renterPays) knownPrices.push(p.renterPays);
-      if (p.ownerEarns) knownPrices.push(p.ownerEarns);
     }
     if (facts.pricing.bundlePrices) {
       for (const b of facts.pricing.bundlePrices) {
         knownPrices.push(b.dailyMin, b.dailyMax);
         if (b.renterPays) knownPrices.push(b.renterPays);
-        if (b.ownerEarns) knownPrices.push(b.ownerEarns);
       }
     }
-    // Add rental-level prices
-    if (facts.rental?.rentalPrice) knownPrices.push(Math.round(facts.rental.rentalPrice));
+    // Add rental-level renter price only (not owner earnings)
     if (facts.rental?.renterPrice) knownPrices.push(Math.round(facts.rental.renterPrice));
 
     // Also add multi-day computed prices (±15 tolerance for rounding)
@@ -39,8 +36,6 @@ export function verifyResponse(response: string, facts: FactPack): VerificationR
     for (const dm of dailyMaxes) {
       // 3-day, 7-day approximations
       knownPrices.push(Math.round(dm * 2.5), Math.round(dm * 5));
-      // Owner earnings versions
-      knownPrices.push(Math.round(dm * 2.5 * 0.64), Math.round(dm * 5 * 0.64));
     }
 
     for (const price of mentionedPrices) {

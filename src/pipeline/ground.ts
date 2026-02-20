@@ -43,8 +43,7 @@ export function buildKnownFacts(facts: FactPack): string[] {
       entries.push(`Dates: ${start} to ${end}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}${returnMorning}`);
     }
     entries.push(`Renter: ${r.renterName}`);
-    if (r.renterPrice) entries.push(`Renter pays: £${r.renterPrice}`);
-    if (r.rentalPrice) entries.push(`Owner earns: £${Math.round(r.rentalPrice)}`);
+    if (r.renterPrice) entries.push(`Total price: £${r.renterPrice}`);
     entries.push(`Account: ${r.account}`);
   }
 

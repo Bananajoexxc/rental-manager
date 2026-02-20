@@ -72,7 +72,6 @@ export interface ItemPricing {
   dailyMin: number;
   dailyMax: number;
   renterPays?: number;
-  ownerEarns?: number;
 }
 
 export interface ItemAvailability {
