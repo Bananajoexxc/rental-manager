@@ -465,28 +465,30 @@ export class HyggloService implements OnModuleInit {
     if (!token) return orders;
 
     const enriched: any[] = [];
+    const BATCH_SIZE = 5;
 
-    for (const order of orders) {
-      const orderId = order.id;
-      if (!orderId) {
-        enriched.push(order);
-        continue;
-      }
+    for (let i = 0; i < orders.length; i += BATCH_SIZE) {
+      const batch = orders.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (order) => {
+          const orderId = order.id;
+          if (!orderId) return order;
 
-      try {
-        const detailRes = await this.client.get(`/v4/my/orders/${orderId}`, {
-          params: { timezone: 'Europe/London' },
-          headers: { 'Authorization': `Bearer ${token.accessToken}` },
-          __account: accountName,
-        } as any);
+          try {
+            const detailRes = await this.client.get(`/v4/my/orders/${orderId}`, {
+              params: { timezone: 'Europe/London' },
+              headers: { 'Authorization': `Bearer ${token.accessToken}` },
+              __account: accountName,
+            } as any);
 
-        const detail = detailRes.data;
-        // Merge detail into order (detail has all the same fields plus more)
-        enriched.push({ ...order, _detail: detail });
-      } catch (error) {
-        this.logger.debug(`Failed to fetch detail for order ${orderId}: ${error instanceof AxiosError ? error.response?.status : error.message}`);
-        enriched.push(order);
-      }
+            return { ...order, _detail: detailRes.data };
+          } catch (error) {
+            this.logger.debug(`Failed to fetch detail for order ${orderId}: ${error instanceof AxiosError ? error.response?.status : error.message}`);
+            return order;
+          }
+        }),
+      );
+      enriched.push(...batchResults);
     }
 
     return enriched;
@@ -1005,12 +1007,20 @@ export class HyggloService implements OnModuleInit {
 
   // --- Messaging ---
 
-  async readMessages(orderId: string): Promise<{ sender: string; content: string; timestamp: string; imageUrls?: string[] }[]> {
+  async readMessages(orderId: string, preferredAccount?: HyggloAccount): Promise<{ sender: string; content: string; timestamp: string; imageUrls?: string[] }[]> {
     // Fetch order detail which contains activities (chat messages)
-    // Try all accounts and prefer the owner perspective for correct sender labeling
+    // Try preferred account first (from rental.account), then others — avoids wasted 404s
     let fallbackResult: { detail: any; account: string } | null = null;
 
-    for (const account of this.accounts) {
+    // Reorder accounts: preferred first, then the rest
+    const orderedAccounts = preferredAccount
+      ? [
+          ...this.accounts.filter(a => a.name === preferredAccount),
+          ...this.accounts.filter(a => a.name !== preferredAccount),
+        ]
+      : this.accounts;
+
+    for (const account of orderedAccounts) {
       const authenticated = await this.ensureAuthenticated(account.name);
       if (!authenticated) continue;
 
@@ -1027,7 +1037,7 @@ export class HyggloService implements OnModuleInit {
 
         if (detail.role === 'owner') {
           // Preferred: reading as owner gives us the correct perspective
-          return this.extractChatMessages(detail, account.name, true);
+          return this.extractChatMessages(detail, account.name, true, 'api');
         }
 
         // Store as fallback in case no owner account can access this order
@@ -1042,14 +1052,15 @@ export class HyggloService implements OnModuleInit {
 
     // Use fallback (non-owner perspective) if no owner account found
     if (fallbackResult) {
-      return this.extractChatMessages(fallbackResult.detail, fallbackResult.account, false);
+      return this.extractChatMessages(fallbackResult.detail, fallbackResult.account, false, 'api');
     }
 
     this.logger.debug(`readMessages(${orderId}) — no messages found`);
     return [];
   }
 
-  private extractChatMessages(detail: any, accountName: string, isOwnerPerspective: boolean): { sender: string; content: string; timestamp: string; imageUrls?: string[] }[] {
+  /** Extract chat messages from order detail. Public so scanner can use cached _detail. */
+  extractChatMessages(detail: any, accountName: string, isOwnerPerspective: boolean, source: string = 'api'): { sender: string; content: string; timestamp: string; imageUrls?: string[] }[] {
     const activities: any[] = detail.activities || [];
     const otherPartName = detail.users?.otherPart?.name || detail.labels?.otherPart || 'Renter';
 
@@ -1107,7 +1118,13 @@ export class HyggloService implements OnModuleInit {
     if (allMessages.length > 0) {
       const chatCount = allMessages.filter(m => m.sender !== 'Hygglo System').length;
       const systemCount = allMessages.filter(m => m.sender === 'Hygglo System').length;
-      this.logger.log(`readMessages(${detail.id}) found ${chatCount} chat + ${systemCount} system messages for ${accountName} (role: ${isOwnerPerspective ? 'owner' : 'customer'})`);
+      const msg = `extractChatMessages(${detail.id}) ${chatCount} chat + ${systemCount} system msgs for ${accountName} [${source}]`;
+      // Only log at info level for actual API calls; cache reads are noise
+      if (source === 'api') {
+        this.logger.log(msg);
+      } else {
+        this.logger.debug(msg);
+      }
     }
     return allMessages;
   }
@@ -1228,12 +1245,13 @@ export class HyggloService implements OnModuleInit {
     return false;
   }
 
-  async checkNewMessages(): Promise<{ rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean; imageUrls?: string[] }[]> {
+  async checkNewMessages(cachedRentals?: RentalListing[]): Promise<{ rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean; imageUrls?: string[] }[]> {
     const allNewMessages: { rentalId: string; sender: string; content: string; timestamp: string; isNew: boolean; imageUrls?: string[] }[] = [];
 
     // Get all ongoing and upcoming orders to check for messages
+    // Use cached rentals from performScan() if available — avoids redundant API calls
     try {
-      const allRentals = await this.scanAllAccounts('both');
+      const allRentals = cachedRentals ?? await this.scanAllAccounts('both');
 
       // Deduplicate: same listing can appear from multiple account scans
       const processedListingIds = new Set<string>();
@@ -1244,7 +1262,10 @@ export class HyggloService implements OnModuleInit {
         processedListingIds.add(rental.listingId);
 
         try {
-          const messages = await this.readMessages(rental.listingId);
+          // Use _detail from cached rental scan if available — avoids redundant API call per rental
+          const messages = rental._detail?.activities
+            ? this.extractChatMessages(rental._detail, rental.account || 'dbcinema', true, 'cache')
+            : await this.readMessages(rental.listingId, rental.account);
           if (messages.length === 0) continue;
 
           let lastCheckTime = this.lastMessageCheckTime.get(rental.listingId);

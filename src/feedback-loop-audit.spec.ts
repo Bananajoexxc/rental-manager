@@ -87,12 +87,12 @@ describe('Feedback Loop: Schema & Tracking', () => {
 describe('AutoLearn Engine: Replaces FeedbackService', () => {
   it('AutolearnService exists and has hourly cycle cron', () => {
     expect(autolearnCode).toContain('class AutolearnService');
-    expect(autolearnCode).toContain("@Cron('0 * * * *')");
+    expect(autolearnCode).toContain("@Cron('0 */4 * * *')");
     expect(autolearnCode).toContain('runHourlyCycle');
   });
 
   it('AutolearnService has weekly DSPy optimization cron', () => {
-    expect(autolearnCode).toContain("@Cron('0 3 * * 1')");
+    expect(autolearnCode).toContain("@Cron('0 8 * * 1')");
     expect(autolearnCode).toContain('weeklyDspyOptimization');
   });
 
@@ -344,7 +344,7 @@ describe('Self-Improvement Pipeline Completeness', () => {
   });
 
   it('DSPy optimization is scheduled weekly in AutoLearn', () => {
-    expect(autolearnCode).toContain("@Cron('0 3 * * 1')");
+    expect(autolearnCode).toContain("@Cron('0 8 * * 1')");
     expect(autolearnCode).toContain('weeklyDspyOptimization');
   });
 

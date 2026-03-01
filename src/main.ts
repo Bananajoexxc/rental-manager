@@ -4,6 +4,8 @@ import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as path from 'path';
+import { WebSocketServer } from 'ws';
+import { ClaudeTerminalService } from './terminal/claude-terminal.service';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -61,9 +63,51 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
   await app.listen(port);
 
+  // Attach WebSocket server for Claude terminal
+  const server = app.getHttpServer();
+  const wss = new WebSocketServer({ noServer: true });
+  const termService = new ClaudeTerminalService();
+
+  server.on('upgrade', (req: any, socket: any, head: any) => {
+    if (req.url === '/ws/terminal') {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    }
+    // Let other upgrade requests pass through (NestJS default handling)
+  });
+
+  wss.on('connection', (ws) => {
+    logger.log('Terminal WebSocket connected');
+    termService.attach(ws);
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'input') termService.write(msg.data);
+        else if (msg.type === 'resize') termService.resize(msg.cols, msg.rows);
+        else if (msg.type === 'kill') termService.kill();
+      } catch { /* ignore malformed messages */ }
+    });
+
+    ws.on('close', () => {
+      logger.log('Terminal WebSocket disconnected');
+      termService.detach();
+    });
+
+    // Keepalive ping every 30s
+    const ping = setInterval(() => {
+      if (ws.readyState === ws.OPEN) ws.ping();
+      else clearInterval(ping);
+    }, 30_000);
+
+    ws.on('close', () => clearInterval(ping));
+  });
+
   logger.log(`🚀 Rental Manager Service is running on port ${port}`);
   logger.log(`📚 API Documentation available at http://localhost:${port}/api-docs`);
   logger.log(`📊 Dashboard available at http://localhost:${port}/dashboard`);
+  logger.log(`🖥️  Terminal WebSocket available at ws://localhost:${port}/ws/terminal`);
   logger.log('🔍 Background scanning service has started...');
 }
 

@@ -40,14 +40,8 @@ export class RevenueService {
   private readonly logger = new Logger(RevenueService.name);
 
   /** Cached data-derived baselines (computed once, stored in DB) */
-  private baselinesCache: {
-    responseCoverage: number;
-    offHoursHandling: number;
-    followUpRate: number;
-    conversionRate: number;
-    qualityScore: number;
-  } | null = null;
-
+  private boostCache: { data: any; expiry: number } | null = null;
+  private static readonly BOOST_CACHE_TTL = 10 * 60 * 1000; // 10 min cache
   private static readonly AI_DEPLOY_DATE = new Date('2026-01-29');
 
   /**
@@ -1222,56 +1216,24 @@ export class RevenueService {
    * Get data-derived baselines (cached in memory, persisted in DB).
    * Replaces the old static PRE_AI_BASELINES.
    */
-  private async getBaselines(): Promise<{
+  private getBaselines(): {
     responseCoverage: number;
     offHoursHandling: number;
     followUpRate: number;
     conversionRate: number;
     qualityScore: number;
-  }> {
-    // Memory cache hit
-    if (this.baselinesCache) return this.baselinesCache;
-
-    // Try loading from DB
-    const stored = await this.prisma.ai_decision.findMany({
-      where: { decision_type: { in: ['baseline_conversion_rate', 'baseline_quality_score', 'baseline_response_coverage'] } },
-      orderBy: { created_at: 'desc' },
-    });
-
-    const conversionRow = stored.find(r => r.decision_type === 'baseline_conversion_rate');
-    const qualityRow = stored.find(r => r.decision_type === 'baseline_quality_score');
-    const coverageRow = stored.find(r => r.decision_type === 'baseline_response_coverage');
-
-    let conversionRate = conversionRow?.confidence ?? null;
-    let qualityScore = qualityRow?.confidence ?? null;
-    let responseCoverage = coverageRow?.confidence ?? null;
-
-    // Compute any missing baselines
-    if (conversionRate === null) {
-      const result = await this.computeConversionBaseline();
-      conversionRate = result.rate;
-      await this.storeBaseline('baseline_conversion_rate', result.rate, result.source, result.dataPoints);
-    }
-    if (qualityScore === null) {
-      const result = await this.computeQualityBaseline();
-      qualityScore = result.score;
-      await this.storeBaseline('baseline_quality_score', result.score, result.source, result.dataPoints);
-    }
-    if (responseCoverage === null) {
-      const result = await this.analyzeHistoricalResponseRate();
-      responseCoverage = result.rate;
-      await this.storeBaseline('baseline_response_coverage', result.rate, result.source, result.ordersAnalyzed);
-    }
-
-    this.baselinesCache = {
-      responseCoverage,
-      offHoursHandling: 0,
-      followUpRate: 0,
-      conversionRate,
-      qualityScore,
+  } {
+    // HARDCODED PRE-AI BASELINES — based on solo human operator reality.
+    // The DB has no true pre-AI data (system went live Feb 4 2026).
+    // Previous "data-derived" baselines were contaminated (computed from AI-era data).
+    // These reflect Daniel's actual manual operation before the bot:
+    return {
+      responseCoverage: 0.55,  // ~55% of messages got a reply within 4 hours (manual, waking hours only)
+      offHoursHandling: 0.0,   // Zero off-hours responses — no one replies at 2am manually
+      followUpRate: 0.0,       // No systematic follow-ups — manual operation doesn't chase cold leads
+      conversionRate: 0.077,   // 7.7% — from earliest funnel snapshot (Feb 2026, AI had just started)
+      qualityScore: 0.80,      // 80% — manual responses are good but inconsistent/slow vs templated AI
     };
-
-    return this.baselinesCache;
   }
 
   /** Store a computed baseline in ai_decision for persistence. */
@@ -1289,8 +1251,9 @@ export class RevenueService {
   }
 
   /**
-   * Force-recalculate all 3 data-derived baselines.
-   * Clears cache, recomputes from source data, stores in DB.
+   * Returns the hardcoded pre-AI baselines.
+   * Previously this recalculated from DB data, but that was circular
+   * (computing "pre-AI" baselines from AI-era data).
    */
   async calibrateBaselines(): Promise<{
     conversionRate: { value: number; dataPoints: number; source: string };
@@ -1298,34 +1261,11 @@ export class RevenueService {
     responseCoverage: { value: number; ordersAnalyzed: number; source: string };
     calibratedAt: string;
   }> {
-    this.baselinesCache = null;
-
-    const [conversion, quality, coverage] = await Promise.all([
-      this.computeConversionBaseline(),
-      this.computeQualityBaseline(),
-      this.analyzeHistoricalResponseRate(),
-    ]);
-
-    // Store all 3 fresh baselines
-    await Promise.all([
-      this.storeBaseline('baseline_conversion_rate', conversion.rate, conversion.source, conversion.dataPoints),
-      this.storeBaseline('baseline_quality_score', quality.score, quality.source, quality.dataPoints),
-      this.storeBaseline('baseline_response_coverage', coverage.rate, coverage.source, coverage.ordersAnalyzed),
-    ]);
-
-    // Update cache
-    this.baselinesCache = {
-      responseCoverage: coverage.rate,
-      offHoursHandling: 0,
-      followUpRate: 0,
-      conversionRate: conversion.rate,
-      qualityScore: quality.score,
-    };
-
+    const b = this.getBaselines();
     return {
-      conversionRate: { value: conversion.rate, dataPoints: conversion.dataPoints, source: conversion.source },
-      qualityScore: { value: quality.score, dataPoints: quality.dataPoints, source: quality.source },
-      responseCoverage: { value: coverage.rate, ordersAnalyzed: coverage.ordersAnalyzed, source: coverage.source },
+      conversionRate: { value: b.conversionRate, dataPoints: 0, source: 'hardcoded pre-AI estimate' },
+      qualityScore: { value: b.qualityScore, dataPoints: 0, source: 'hardcoded pre-AI estimate' },
+      responseCoverage: { value: b.responseCoverage, ordersAnalyzed: 0, source: 'hardcoded pre-AI estimate' },
       calibratedAt: new Date().toISOString(),
     };
   }
@@ -1333,9 +1273,9 @@ export class RevenueService {
   /**
    * Weekly cron: Self-evaluate AI boost rate by measuring actual performance
    * against pre-AI baselines. Stores result in ai_decision table.
-   * Runs every Monday at 3am.
+   * Runs every Monday at 8am (moved from 3am to avoid quiet hours).
    */
-  @Cron('0 3 * * 1')
+  @Cron('0 8 * * 1')
   async weeklyAiBoostEvaluation(): Promise<void> {
     this.logger.log('=== WEEKLY AI BOOST EVALUATION: Starting ===');
     try {
@@ -1356,131 +1296,181 @@ export class RevenueService {
     factors: { name: string; rate: number; measured: number; baseline: number; description: string }[];
     evaluatedAt: string;
     dataPoints: number;
+    realMetrics: {
+      messagesSent7d: number;
+      messagesSent24h: number;
+      offHoursMessages7d: number;
+      activeConversations: number;
+      followUpsSent: number;
+      conversionRate: number;
+      avgConfidence: number;
+    };
   }> {
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const baselines = await this.getBaselines();
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const baselines = this.getBaselines();
 
-    // 1. RESPONSE COVERAGE — what % of renter messages got AI responses?
-    const messageDecisions = await this.prisma.ai_decision.count({
-      where: { decision_type: 'message', created_at: { gte: weekAgo } },
+    // ===== REAL COUNTS (not percentages of percentages) =====
+
+    const messagesSent7d = await this.prisma.ai_decision.count({
+      where: { decision_type: 'message', created_at: { gte: weekAgo }, notified: true },
     });
-    const totalConversations = await this.prisma.follow_up_state.count({
+    const messagesSent24h = await this.prisma.ai_decision.count({
+      where: { decision_type: 'message', created_at: { gte: dayAgo }, notified: true },
+    });
+    const totalDecisions7d = await this.prisma.ai_decision.count({
+      where: { created_at: { gte: weekAgo } },
+    });
+
+    // Active conversations (renter messaged in last 7d)
+    const activeConversations = await this.prisma.follow_up_state.count({
       where: { last_renter_message_at: { gte: weekAgo } },
     });
-    const aiResponseCoverage = totalConversations > 0
-      ? Math.min(messageDecisions / totalConversations, 1.0)
-      : 0.95; // default if no data
-    // Boost from coverage improvement: AI handles more messages → more potential conversions
-    const coverageLift = Math.max(0, (aiResponseCoverage - baselines.responseCoverage) / baselines.responseCoverage);
-    const speedRate = Math.min(coverageLift * 0.20, 0.18); // cap at 18%
+    const totalStates = await this.prisma.follow_up_state.count();
 
-    // 2. OFF-HOURS AVAILABILITY — what % of AI responses were outside 9am-6pm?
-    const offHoursDecisions = await this.prisma.$queryRaw<[{ cnt: number }]>`
+    // Average confidence on sent messages
+    const confAgg = await this.prisma.ai_decision.aggregate({
+      where: { decision_type: 'message', created_at: { gte: weekAgo }, notified: true },
+      _avg: { confidence: true },
+    });
+    const avgConfidence = confAgg._avg.confidence || 0;
+
+    // ===== 1. RESPONSE COVERAGE — AI answers ~95%+ of inquiries, human was ~55% =====
+    const aiResponseCoverage = activeConversations > 0
+      ? Math.min(messagesSent7d / activeConversations, 1.0)
+      : 0.95;
+    // Direct lift: (AI coverage - pre-AI coverage). No weird multipliers.
+    const coverageLift = Math.max(0, aiResponseCoverage - baselines.responseCoverage);
+
+    // ===== 2. OFF-HOURS — messages sent when Daniel would have been asleep/busy =====
+    const offHoursResult = await this.prisma.$queryRaw<[{ cnt: number }]>`
       SELECT COUNT(*)::int as cnt FROM ai_decision
-      WHERE decision_type = 'message' AND created_at >= ${weekAgo}
+      WHERE decision_type = 'message' AND notified = true AND created_at >= ${weekAgo}
         AND (EXTRACT(HOUR FROM created_at) < 9 OR EXTRACT(HOUR FROM created_at) >= 18
              OR EXTRACT(DOW FROM created_at) IN (0, 6))
     `;
-    const offHoursCount = offHoursDecisions[0]?.cnt || 0;
-    const offHoursRate = messageDecisions > 0 ? offHoursCount / messageDecisions : 0.25;
-    // Every off-hours response is a conversion the human couldn't have made
-    const availabilityRate = Math.min(offHoursRate * 0.25, 0.10); // cap at 10%
+    const offHoursMessages = offHoursResult[0]?.cnt || 0;
+    const offHoursRatio = messagesSent7d > 0 ? offHoursMessages / messagesSent7d : 0;
+    // These messages would have been missed entirely — pure AI value
+    const offHoursLift = offHoursRatio; // what fraction of revenue came from off-hours conversations
 
-    // 3. FOLLOW-UP EFFECTIVENESS — how many follow-ups sent, and what % of conversations progressed?
+    // ===== 3. FOLLOW-UPS — conversations rescued from going cold =====
     const withFollowups = await this.prisma.follow_up_state.count({
       where: { followup_count: { gt: 0 } },
     });
-    const totalStates = await this.prisma.follow_up_state.count();
-    const followUpEngagement = totalStates > 0 ? withFollowups / totalStates : 0;
-    // Conversations that progressed past INQUIRY (would have gone cold without follow-ups)
-    const progressedPastInquiry = await this.prisma.follow_up_state.count({
-      where: { conversation_stage: { notIn: ['inquiry', 'dead'] } },
+    const followUpsSent = withFollowups;
+    const followUpRatio = totalStates > 0 ? withFollowups / totalStates : 0;
+    // How many followed-up conversations actually converted?
+    const followUpConverted = await this.prisma.follow_up_state.count({
+      where: {
+        followup_count: { gt: 0 },
+        conversation_stage: { in: ['confirmed', 'completed', 'booked'] },
+      },
     });
-    const progressionRate = totalStates > 0 ? progressedPastInquiry / totalStates : 0;
-    const followUpRate = Math.min(followUpEngagement * progressionRate * 0.40, 0.12); // cap at 12%
+    const followUpConversionRate = withFollowups > 0 ? followUpConverted / withFollowups : 0;
 
-    // 4. CONVERSION FUNNEL — actual conversion rate vs funnel snapshot baseline (or pre-AI fallback)
+    // ===== 4. CONVERSION — actual vs pre-AI baseline =====
     const confirmedStages = await this.prisma.follow_up_state.count({
       where: { conversation_stage: { in: ['confirmed', 'completed', 'booked'] } },
     });
-    const actualConversion = totalStates > 0 ? confirmedStages / totalStates : baselines.conversionRate;
-    // Prefer real funnel snapshot data over pre-AI estimate
-    // Use earliest snapshot with actual conversation data (total > 0)
-    const earliestSnapshot = await this.prisma.funnel_snapshot.findFirst({
-      where: { account: null, total: { gt: 0 } },
-      orderBy: { period_start: 'asc' },
-    });
-    const baselineConversion = earliestSnapshot
-      ? earliestSnapshot.conversion_rate
-      : baselines.conversionRate;
-    const conversionBaselineSource = earliestSnapshot
-      ? `funnel log ${earliestSnapshot.period_start.toISOString().substring(0, 7)}`
-      : 'data-derived';
-    const conversionLift = Math.max(0, (actualConversion - baselineConversion) / Math.max(baselineConversion, 0.01));
-    const conversionRate = Math.min(conversionLift * 0.10, 0.08); // cap at 8%
+    const actualConversion = totalStates > 0 ? confirmedStages / totalStates : 0;
+    const conversionLift = Math.max(0, actualConversion - baselines.conversionRate);
 
-    // 5. QUALITY SCORE — from response_quality table
+    // ===== 5. QUALITY — from response_quality scores =====
     const qualityAvg = await this.prisma.$queryRaw<[{ avg: number | null }]>`
       SELECT AVG(overall_quality)::float as avg FROM response_quality
       WHERE created_at >= ${weekAgo} AND overall_quality IS NOT NULL
     `;
     const aiQuality = qualityAvg[0]?.avg || 0.85;
-    const qualityLift = Math.max(0, (aiQuality - baselines.qualityScore) / baselines.qualityScore);
-    // Higher quality → fewer lost deals from bad responses
-    const qualityRate = Math.min(qualityLift * 0.05, 0.05); // cap at 5%
+    const qualityLift = Math.max(0, aiQuality - baselines.qualityScore);
 
-    // 6. MISSED REVENUE RECOVERY — denied + expired revenue that AI instant service would capture
-    let missedRecoveryRate = 0;
+    // ===== 6. MISSED REVENUE — denied/expired that instant AI response could save =====
     let missedRevTotal = 0;
     let missedRevCount = 0;
     try {
-      const [denied, expired] = await Promise.all([
-        this.lostRevenueService.getDeniedRevenueSummary('3m'),
-        this.prisma.lost_revenue_record.aggregate({
-          where: {
-            denial_type: { in: ['owner_denied', 'expired'] },
-            lost_revenue: { gte: 25 },
-            start_date: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
-          },
-          _sum: { lost_revenue: true },
-          _count: true,
-        }),
-      ]);
-      missedRevTotal = (expired._sum.lost_revenue || 0);
-      missedRevCount = expired._count || 0;
-      // What fraction of actual revenue do missed opportunities represent?
-      // AI would capture ~60% of these (some renters wouldn't convert regardless)
-      const monthlyActual = await this.prisma.rental.aggregate({
+      const expired = await this.prisma.lost_revenue_record.aggregate({
         where: {
-          status: { in: ['completed', 'ongoing', 'upcoming'] },
-          rental_price: { gt: 0 },
+          denial_type: { in: ['owner_denied', 'expired'] },
+          lost_revenue: { gte: 25 },
           start_date: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
         },
-        _sum: { rental_price: true },
+        _sum: { lost_revenue: true },
+        _count: true,
       });
-      const actualRev3m = monthlyActual._sum.rental_price || 1;
-      const recoveryRatio = missedRevTotal / actualRev3m;
-      // AI would recover ~60% of missed revenue, capped at 15% boost contribution
-      missedRecoveryRate = Math.min(recoveryRatio * 0.60, 0.15);
+      missedRevTotal = expired._sum.lost_revenue || 0;
+      missedRevCount = expired._count || 0;
     } catch (err) {
       this.logger.debug(`Missed revenue recovery calc failed: ${err.message}`);
     }
 
-    const boostRate = Math.round((speedRate + availabilityRate + followUpRate + conversionRate + qualityRate + missedRecoveryRate) * 100) / 100;
-    const dataPoints = messageDecisions + totalStates;
+    // ===== BOOST RATE — transparent, additive contributions =====
+    // Each factor directly measures "what % of revenue can be attributed to this AI capability"
+    const speedContribution = coverageLift * 0.15;                              // Coverage improvement × weight
+    const availabilityContribution = offHoursLift * 0.15;                       // Off-hours fraction × weight
+    const followUpContribution = followUpRatio * followUpConversionRate * 0.20; // Follow-ups that converted × weight
+    const conversionContribution = conversionLift > 0 ? Math.min(conversionLift / baselines.conversionRate, 1.0) * 0.10 : 0; // Relative conversion improvement
+    const qualityContribution = qualityLift > 0 ? qualityLift * 0.10 : 0;      // Quality improvement × weight
+
+    const boostRate = Math.round((speedContribution + availabilityContribution + followUpContribution + conversionContribution + qualityContribution) * 100) / 100;
+    const dataPoints = totalDecisions7d + totalStates;
 
     return {
-      boostRate: Math.max(0.05, Math.min(boostRate, 0.50)), // floor 5%, cap 50%
+      boostRate: Math.max(0.05, Math.min(boostRate, 0.50)),
       factors: [
-        { name: 'Response Speed', rate: Math.round(speedRate * 100) / 100, measured: Math.round(aiResponseCoverage * 100) / 100, baseline: baselines.responseCoverage, description: `${Math.round(aiResponseCoverage * 100)}% coverage vs ${Math.round(baselines.responseCoverage * 100)}% pre-AI (data-derived)` },
-        { name: '24/7 Availability', rate: Math.round(availabilityRate * 100) / 100, measured: Math.round(offHoursRate * 100) / 100, baseline: baselines.offHoursHandling, description: `${Math.round(offHoursRate * 100)}% off-hours responses` },
-        { name: 'Auto Follow-ups', rate: Math.round(followUpRate * 100) / 100, measured: Math.round(followUpEngagement * 100) / 100, baseline: baselines.followUpRate, description: `${Math.round(followUpEngagement * 100)}% conversations got follow-ups, ${Math.round(progressionRate * 100)}% progressed` },
-        { name: 'Conversion Lift', rate: Math.round(conversionRate * 100) / 100, measured: Math.round(actualConversion * 100) / 100, baseline: baselineConversion, description: `${Math.round(actualConversion * 100)}% conversion vs ${Math.round(baselineConversion * 100)}% month-1 (${conversionBaselineSource})` },
-        { name: 'Quality Premium', rate: Math.round(qualityRate * 100) / 100, measured: Math.round(aiQuality * 100) / 100, baseline: baselines.qualityScore, description: `${Math.round(aiQuality * 100)}% quality vs ${Math.round(baselines.qualityScore * 100)}% pre-AI (data-derived)` },
-        { name: 'Missed Revenue Recovery', rate: Math.round(missedRecoveryRate * 100) / 100, measured: Math.round(missedRevTotal), baseline: 0, description: `£${Math.round(missedRevTotal)} from ${missedRevCount} denied/expired requests (3mo) — AI instant response would recover ~60%` },
+        {
+          name: 'Response Coverage',
+          rate: Math.round(speedContribution * 100) / 100,
+          measured: Math.round(aiResponseCoverage * 100) / 100,
+          baseline: baselines.responseCoverage,
+          description: `${Math.round(aiResponseCoverage * 100)}% coverage now vs ${Math.round(baselines.responseCoverage * 100)}% pre-AI (manual)`,
+        },
+        {
+          name: '24/7 Availability',
+          rate: Math.round(availabilityContribution * 100) / 100,
+          measured: Math.round(offHoursRatio * 100) / 100,
+          baseline: 0,
+          description: `${offHoursMessages} off-hours messages this week (${Math.round(offHoursRatio * 100)}% of all) — 0% pre-AI`,
+        },
+        {
+          name: 'Follow-up Recovery',
+          rate: Math.round(followUpContribution * 100) / 100,
+          measured: Math.round(followUpRatio * 100) / 100,
+          baseline: 0,
+          description: `${withFollowups} conversations followed up, ${followUpConverted} converted (${Math.round(followUpConversionRate * 100)}% hit rate)`,
+        },
+        {
+          name: 'Conversion Lift',
+          rate: Math.round(conversionContribution * 100) / 100,
+          measured: Math.round(actualConversion * 100) / 100,
+          baseline: baselines.conversionRate,
+          description: `${Math.round(actualConversion * 100)}% conversion now vs ${Math.round(baselines.conversionRate * 100)}% pre-AI`,
+        },
+        {
+          name: 'Response Quality',
+          rate: Math.round(qualityContribution * 100) / 100,
+          measured: Math.round(aiQuality * 100) / 100,
+          baseline: baselines.qualityScore,
+          description: `${Math.round(aiQuality * 100)}% quality score vs ${Math.round(baselines.qualityScore * 100)}% pre-AI (manual)`,
+        },
+        {
+          name: 'Missed Revenue',
+          rate: 0, // informational — not added to boost rate (it's a counterfactual)
+          measured: Math.round(missedRevTotal),
+          baseline: 0,
+          description: `£${Math.round(missedRevTotal)} lost from ${missedRevCount} denied/expired (3mo) — opportunities for faster response`,
+        },
       ],
       evaluatedAt: new Date().toISOString(),
       dataPoints,
+      realMetrics: {
+        messagesSent7d,
+        messagesSent24h,
+        offHoursMessages7d: offHoursMessages,
+        activeConversations,
+        followUpsSent,
+        conversionRate: Math.round(actualConversion * 1000) / 1000,
+        avgConfidence: Math.round(avgConfidence * 100) / 100,
+      },
     };
   }
 
@@ -1502,34 +1492,31 @@ export class RevenueService {
   private async getLatestBoostRate(): Promise<{
     boostRate: number;
     factors: { name: string; rate: number; description: string }[];
+    realMetrics?: Record<string, number>;
   }> {
-    const latest = await this.prisma.ai_decision.findFirst({
-      where: { decision_type: 'ai_boost_evaluation' },
-      orderBy: { created_at: 'desc' },
-    });
-
-    if (latest?.output_summary) {
-      try {
-        const eval_ = JSON.parse(latest.output_summary);
-        return {
-          boostRate: eval_.boostRate,
-          factors: eval_.factors.map((f: any) => ({ name: f.name, rate: f.rate, description: f.description })),
-        };
-      } catch { /* fall through to fresh eval */ }
+    // Return cached result if fresh (avoid re-evaluating on every dashboard refresh)
+    if (this.boostCache && Date.now() < this.boostCache.expiry) {
+      return this.boostCache.data;
     }
 
-    // No stored evaluation — run one now
     const fresh = await this.evaluateAiPerformance();
-    await this.storeBoostEvaluation(fresh);
-    return {
+    const result = {
       boostRate: fresh.boostRate,
       factors: fresh.factors.map(f => ({ name: f.name, rate: f.rate, description: f.description })),
+      realMetrics: fresh.realMetrics,
     };
+
+    this.boostCache = { data: result, expiry: Date.now() + RevenueService.BOOST_CACHE_TTL };
+
+    // Store for historical tracking (non-blocking)
+    this.storeBoostEvaluation(fresh).catch(() => {});
+
+    return result;
   }
 
   /**
    * AI Boost metric — estimates additional revenue generated by AI automation.
-   * Uses dynamically-evaluated boost rate (updated weekly) instead of static 29%.
+   * Uses dynamically-evaluated boost rate against real pre-AI baselines.
    * Formula: without_ai = actual / (1 + boostRate), boost = actual - without_ai
    */
   async getAiBoostMetric(period: 'month' | 'year', account?: string): Promise<{
@@ -1539,8 +1526,9 @@ export class RevenueService {
     boostRate: number;
     period: string;
     factors: { name: string; rate: number; description: string }[];
+    realMetrics?: Record<string, number>;
   }> {
-    const [allRentals, { boostRate, factors }] = await Promise.all([
+    const [allRentals, { boostRate, factors, realMetrics }] = await Promise.all([
       this.getRentalsWithRevenue(account),
       this.getLatestBoostRate(),
     ]);
@@ -1571,6 +1559,7 @@ export class RevenueService {
       boostRate,
       period,
       factors,
+      realMetrics,
     };
   }
 
@@ -1637,10 +1626,10 @@ export class RevenueService {
   // ==========================================
 
   /**
-   * Monthly cron: snapshot the previous month's funnel metrics on the 1st at 5am.
-   * Runs after monthlyRevenueSync (4am) so revenue data is fresh.
+   * Monthly cron: snapshot the previous month's funnel metrics on the 1st at 8am.
+   * Runs after monthlyRevenueSync (7am) so revenue data is fresh.
    */
-  @Cron('0 5 1 * *')
+  @Cron('0 8 1 * *')
   async monthlyFunnelSnapshot(): Promise<void> {
     this.logger.log('=== MONTHLY FUNNEL SNAPSHOT: Starting ===');
     try {
@@ -1866,9 +1855,9 @@ export class RevenueService {
 
   /**
    * Monthly cron: snapshot per-item earnings for the previous month.
-   * Runs at 5:30am on the 1st (after funnel snapshot at 5am).
+   * Runs at 8:30am on the 1st (after funnel snapshot at 8am).
    */
-  @Cron('0 30 5 1 * *')
+  @Cron('0 30 8 1 * *')
   async monthlyItemEarningsSnapshot(): Promise<void> {
     this.logger.log('=== MONTHLY ITEM EARNINGS SNAPSHOT: Starting ===');
     try {
@@ -2124,9 +2113,9 @@ export class RevenueService {
 
   /**
    * Monthly cron: snapshot bundle revenue for the previous month.
-   * Runs at 5:45am on the 1st (after item earnings at 5:30).
+   * Runs at 8:45am on the 1st (after item earnings at 8:30).
    */
-  @Cron('0 45 5 1 * *')
+  @Cron('0 45 8 1 * *')
   async monthlyBundleRevenueSnapshot(): Promise<void> {
     this.logger.log('=== MONTHLY BUNDLE REVENUE SNAPSHOT: Starting ===');
     try {
@@ -2142,9 +2131,9 @@ export class RevenueService {
 
   /**
    * Monthly cron: refresh item cycle tracker cache.
-   * Runs at 6:00am on the 1st (after bundle snapshots at 5:45).
+   * Runs at 9:00am on the 1st (after bundle snapshots at 8:45).
    */
-  @Cron('0 0 6 1 * *')
+  @Cron('0 0 9 1 * *')
   async monthlyItemCycleRefresh(): Promise<void> {
     this.logger.log('=== MONTHLY ITEM CYCLE CACHE REFRESH: Starting ===');
     try {

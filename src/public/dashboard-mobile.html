@@ -35,7 +35,25 @@
     }
     .stat-card {
       background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 8px; padding: 10px 12px;
+      cursor: pointer; transition: border-color 0.2s;
     }
+    .stat-card:active { border-color: rgba(110,168,254,0.3); }
+    .stat-expand {
+      max-height: 0; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease, margin-top 0.25s ease;
+      opacity: 0; margin-top: 0;
+    }
+    .stat-card.expanded .stat-expand { max-height: 500px; opacity: 1; margin-top: 8px; }
+    .stat-card.expanded .stat-expand.scrollable { overflow-y: auto; }
+    .stat-expand-inner { border-top: 1px solid rgba(255,255,255,0.06); padding-top: 6px; font-size: 11px; color: #b0b3c0; }
+    .stat-rental-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid #1e2128; }
+    .stat-rental-row:last-child { border-bottom: none; }
+    .stat-rental-photo { width: 28px; height: 28px; border-radius: 5px; object-fit: cover; flex-shrink: 0; background: rgba(30,33,46,0.5); }
+    .stat-rental-info { flex: 1; min-width: 0; }
+    .stat-rental-name { font-size: 10px; color: #e4e6eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat-rental-items { font-size: 9px; color: #6b6f82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat-rental-amount { font-size: 11px; font-weight: 600; color: #22c55e; flex-shrink: 0; }
+    .stat-mini-bar { height: 6px; background: #1e2130; border-radius: 3px; overflow: hidden; }
+    .stat-mini-bar-fill { height: 100%; border-radius: 3px; }
     .stat-card .label { font-size: 10px; color: #8b8fa3; text-transform: uppercase; letter-spacing: 0.5px; }
     .stat-card .value { font-size: 22px; font-weight: 700; color: #e4e6eb; }
     .stat-card .sub { font-size: 10px; color: #8b8fa3; margin-top: 1px; }
@@ -44,6 +62,7 @@
     .stat-card .value.blue { color: #6ea8fe; }
     .stat-card .value.red { color: #ef4444; }
     .stat-card.lost-revenue-card { border-left: 3px solid #ef4444; }
+    .stat-card.denied-revenue-card { border-left: 3px solid #f59e0b; }
 
     /* Collapsible sections */
     .section {
@@ -171,6 +190,155 @@
       background:none; border:none; color:#8b8fa3; cursor:pointer; padding:4px;
       display:flex; align-items:center;
     }
+
+    /* Calendar */
+    .cal-carousel { display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:4px; padding:4px 2px 8px; scrollbar-width:none; }
+    .cal-carousel::-webkit-scrollbar { display:none; }
+    .cal-day-card { scroll-snap-align:start; min-width:calc(33.33% - 4px); flex-shrink:0; background:#1e2130; border:1px solid #2a2d3a; border-radius:8px; padding:8px 4px; cursor:pointer; text-align:center; }
+    .cal-day-card.today { border-color:#6ea8fe; background:#1a2540; }
+    .cal-day-card.selected { border-color:#6ea8fe; background:#1a2540; }
+    .cal-day-card.has-events { background:#1e2230; }
+    .cal-day-date { font-size:16px; font-weight:700; color:#8b8fa3; }
+    .cal-day-card.today .cal-day-date, .cal-day-card.selected .cal-day-date { color:#6ea8fe; }
+    .cal-day-weekday { font-size:9px; color:#6b6f80; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; }
+    .cal-day-count { font-size:9px; color:#8b8fa3; margin-top:3px; }
+    .cal-day-dots { display:flex; justify-content:center; gap:3px; margin-top:3px; }
+    .cal-day-dots .dot { width:6px; height:6px; border-radius:50%; }
+    .cal-day-dots .dot-db { background:#6ea8fe; }
+    .cal-day-dots .dot-leo { background:#22c55e; }
+    .cal-day-dots .dot-away { background:#ef4444; }
+    .cal-day-dots .dot-delivery { background:#3b82f6; }
+    .cal-detail { margin-top:0; background:#1a1d27; border:1px solid #2a2d3a; border-radius:8px; padding:10px 12px; display:none; margin:0 14px 12px; }
+    .cal-detail.open { display:block; }
+    .cal-detail-header { font-size:13px; font-weight:600; color:#e4e6eb; margin-bottom:8px; border-bottom:1px solid #2a2d3a; padding-bottom:6px; }
+    .cal-rental-card { background:#1e2130; border:1px solid #2a2d3a; border-radius:8px; padding:8px 10px; margin-bottom:6px; }
+    .cal-rental-card:last-child { margin-bottom:0; }
+    .cal-badge { font-size:9px; padding:1px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; }
+    .cal-badge.pickup { background:rgba(110,168,254,0.15); color:#6ea8fe; }
+    .cal-badge.dropoff { background:rgba(167,139,250,0.15); color:#a78bfa; }
+    .cal-badge.away { background:rgba(239,68,68,0.12); color:#ef4444; }
+    .cal-badge.pickup-leo { background:rgba(34,197,94,0.15); color:#22c55e; }
+    .cal-badge.dropoff-leo { background:rgba(34,197,94,0.10); color:#22c55e; }
+    .cal-badge.delivery-badge { background:rgba(251,191,36,0.2); color:#fbbf24; font-size:8px; }
+    .cal-rental-name { font-size:12px; font-weight:600; color:#e4e6eb; }
+    .cal-rental-earnings { font-size:13px; font-weight:700; color:#22c55e; }
+    .cal-rental-acct { font-size:8px; font-weight:600; padding:1px 4px; border-radius:3px; }
+    .cal-rental-acct.db { background:rgba(110,168,254,0.12); color:#6ea8fe; }
+    .cal-rental-acct.leo { background:rgba(34,197,94,0.12); color:#22c55e; }
+    .cal-item-chip { font-size:10px; padding:1px 5px; border-radius:3px; background:rgba(110,168,254,0.10); color:#c9cdd5; border:1px solid rgba(110,168,254,0.15); display:inline-block; margin:1px 2px 1px 0; }
+    .cal-progress-wrap { margin:4px 0 1px; height:3px; background:#1a1d28; border-radius:2px; overflow:hidden; }
+    .cal-progress-bar { height:100%; border-radius:2px; transition:width 1s linear; }
+    .cal-progress-bar.upcoming { background:rgba(110,168,254,0.4); width:0%; }
+    .cal-progress-bar.active { background:linear-gradient(90deg, #6ea8fe, #22c55e); }
+    .cal-progress-bar.completed { background:#22c55e; width:100%; }
+    .cal-progress-label { font-size:8px; color:#6b6f80; display:flex; justify-content:space-between; margin-top:1px; }
+    .cal-legend { display:flex; gap:8px; font-size:9px; color:#8b8fa3; flex-wrap:wrap; padding:0 14px 8px; }
+    .cal-legend span { display:flex; align-items:center; gap:3px; }
+    .cal-legend .dot { width:6px; height:6px; border-radius:2px; display:inline-block; }
+    .cal-day-summary { display:flex; gap:10px; padding:6px 0 2px; border-top:1px solid #2a2d3a; margin-top:6px; font-size:11px; color:#8b8fa3; flex-wrap:wrap; }
+
+    /* Return Hub */
+    .return-hub-grid { display:flex; flex-direction:column; gap:8px; }
+    .return-card { background:#1e2130; border:1px solid #2a2d3a; border-radius:8px; padding:10px 12px; cursor:pointer; position:relative; display:flex; gap:10px; align-items:flex-start; }
+    .return-card.overdue { border-color:#ef4444; }
+    .overdue-tag { position:absolute; top:6px; right:6px; background:#ef4444; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:3px; text-transform:uppercase; }
+    .return-card-photo { flex-shrink:0; width:48px; height:48px; border-radius:6px; object-fit:cover; border:1px solid rgba(255,255,255,0.06); }
+    .return-card-placeholder { flex-shrink:0; width:48px; height:48px; border-radius:6px; background:rgba(18,21,30,0.4); border:1px solid rgba(255,255,255,0.06); display:flex; align-items:center; justify-content:center; font-size:18px; color:#3a3d4a; }
+    .return-card-body { flex:1; min-width:0; }
+    .return-card-name { font-size:12px; font-weight:600; color:#e4e6eb; }
+    .return-card-items { font-size:10px; color:#8b8fa3; margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .return-card-bottom { display:flex; justify-content:space-between; align-items:center; margin-top:4px; }
+    .return-card-earnings { font-size:14px; font-weight:700; color:#22c55e; }
+    .return-card-date { font-size:9px; color:#6b6f80; }
+
+    /* Return Modal */
+    .return-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:200; align-items:center; justify-content:center; }
+    .return-modal-overlay.open { display:flex; }
+    .return-modal { background:#1a1d27; border:1px solid #2a2d3a; border-radius:12px; width:92%; max-width:400px; padding:20px; position:relative; }
+    .return-modal-close { position:absolute; top:10px; right:12px; background:none; border:none; color:#6b6f82; font-size:20px; cursor:pointer; }
+    .return-modal h2 { font-size:15px; font-weight:700; color:#e4e6eb; margin-bottom:2px; }
+    .return-modal .return-modal-sub { font-size:11px; color:#8b8fa3; margin-bottom:14px; }
+    .return-step { display:none; }
+    .return-step.active { display:block; }
+    .return-btn-row { display:flex; gap:8px; margin-top:12px; }
+    .return-btn { flex:1; padding:10px 14px; border-radius:6px; border:none; font-size:13px; font-weight:600; cursor:pointer; }
+    .return-btn-good { background:#22c55e; color:#fff; }
+    .return-btn-issues { background:#2a2d3a; color:#e4e6eb; border:1px solid #3a3d4a; }
+    .return-btn-danger { background:#ef4444; color:#fff; }
+    .return-btn-secondary { background:#2a2d3a; color:#e4e6eb; border:1px solid #3a3d4a; }
+    .return-btn-back { background:none; border:1px solid #3a3d4a; color:#8b8fa3; padding:6px 12px; font-size:11px; }
+    .return-issues-grid { display:flex; flex-wrap:wrap; gap:5px; margin:8px 0 10px; }
+    .return-issue-chip { padding:5px 10px; border-radius:12px; border:1px solid #2a2d3a; background:#1e2130; color:#8b8fa3; font-size:11px; cursor:pointer; }
+    .return-issue-chip.selected { background:#2563eb; border-color:#3b82f6; color:#fff; }
+    .return-textarea { width:100%; min-height:60px; background:#1e2130; border:1px solid #2a2d3a; border-radius:6px; color:#e4e6eb; padding:8px 10px; font-size:12px; font-family:inherit; resize:vertical; margin-top:8px; box-sizing:border-box; }
+    .return-processing-state { text-align:center; padding:20px 0; }
+    .return-processing-text { color:#8b8fa3; font-size:12px; margin-top:8px; }
+
+    /* Celebration Overlay */
+    .celebration-overlay { display:none; position:fixed; inset:0; background:rgba(15,17,23,0.9); z-index:300; align-items:center; justify-content:center; flex-direction:column; }
+    .celebration-overlay.open { display:flex; }
+    .celebration-close { position:absolute; top:16px; right:16px; background:none; border:none; color:#6b6f82; font-size:24px; cursor:pointer; z-index:302; }
+    .celebration-amount { font-size:52px; font-weight:800; color:#22c55e; z-index:301; animation:springIn 0.6s cubic-bezier(0.34,1.56,0.64,1) both; }
+    .celebration-subtitle { font-size:14px; color:#8b8fa3; margin-top:6px; z-index:301; animation:fadeInUp 0.5s 0.3s both; }
+    .celebration-canvas { position:absolute; inset:0; pointer-events:none; z-index:300; }
+    @keyframes springIn { 0%{transform:scale(0.3);opacity:0;} 50%{transform:scale(1.15);opacity:1;} 70%{transform:scale(0.95);} 100%{transform:scale(1);} }
+    @keyframes fadeInUp { from{transform:translateY(20px);opacity:0;} to{transform:translateY(0);opacity:1;} }
+
+    /* AI Insights */
+    .insights-tab { background:none; border:none; color:#8b8fa3; padding:6px 12px; font-size:11px; cursor:pointer; border-bottom:2px solid transparent; font-weight:500; }
+    .insights-tab.active { color:#06b6d4; border-bottom-color:#06b6d4; font-weight:600; }
+    .insight-card { border:1px solid #2a2d3a; border-left:3px solid #06b6d4; border-radius:8px; padding:10px 12px; margin-bottom:8px; background:#1e2130; }
+    .insight-card[data-type="new_acquisition"] { border-left-color:#22c55e; }
+    .insight-card[data-type="add_unit"] { border-left-color:#3b82f6; }
+    .insight-card[data-type="bundle_listing"] { border-left-color:#a78bfa; }
+    .insight-card[data-type="addon"] { border-left-color:#f59e0b; }
+    .insight-card[data-type="gear_switch"] { border-left-color:#f97316; }
+    .insight-card .insight-title { font-weight:600; color:#e4e6eb; font-size:12px; }
+    .insight-card .insight-desc { color:#8b8fa3; font-size:11px; margin-top:3px; line-height:1.4; }
+    .insight-card .insight-meta { display:flex; gap:6px; margin-top:5px; align-items:center; flex-wrap:wrap; }
+    .insight-card .insight-revenue { color:#22c55e; font-size:11px; font-weight:600; }
+    .insight-card .insight-cost { color:#ef4444; font-size:10px; font-weight:500; }
+    .insight-card .insight-confidence { font-size:9px; padding:1px 5px; border-radius:3px; text-transform:uppercase; }
+    .insight-card .confidence-high { background:rgba(34,197,94,0.15); color:#22c55e; }
+    .insight-card .confidence-medium { background:rgba(245,158,11,0.15); color:#f59e0b; }
+    .insight-card .confidence-low { background:rgba(139,143,163,0.15); color:#8b8fa3; }
+
+    /* Health grid */
+    .health-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .health-item .health-label { font-size:9px; color:#8b8fa3; text-transform:uppercase; letter-spacing:0.5px; }
+    .health-item .health-value { font-size:12px; font-weight:600; color:#e4e6eb; }
+
+    /* Marketing */
+    .mktg-filter-btn { background:#1e2130; border:1px solid #2a2d3a; color:#8b8fa3; padding:3px 8px; border-radius:10px; font-size:10px; cursor:pointer; }
+    .mktg-filter-btn.active { background:rgba(139,92,246,0.2); border-color:#8b5cf6; color:#c4b5fd; }
+    .mktg-card { background:#1e2130; border:1px solid #2a2d3a; border-radius:8px; margin-bottom:8px; overflow:hidden; }
+    .mktg-card-body { padding:8px 10px; }
+    .mktg-card-title { font-size:12px; font-weight:600; color:#e2e4ec; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .mktg-card-meta { font-size:10px; color:#8b8fa3; display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:2px; }
+    .mktg-badge { display:inline-block; padding:1px 5px; border-radius:6px; font-size:9px; font-weight:600; }
+    .mktg-badge.db { background:rgba(59,130,246,0.15); color:#60a5fa; }
+    .mktg-badge.leo { background:rgba(245,158,11,0.15); color:#fbbf24; }
+    .mktg-badge.pending { background:rgba(234,179,8,0.15); color:#facc15; }
+    .mktg-badge.ready { background:rgba(34,197,94,0.15); color:#4ade80; }
+    .mktg-badge.uploaded { background:rgba(139,92,246,0.15); color:#c4b5fd; }
+
+    /* Chat panel */
+    .chat-panel { background:#1a1d27; border:1px solid #2a2d3a; border-radius:8px; display:flex; flex-direction:column; max-height:360px; }
+    .chat-header { padding:10px 14px; border-bottom:1px solid #2a2d3a; font-size:13px; font-weight:600; }
+    .chat-messages { flex:1; overflow-y:auto; padding:10px 14px; min-height:120px; max-height:240px; display:flex; flex-direction:column; gap:8px; }
+    .chat-msg { max-width:85%; padding:6px 10px; border-radius:8px; font-size:11px; line-height:1.4; word-wrap:break-word; white-space:pre-wrap; }
+    .chat-msg.user { align-self:flex-end; background:#2563eb; color:#fff; border-bottom-right-radius:2px; }
+    .chat-msg.assistant { align-self:flex-start; background:#2a2d3a; color:#e4e6eb; border-bottom-left-radius:2px; }
+    .chat-msg.error { align-self:center; background:rgba(239,68,68,0.2); color:#ef4444; font-size:10px; }
+    .chat-msg.thinking { align-self:flex-start; background:#2a2d3a; color:#8b8fa3; font-style:italic; }
+    .chat-input-row { display:flex; border-top:1px solid #2a2d3a; padding:8px 10px; gap:6px; }
+    .chat-input { flex:1; background:#1e2130; border:1px solid #2a2d3a; color:#e4e6eb; padding:6px 10px; border-radius:6px; font-size:12px; font-family:inherit; outline:none; }
+    .chat-input:focus { border-color:#2563eb; }
+    .chat-send-btn { background:#2563eb; border:none; color:#fff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:11px; font-weight:600; }
+    .chat-send-btn:disabled { background:#374151; cursor:not-allowed; }
+
+    /* Chart container */
+    .chart-container { position:relative; height:200px; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -204,32 +372,117 @@
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
         <div class="label">Today</div>
         <div class="value green" id="statToday">--</div>
+        <div class="sub" id="statTodaySub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandEarnings"></div></div>
       </div>
       <div class="stat-card" data-stat="week" data-stat-label="This Week" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
         <div class="label">This Week</div>
         <div class="value green" id="statWeek">--</div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandWeek"></div></div>
       </div>
       <div class="stat-card" data-stat="monthly" data-stat-label="Expected Monthly" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
         <div class="label">Expected Monthly</div>
         <div class="value green" id="statMonthly">--</div>
+        <div class="sub" id="statMonthlySub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandMonthly"></div></div>
       </div>
       <div class="stat-card" data-stat="active" data-stat-label="Active Rentals" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
         <div class="label">Active Rentals</div>
         <div class="value blue" id="statActive">--</div>
+        <div class="sub" id="statActiveSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandActive"></div></div>
       </div>
       <div class="stat-card" data-stat="confirmed" data-stat-label="Confirmed" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
         <div class="label">Confirmed</div>
         <div class="value green" id="statConfirmed">--</div>
+        <div class="sub" id="statConfirmedSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandConfirmed"></div></div>
       </div>
       <div class="stat-card lost-revenue-card" data-stat="lost-revenue" data-stat-label="Lost Revenue" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
         <div class="label">Lost Revenue (3m)</div>
         <div class="value red" id="statLostRevenue">--</div>
         <div class="sub" id="statLostRevenueSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandLostRevenue"></div></div>
+      </div>
+      <div class="stat-card" data-stat="ongoing" data-stat-label="Ongoing" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Ongoing</div>
+        <div class="value amber" id="statOngoing">--</div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandOngoing"></div></div>
+      </div>
+      <div class="stat-card" data-stat="upcoming" data-stat-label="Upcoming" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Upcoming</div>
+        <div class="value purple" id="statUpcoming">--</div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandUpcoming"></div></div>
+      </div>
+      <div class="stat-card" data-stat="scanner" data-stat-label="Scanner" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Scanner</div>
+        <div class="value blue" id="statScanner">--</div>
+        <div class="sub" id="statScannerSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandScanner"></div></div>
+      </div>
+      <div class="stat-card denied-revenue-card" data-stat="denied-revenue" data-stat-label="Denied Revenue" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Denied Revenue</div>
+        <div class="value amber" id="statDeniedRevenue">--</div>
+        <div class="sub" id="statDeniedRevenueSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandDeniedRevenue"></div></div>
+      </div>
+      <div class="stat-card lost-revenue-card" data-stat="missed-revenue" data-stat-label="Missed Revenue" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Missed Revenue</div>
+        <div class="value red" id="statMissedRevenue">--</div>
+        <div class="sub" id="statMissedRevenueSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandMissedRevenue"></div></div>
+      </div>
+      <div class="stat-card" data-stat="ai-boost" data-stat-label="AI Boost" draggable="false">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">AI Boost</div>
+        <div class="value green" id="statAiBoost">--</div>
+        <div class="sub" id="statAiBoostSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandAiBoost"></div></div>
+      </div>
+      <div class="stat-card" data-stat="out-of-stock" data-stat-label="Out of Stock" draggable="false" style="border-left:3px solid #ef4444">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Out of Stock</div>
+        <div class="value red" id="statOutOfStock">--</div>
+        <div class="sub" id="statOutOfStockSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandOutOfStock"></div></div>
+      </div>
+      <div class="stat-card" data-stat="vacation" data-stat-label="Vacation Mode" draggable="false" style="border-left:3px solid #f59e0b">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Vacation Mode</div>
+        <div class="value" id="statVacation" style="font-size:14px;line-height:1.4">--</div>
+        <div class="sub" id="statVacationSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandVacation"></div></div>
+      </div>
+      <div class="stat-card" data-stat="sell-reco" data-stat-label="Sell Recommender" draggable="false" style="border-left:3px solid #f59e0b">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Sell Recommender</div>
+        <div class="value amber" id="statSellReco">--</div>
+        <div class="sub" id="statSellRecoSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandSellReco"></div></div>
+      </div>
+      <div class="stat-card" data-stat="inventory-worth" data-stat-label="Inventory Worth" draggable="false" style="border-left:3px solid #3b82f6">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Inventory Worth</div>
+        <div class="value blue" id="statInventoryWorth">--</div>
+        <div class="sub" id="statInventoryWorthSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandInventoryWorth"></div></div>
+      </div>
+      <div class="stat-card" data-stat="tax" data-stat-label="Tax Liability" draggable="false" style="border-left:3px solid #ef4444">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)">&times;</button>
+        <div class="label">Tax Liability</div>
+        <div class="value red" id="statTaxLiability">--</div>
+        <div class="sub" id="statTaxSub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandTax"></div></div>
       </div>
     </div>
     </div>
@@ -347,6 +600,337 @@
     </div>
     </div>
 
+    <!-- Earnings Chart -->
+    <div class="panel-wrapper" data-panel="charts" data-panel-label="Earnings Chart">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Earnings Chart</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Earnings</span>
+        <select id="chartPeriod" onchange="loadCharts()" onclick="event.stopPropagation()">
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="section-body">
+        <div class="chart-container">
+          <canvas id="profitChart"></canvas>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Calendar -->
+    <div class="panel-wrapper" data-panel="calendar" data-panel-label="Calendar">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Calendar</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Calendar</span>
+        <span style="display:flex;align-items:center;gap:4px;" onclick="event.stopPropagation()">
+          <button onclick="calendarPrev()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;">&laquo;</button>
+          <span id="calendarMonth" style="font-size:10px;color:#8b8fa3;"></span>
+          <button onclick="calendarNext()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;">&raquo;</button>
+          <button onclick="calendarToday()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;">Today</button>
+        </span>
+      </div>
+      <div class="section-body" id="calendarBody" style="padding:0 14px 4px;">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+      <div class="cal-detail" id="calendarDetail"></div>
+      <div class="cal-legend" id="calendarLegend">
+        <span><span class="dot" style="background:#6ea8fe;"></span> DB Cinema</span>
+        <span><span class="dot" style="background:#22c55e;"></span> Leo</span>
+        <span><span class="dot" style="background:#ef4444;"></span> Away</span>
+      </div>
+    </div>
+    </div>
+
+    <!-- Return Hub -->
+    <div class="panel-wrapper" data-panel="return-hub" data-panel-label="Return Hub">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Return Hub</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section" id="returnHubSection" style="display:none;">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Return Hub <span id="returnHubCount" style="font-size:10px;color:#8b8fa3;font-weight:400;"></span></span>
+      </div>
+      <div class="section-body" style="padding:0 14px 12px;">
+        <div class="return-hub-grid" id="returnHubGrid">
+          <div class="loading"><div class="spinner"></div>Loading...</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Return Modal -->
+    <div class="return-modal-overlay" id="returnModalOverlay">
+      <div class="return-modal">
+        <button class="return-modal-close" onclick="closeReturnModal()">&times;</button>
+        <h2 id="returnModalTitle">Process Return</h2>
+        <div class="return-modal-sub" id="returnModalSub"></div>
+        <div class="return-step active" id="returnStep1">
+          <p style="color:#c9cdd5;font-size:12px;margin-bottom:4px;">Has this item been returned?</p>
+          <div class="return-btn-row">
+            <button class="return-btn return-btn-good" onclick="returnNoIssues()">No issues</button>
+            <button class="return-btn return-btn-issues" onclick="returnHasIssues()">Yes, issues</button>
+          </div>
+        </div>
+        <div class="return-step" id="returnStep2">
+          <p style="color:#c9cdd5;font-size:12px;margin-bottom:4px;">Select all that apply:</p>
+          <div class="return-issues-grid" id="returnIssuesGrid"></div>
+          <textarea class="return-textarea" id="returnReason" placeholder="Additional notes (optional)..."></textarea>
+          <div class="return-btn-row">
+            <button class="return-btn return-btn-danger" onclick="returnBlacklist()">Blacklist</button>
+            <button class="return-btn return-btn-secondary" onclick="returnFlagOnly()">Flag for review</button>
+          </div>
+          <div style="margin-top:8px;text-align:center;">
+            <button class="return-btn return-btn-back" onclick="returnGoBack()">Back</button>
+          </div>
+        </div>
+        <div class="return-step" id="returnStepProcessing">
+          <div class="return-processing-state">
+            <div class="spinner"></div>
+            <div class="return-processing-text" id="returnProcessingText">Processing return...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Celebration Overlay -->
+    <div class="celebration-overlay" id="celebrationOverlay" onclick="closeCelebration()">
+      <button class="celebration-close" onclick="closeCelebration()">&times;</button>
+      <div class="celebration-amount" id="celebrationAmount"></div>
+      <div class="celebration-subtitle" id="celebrationSubtitle">earned from this rental</div>
+      <div id="celebrationBtnRow" style="margin-top:14px;display:flex;gap:10px;align-items:center;justify-content:center" onclick="event.stopPropagation();">
+        <button id="celebrationThankYouBtn" onclick="sendThankYouFromCelebration();" style="padding:8px 20px;border-radius:6px;border:none;background:#22c55e;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Send Thank You</button>
+        <button id="celebrationNoFollowUpBtn" onclick="noFollowUpFromCelebration();" style="padding:8px 20px;border-radius:6px;border:none;background:#ef4444;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">No follow up</button>
+      </div>
+      <canvas class="celebration-canvas" id="celebrationCanvas"></canvas>
+    </div>
+
+    <!-- Top Bundles -->
+    <div class="panel-wrapper" data-panel="top-bundles" data-panel-label="Top Bundles">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Top Bundles</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Top Bundles</span>
+        <select id="bundlePeriod" onchange="loadTopBundles()" onclick="event.stopPropagation()">
+          <option value="month">Month</option>
+          <option value="3m">3m</option>
+          <option value="6m" selected>6m</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div class="section-body" id="topBundlesBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Item Cycle Tracker -->
+    <div class="panel-wrapper" data-panel="item-cycle" data-panel-label="Item Cycle Tracker">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Item Cycle Tracker</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Item Cycle Tracker</span>
+        <span id="cycleYears" style="font-size:9px;color:#8b8fa3;font-weight:400;"></span>
+      </div>
+      <div id="cycleLegend" style="padding:8px 14px 4px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+      <div class="section-body" style="padding:4px 14px 12px;">
+        <canvas id="cycleChart" height="200"></canvas>
+      </div>
+    </div>
+    </div>
+
+    <!-- Sell Recommender -->
+    <div class="panel-wrapper" data-panel="sell-reco" data-panel-label="Sell Recommender">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Sell Recommender</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Sell Recommender</span>
+        <div style="display:flex;align-items:center;gap:6px;" onclick="event.stopPropagation()">
+          <select id="sellRecoFilter" onchange="filterSellReco()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;">
+            <option value="all">All</option>
+            <option value="sell">Sell</option>
+            <option value="consider">Consider</option>
+            <option value="keep">Keep</option>
+          </select>
+          <button onclick="triggerEbayScrape()" id="ebayScrapeBtn" style="background:#f59e0b;border:none;color:#000;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600;">eBay</button>
+        </div>
+      </div>
+      <div class="section-body" id="sellRecoBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+      <div id="sellRecoFooter" style="padding:2px 14px 6px;font-size:9px;color:#6b6f82;"></div>
+    </div>
+    </div>
+
+    <!-- Price Recommendations -->
+    <div class="panel-wrapper" data-panel="price-reco" data-panel-label="Price Recommendations">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Price Recommendations</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Price Recommendations</span>
+        <div style="display:flex;align-items:center;gap:4px;" onclick="event.stopPropagation()">
+          <select id="priceRecoSignal" onchange="filterPriceReco()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;">
+            <option value="all">All</option>
+            <option value="overpriced">Over</option>
+            <option value="underpriced">Under</option>
+            <option value="competitive">OK</option>
+          </select>
+          <select id="priceRecoCat" onchange="filterPriceReco()" style="background:#2a2d3a;border:1px solid #3a3d4a;color:#e4e6eb;padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;">
+            <option value="all">All Cat</option>
+            <option value="camera">Camera</option>
+            <option value="lens">Lens</option>
+            <option value="drone">Drone</option>
+            <option value="lighting">Light</option>
+            <option value="audio">Audio</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="section-body" id="priceRecoBody">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+      <div id="priceRecoFooter" style="padding:2px 14px 6px;font-size:9px;color:#6b6f82;"></div>
+    </div>
+    </div>
+
+    <!-- AI Investment Insights -->
+    <div class="panel-wrapper" data-panel="ai-insights" data-panel-label="AI Insights">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> AI Insights</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Investment Insights</span>
+        <button onclick="syncCompetitors(); event.stopPropagation();" id="insightsSyncBtn" style="background:#06b6d4;border:none;color:#fff;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Sync</button>
+      </div>
+      <div style="display:flex;gap:0;border-bottom:1px solid #2a2d3a;padding:0 10px;">
+        <button class="insights-tab active" data-budget="0-500" onclick="switchInsightsTab(this)">£0-500</button>
+        <button class="insights-tab" data-budget="500-2000" onclick="switchInsightsTab(this)">£500-2K</button>
+        <button class="insights-tab" data-budget="2000+" onclick="switchInsightsTab(this)">£2K+</button>
+      </div>
+      <div class="section-body" id="insightsBody" style="padding:10px 14px 12px;">
+        <div style="color:#8b8fa3;font-size:11px;">Select a budget tier to view recommendations.</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Market Opportunities -->
+    <div class="panel-wrapper" data-panel="market-releases" data-panel-label="Market Opportunities">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Market Opportunities</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Market Opportunities</span>
+        <div style="display:flex;align-items:center;gap:4px;" onclick="event.stopPropagation()">
+          <span id="marketReleasesLastScan" style="font-size:9px;color:#8b8fa3;font-weight:400;"></span>
+          <button onclick="scanMarketReleases()" id="marketReleasesScanBtn" style="background:#8b5cf6;border:none;color:#fff;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Scan</button>
+        </div>
+      </div>
+      <div class="section-body" id="marketReleasesBody" style="padding:10px 14px 12px;">
+        <div style="color:#8b8fa3;font-size:11px;">Click Scan to find new products.</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Insurance Claims -->
+    <div class="panel-wrapper" data-panel="insurance" data-panel-label="Insurance Claims">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Insurance Claims</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Insurance Claims <span id="insuranceTotal" style="font-size:12px;color:#22c55e;font-weight:700;"></span></span>
+        <button onclick="openInsuranceModal(); event.stopPropagation();" style="background:#3b82f6;color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:10px;">+ Add</button>
+      </div>
+      <div class="section-body" id="insuranceBody" style="padding:8px 14px 12px;">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Insurance Modal -->
+    <div id="insuranceModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:#1a1d27;border-radius:12px;border:1px solid #2a2d3a;padding:20px;max-width:380px;width:92%;margin:auto;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 style="margin:0;font-size:14px;color:#e4e6eb;">Add Insurance Claim</h3>
+          <button onclick="closeInsuranceModal()" style="background:none;border:none;color:#8b8fa3;font-size:18px;cursor:pointer;">&times;</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <label style="font-size:10px;color:#8b8fa3;display:block;margin-bottom:2px;">Item</label>
+            <input type="text" id="insuranceItem" placeholder="e.g. Sony FX3" style="width:100%;padding:6px 8px;background:#1e2130;border:1px solid #2a2d3a;border-radius:4px;color:#e2e4ec;font-size:12px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:10px;color:#8b8fa3;display:block;margin-bottom:2px;">Damage</label>
+            <input type="text" id="insuranceDamage" placeholder="e.g. Scratched sensor" style="width:100%;padding:6px 8px;background:#1e2130;border:1px solid #2a2d3a;border-radius:4px;color:#e2e4ec;font-size:12px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:10px;color:#8b8fa3;display:block;margin-bottom:2px;">Amount</label>
+            <input type="number" id="insuranceAmount" placeholder="0" min="0" step="0.01" style="width:100%;padding:6px 8px;background:#1e2130;border:1px solid #2a2d3a;border-radius:4px;color:#e2e4ec;font-size:12px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:10px;color:#8b8fa3;display:block;margin-bottom:2px;">Notes (optional)</label>
+            <textarea id="insuranceNotes" rows="2" placeholder="Notes..." style="width:100%;padding:6px 8px;background:#1e2130;border:1px solid #2a2d3a;border-radius:4px;color:#e2e4ec;font-size:12px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#8b8fa3;display:block;margin-bottom:2px;">Type</label>
+            <div style="display:flex;gap:0;border-radius:4px;overflow:hidden;border:1px solid #2a2d3a;">
+              <button id="insuranceNewBtn" onclick="setInsuranceType(true)" style="flex:1;padding:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:#3b82f6;color:#fff;">New</button>
+              <button id="insuranceOldBtn" onclick="setInsuranceType(false)" style="flex:1;padding:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:#1e2130;color:#8b8fa3;">Old</button>
+            </div>
+          </div>
+          <button onclick="saveInsuranceClaim()" id="insuranceSaveBtn" style="background:#22c55e;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Save Claim</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Marketing Listings -->
+    <div class="panel-wrapper" data-panel="marketing-listings" data-panel-label="Marketing Listings">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Marketing Listings</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>Marketing Listings <span id="marketingListingsCount" style="font-size:11px;color:#8b5cf6;font-weight:700;"></span></span>
+        <button onclick="discoverMarketingListings(); event.stopPropagation();" id="marketingDiscoverBtn" style="background:#8b5cf6;border:none;color:#fff;padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Discover</button>
+      </div>
+      <div style="padding:6px 14px 0;">
+        <div style="display:flex;gap:6px;">
+          <input type="text" id="marketingSearchInput" placeholder="Item name..." style="flex:1;padding:5px 8px;background:#1e2130;border:1px solid #2a2d3a;border-radius:4px;color:#e2e4ec;font-size:11px;outline:none;" />
+          <button onclick="createMarketingListing()" style="background:#3b82f6;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:10px;">+ Create</button>
+        </div>
+      </div>
+      <div style="padding:6px 14px;display:flex;gap:4px;flex-wrap:wrap;" id="marketingFilterBar">
+        <button class="mktg-filter-btn active" data-filter="all" onclick="filterMarketingListings('all',this)">All</button>
+        <button class="mktg-filter-btn" data-filter="pending" onclick="filterMarketingListings('pending',this)">Pending</button>
+        <button class="mktg-filter-btn" data-filter="ready" onclick="filterMarketingListings('ready',this)">Ready</button>
+        <button class="mktg-filter-btn" data-filter="uploaded" onclick="filterMarketingListings('uploaded',this)">Uploaded</button>
+      </div>
+      <div class="section-body" id="marketingListingsBody" style="padding:4px 14px 12px;">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Health & Scanner -->
+    <div class="panel-wrapper" data-panel="health" data-panel-label="Health &amp; Scanner">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> Health &amp; Scanner</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="section">
+      <div class="section-header" onclick="toggleSection(this)">Health &amp; Scanner</div>
+      <div class="section-body" id="healthBody" style="padding:8px 14px 12px;">
+        <div class="loading"><div class="spinner"></div>Loading...</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- AI Chat -->
+    <div class="panel-wrapper" data-panel="chat" data-panel-label="AI Chat">
+    <div class="panel-edit-bar"><span class="panel-label"><span class="drag-handle">&#9776;</span> AI Chat</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="chat-panel">
+      <div class="chat-header">AI Chat</div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-msg assistant">Hello! Ask me anything about rentals, inventory, or business insights.</div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" class="chat-input" id="chatInput" placeholder="Type a message..." autocomplete="off" />
+        <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()">Send</button>
+      </div>
+    </div>
+    </div>
+
     <div class="desktop-link">
       <a href="/dashboard">Switch to Desktop View</a>
     </div>
@@ -358,6 +942,29 @@
   <div class="add-drawer" id="addDrawer"><h3>Add Removed Items</h3><div id="addDrawerItems"></div></div>
 
 <script>
+  // ---- Stat Card Tap-to-Expand ----
+  document.addEventListener('click', function(e) {
+    var card = e.target.closest('.stat-card');
+    if (!card) return;
+    if (document.body.classList.contains('edit-mode')) return;
+    if (e.target.closest('.stat-delete-btn') || e.target.closest('.stat-drag-handle') || e.target.closest('select') || e.target.closest('button') || e.target.closest('a')) return;
+    var grid = document.getElementById('statsGrid');
+    if (grid) {
+      grid.querySelectorAll('.stat-card.expanded').forEach(function(c) {
+        if (c !== card) c.classList.remove('expanded');
+      });
+    }
+    card.classList.toggle('expanded');
+  });
+
+  document.querySelectorAll('.stat-expand').forEach(function(el) {
+    el.addEventListener('transitionend', function(e) {
+      if (e.propertyName !== 'max-height') return;
+      var mh = parseFloat(getComputedStyle(el).maxHeight);
+      if (mh > 0) el.classList.add('scrollable');
+    });
+  });
+
   // ---- Layout Persistence (Edit Mode) ----
   var LAYOUT_KEY = 'dashboard_mobile_layout_v2';
 
@@ -589,14 +1196,115 @@
   // ---- Renderers ----
 
   function renderBookingStats(data) {
-    document.getElementById('statToday').textContent = '£' + (data.todayEarnings || 0).toLocaleString('en-GB', {minimumFractionDigits: 0});
-    document.getElementById('statWeek').textContent = '£' + (data.weekEarnings || 0).toLocaleString('en-GB', {minimumFractionDigits: 0});
+    document.getElementById('statToday').textContent = '\u00A3' + (data.todayEarnings || 0).toLocaleString('en-GB', {minimumFractionDigits: 0});
+    document.getElementById('statWeek').textContent = '\u00A3' + (data.weekEarnings || 0).toLocaleString('en-GB', {minimumFractionDigits: 0});
     document.getElementById('statActive').textContent = data.activeRentals || 0;
     document.getElementById('statConfirmed').textContent = data.monthConfirmed || 0;
+    document.getElementById('statOngoing').textContent = data.ongoingRentals != null ? data.ongoingRentals : '--';
+    document.getElementById('statUpcoming').textContent = data.upcomingRentals != null ? data.upcomingRentals : '--';
+
+    // Today sub
+    var todaySub = document.getElementById('statTodaySub');
+    if (todaySub) todaySub.textContent = (data.todayRentalCount || 0) + ' rentals today';
+
+    // Active sub
+    var activeSub = document.getElementById('statActiveSub');
+    if (activeSub) {
+      var parts = [];
+      if (data.ongoingRentals) parts.push(data.ongoingRentals + ' ongoing');
+      if (data.upcomingRentals) parts.push(data.upcomingRentals + ' upcoming');
+      if (data.pendingRentals) parts.push(data.pendingRentals + ' pending');
+      activeSub.textContent = parts.join(' + ');
+    }
+
+    // Helper: render a rental row with photo
+    function rentalRowHtml(r, showDate) {
+      var photoHtml = r.photo
+        ? '<img class="stat-rental-photo" src="' + escapeHtml(r.photo) + '" onerror="this.style.display=\'none\'" />'
+        : '';
+      var itemsText = r.items && r.items.length > 0 ? r.items.join(', ') : '';
+      var dateStr = '';
+      if (showDate && r.startDate) {
+        dateStr = ' \u00B7 ' + new Date(r.startDate).toLocaleDateString('en-GB', {day:'numeric',month:'short'});
+      }
+      return '<div class="stat-rental-row">' + photoHtml +
+        '<div class="stat-rental-info"><div class="stat-rental-name">' + escapeHtml(r.renter) + dateStr + '</div>' +
+        (itemsText ? '<div class="stat-rental-items">' + escapeHtml(itemsText) + '</div>' : '') +
+        '</div><div class="stat-rental-amount">\u00A3' + r.earnings + '</div></div>';
+    }
+
+    // Earnings expand: today's breakdown
+    var earnEl = document.getElementById('expandEarnings');
+    if (earnEl && data.todayDetails && data.todayDetails.length > 0) {
+      earnEl.innerHTML = data.todayDetails.map(function(r) { return rentalRowHtml(r, false); }).join('');
+    } else if (earnEl) {
+      earnEl.innerHTML = '<div style="color:#6b6f82;font-size:10px;">No rentals starting today</div>';
+    }
+
+    // Active expand: combined list
+    var activeEl = document.getElementById('expandActive');
+    if (activeEl) {
+      var all = (data.ongoingDetails || []).concat(data.upcomingDetails || []);
+      activeEl.innerHTML = all.length > 0 ? all.map(function(r) { return rentalRowHtml(r, false); }).join('') : '<div style="color:#6b6f82;font-size:10px;">No active rentals</div>';
+    }
+
+    // Ongoing expand
+    var ongoingEl = document.getElementById('expandOngoing');
+    if (ongoingEl && data.ongoingDetails) {
+      ongoingEl.innerHTML = data.ongoingDetails.length > 0 ? data.ongoingDetails.map(function(r) { return rentalRowHtml(r, false); }).join('') : '<div style="color:#6b6f82;font-size:10px;">None right now</div>';
+    }
+
+    // Upcoming expand
+    var upcomingEl = document.getElementById('expandUpcoming');
+    if (upcomingEl && data.upcomingDetails) {
+      upcomingEl.innerHTML = data.upcomingDetails.length > 0 ? data.upcomingDetails.map(function(r) { return rentalRowHtml(r, true); }).join('') : '<div style="color:#6b6f82;font-size:10px;">None scheduled</div>';
+    }
+
+    // Confirmed expand
+    var confirmedExp = document.getElementById('expandConfirmed');
+    if (confirmedExp) {
+      var onC = data.ongoingRentals || 0, upC = data.upcomingRentals || 0, peC = data.pendingRentals || 0;
+      var total = onC + upC + peC;
+      confirmedExp.innerHTML = total > 0 ? '<div style="display:flex;gap:3px;height:6px;border-radius:3px;overflow:hidden;">' +
+        (onC ? '<div style="flex:' + onC + ';background:#f59e0b;border-radius:2px;"></div>' : '') +
+        (upC ? '<div style="flex:' + upC + ';background:#a78bfa;border-radius:2px;"></div>' : '') +
+        (peC ? '<div style="flex:' + peC + ';background:#f472b6;border-radius:2px;"></div>' : '') +
+        '</div><div style="display:flex;gap:8px;margin-top:4px;font-size:9px;flex-wrap:wrap;">' +
+        '<span style="color:#f59e0b;">\u25CF ' + onC + ' ongoing</span>' +
+        '<span style="color:#a78bfa;">\u25CF ' + upC + ' upcoming</span>' +
+        (peC ? '<span style="color:#f472b6;">\u25CF ' + peC + ' pending</span>' : '') + '</div>' : '';
+    }
+
+    window._lastBookingStats = data;
   }
 
   function renderProjection(data) {
-    document.getElementById('statMonthly').textContent = '£' + Math.round(data.projected || 0).toLocaleString('en-GB');
+    window._lastProjection = data;
+    var projected = data.projectedMonthEarnings != null ? data.projectedMonthEarnings : data.projected;
+    var dailyAvg = data.dailyAvgEarnings || null;
+    var currentEarnings = data.currentMonthEarnings != null ? data.currentMonthEarnings : null;
+    document.getElementById('statMonthly').textContent = '\u00A3' + Math.round(projected || 0).toLocaleString('en-GB');
+    var monthlySub = document.getElementById('statMonthlySub');
+    if (monthlySub) {
+      var sp = [];
+      if (dailyAvg) sp.push('\u00A3' + Math.round(dailyAvg) + '/day');
+      if (data.daysRemaining != null) sp.push(data.daysRemaining + ' days left');
+      monthlySub.textContent = sp.join(' \u00B7 ');
+    }
+    var monthlyExp = document.getElementById('expandMonthly');
+    if (monthlyExp && currentEarnings != null && projected > 0) {
+      var pct = Math.min(Math.round((currentEarnings / projected) * 100), 100);
+      monthlyExp.innerHTML = '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;"><span>Confirmed: \u00A3' + Math.round(currentEarnings) + '</span><span>' + pct + '% of target</span></div>' +
+        '<div class="stat-mini-bar"><div class="stat-mini-bar-fill" style="width:' + pct + '%;background:#22c55e;"></div></div>';
+    }
+    var confirmedEl = document.getElementById('statConfirmed');
+    if (confirmedEl && currentEarnings != null) {
+      confirmedEl.textContent = '\u00A3' + Math.round(currentEarnings).toLocaleString();
+    }
+    var confirmedSub = document.getElementById('statConfirmedSub');
+    if (confirmedSub && data.currentMonthRentals) {
+      confirmedSub.textContent = data.currentMonthRentals + ' rentals this month';
+    }
   }
 
   function renderLostRevenueStat(data) {
@@ -620,6 +1328,7 @@
   }
 
   function renderUnavailable(data) {
+    renderOutOfStockStat(data);
     var body = document.getElementById('unavailableBody');
     if (!data || data.length === 0) { body.innerHTML = '<div style="color:#22c55e;font-size:12px;">All items available</div>'; return; }
     var html = '';
@@ -987,6 +1696,1572 @@
     });
   }
 
+  function renderOngoingUpcoming(data) {
+    document.getElementById('statOngoing').textContent = data.ongoingRentals != null ? data.ongoingRentals : '--';
+    document.getElementById('statUpcoming').textContent = data.upcomingRentals != null ? data.upcomingRentals : '--';
+  }
+
+  function renderScanner(data) {
+    var sc = data || {};
+    var isActive = sc.isScanning;
+    document.getElementById('statScanner').textContent = isActive ? 'Active' : 'Idle';
+    var subParts = [];
+    subParts.push(sc.authenticated ? 'Auth' : 'No auth');
+    if (sc.currentAccount) {
+      subParts.push(sc.currentAccount === 'dbcinema' ? 'DB Cinema' : sc.currentAccount === 'leo' ? 'Leo' : sc.currentAccount);
+    }
+    document.getElementById('statScannerSub').textContent = subParts.join(' | ');
+    var scanExp = document.getElementById('expandScanner');
+    if (scanExp) {
+      var interval = sc.currentScanInterval ? Math.round(sc.currentScanInterval / 1000) + 's' : '?';
+      var lastAct = sc.lastActivityTime ? new Date(sc.lastActivityTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'never';
+      scanExp.innerHTML = '<div style="font-size:10px;line-height:1.6;"><div>Scan interval: <span style="color:#6ea8fe;">' + interval + '</span></div><div>Last activity: <span style="color:#e4e6eb;">' + lastAct + '</span></div></div>';
+    }
+  }
+
+  function renderDeniedStat(data) {
+    var el = document.getElementById('statDeniedRevenue');
+    var sub = document.getElementById('statDeniedRevenueSub');
+    if (!data || data.deniedCount === 0) {
+      el.textContent = '\u00A30';
+      sub.textContent = 'No denied requests';
+      return;
+    }
+    el.textContent = '\u00A3' + data.totalDeniedRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    sub.textContent = data.deniedCount + ' denied \u00B7 ' + data.itemsAffected + ' items';
+    var exp = document.getElementById('expandDeniedRevenue');
+    if (exp && data.topDeniedItems && data.topDeniedItems.length > 0) {
+      exp.innerHTML = data.topDeniedItems.slice(0, 4).map(function(item) {
+        return '<div class="stat-rental-row"><div class="stat-rental-info"><div class="stat-rental-name">' + escapeHtml(item.item) + '</div><div class="stat-rental-items">' + item.count + ' denied</div></div><div class="stat-rental-amount" style="color:#f59e0b;">-\u00A3' + Math.round(item.revenue) + '</div></div>';
+      }).join('');
+    }
+  }
+
+  function renderMissedStat(data) {
+    var el = document.getElementById('statMissedRevenue');
+    var sub = document.getElementById('statMissedRevenueSub');
+    if (!data || data.missedCount === 0) {
+      el.textContent = '\u00A30';
+      sub.textContent = 'No unmatched requests';
+      return;
+    }
+    el.textContent = '\u00A3' + data.totalMissedRevenue.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    sub.textContent = data.missedCount + ' requests \u00B7 not in inventory';
+    var exp = document.getElementById('expandMissedRevenue');
+    if (exp && data.topMissedItems && data.topMissedItems.length > 0) {
+      exp.innerHTML = data.topMissedItems.slice(0, 4).map(function(item) {
+        return '<div class="stat-rental-row"><div class="stat-rental-info"><div class="stat-rental-name">' + escapeHtml(item.item) + '</div><div class="stat-rental-items">' + item.count + ' requests</div></div><div class="stat-rental-amount" style="color:#ef4444;">-\u00A3' + Math.round(item.revenue) + '</div></div>';
+      }).join('');
+    }
+  }
+
+  function renderAiBoost(data) {
+    var el = document.getElementById('statAiBoost');
+    var sub = document.getElementById('statAiBoostSub');
+    if (!data || data.aiBoost == null) { el.textContent = '--'; sub.textContent = ''; return; }
+    el.textContent = '\u00A3' + Math.round(data.aiBoost).toLocaleString();
+    var pct = Math.round(data.boostRate * 100);
+    sub.textContent = pct + '% boost \u00B7 this month';
+    var exp = document.getElementById('expandAiBoost');
+    if (exp && data.factors && data.factors.length > 0) {
+      exp.innerHTML = data.factors.map(function(f) {
+        var barW = Math.min(Math.round(f.rate * 100), 100);
+        return '<div style="margin-bottom:4px;"><div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:1px;"><span style="color:#e4e6eb;">' + escapeHtml(f.name) + '</span><span style="color:#22c55e;">+' + Math.round(f.rate * 100) + '%</span></div><div style="background:rgba(255,255,255,0.06);border-radius:2px;height:3px;overflow:hidden;"><div style="background:#22c55e;height:100%;width:' + barW + '%;border-radius:2px;"></div></div></div>';
+      }).join('');
+    }
+  }
+
+  // ---- Utility Functions ----
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function truncate(str, len) {
+    if (!str) return '';
+    return str.length > len ? str.substring(0, len) + '...' : str;
+  }
+
+  function timeAgo(dateStr) {
+    if (!dateStr) return '--';
+    var d = new Date(dateStr);
+    var diff = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (diff < 0) return 'now';
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  function formatUptime(seconds) {
+    if (!seconds) return '--';
+    var d = Math.floor(seconds / 86400);
+    var h = Math.floor((seconds % 86400) / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm';
+  }
+
+  // ---- Earnings Chart ----
+  var profitChartInstance = null;
+
+  function loadCharts() {
+    var period = document.getElementById('chartPeriod').value;
+    var amp = getAccountParam();
+    var url = period === 'monthly' ? '/revenue/monthly?months=6' + amp : '/revenue/weekly?weeks=8' + amp;
+    fetchJSON(url).then(function(data) {
+      renderProfitChart(data, period);
+    }).catch(function() {});
+  }
+
+  function renderProfitChart(data, period) {
+    var canvas = document.getElementById('profitChart');
+    var ctx = canvas.getContext('2d');
+    if (profitChartInstance) profitChartInstance.destroy();
+
+    var labels = data.map(function(d) {
+      if (period === 'monthly') {
+        var parts = d.month.split('-');
+        var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return mn[parseInt(parts[1], 10) - 1] + ' ' + parts[0].slice(2);
+      } else {
+        var parts = d.week.split('-');
+        return parseInt(parts[1], 10) + '/' + parseInt(parts[2], 10);
+      }
+    });
+    var earningsData = data.map(function(d) { return d.profit || d.revenue || 0; });
+    var countData = data.map(function(d) { return d.count || 0; });
+
+    profitChartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Earnings',
+            data: earningsData,
+            backgroundColor: '#22c55e44',
+            borderColor: '#22c55e',
+            borderWidth: 1.5,
+            borderRadius: 4,
+            yAxisID: 'y',
+          },
+          {
+            label: 'Bookings',
+            data: countData,
+            type: 'line',
+            borderColor: '#a78bfa',
+            backgroundColor: '#a78bfa33',
+            borderWidth: 2,
+            pointRadius: 3,
+            pointBackgroundColor: '#a78bfa',
+            tension: 0.3,
+            fill: false,
+            yAxisID: 'y1',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'top',
+            labels: { color: '#8b8fa3', font: { size: 10 }, boxWidth: 10, padding: 8 }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                if (context.dataset.yAxisID === 'y1') return context.dataset.label + ': ' + context.parsed.y;
+                return context.dataset.label + ': \u00A3' + context.parsed.y;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#6b6f82', font: { size: 9 } }, grid: { color: '#1e2130' } },
+          y: {
+            position: 'left',
+            ticks: { color: '#6b6f82', font: { size: 9 }, callback: function(v) { return '\u00A3' + v; } },
+            grid: { color: '#1e2130' }
+          },
+          y1: {
+            position: 'right',
+            ticks: { color: '#a78bfa', font: { size: 9 }, stepSize: 1 },
+            grid: { display: false }
+          }
+        }
+      }
+    });
+  }
+
+  // ---- Calendar ----
+  var calendarRentals = [];
+  var calendarStartDate = getMonday(new Date());
+  var selectedCalDay = null;
+
+  function getMonday(d) {
+    var date = new Date(d);
+    var day = date.getDay();
+    var diff = date.getDate() - day + (day === 0 ? -6 : 1);
+    return new Date(date.setDate(diff));
+  }
+
+  function fmtDateISO(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function calendarPrev() {
+    calendarStartDate.setDate(calendarStartDate.getDate() - 7);
+    loadCalendar();
+  }
+  function calendarNext() {
+    calendarStartDate.setDate(calendarStartDate.getDate() + 7);
+    loadCalendar();
+  }
+  function calendarToday() {
+    calendarStartDate = getMonday(new Date());
+    selectedCalDay = fmtDateISO(new Date());
+    loadCalendar();
+  }
+
+  function loadCalendar() {
+    var start = new Date(calendarStartDate);
+    var end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    var startStr = fmtDateISO(start);
+    var endStr = fmtDateISO(end);
+    var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    document.getElementById('calendarMonth').textContent = monthNames[calendarStartDate.getMonth()] + ' ' + calendarStartDate.getFullYear();
+    var amp = getAccountParam();
+    fetchJSON('/calendar/bookings?start=' + startStr + '&end=' + endStr + amp).then(function(data) {
+      calendarRentals = data;
+      renderCarousel(data, start, 7);
+      if (selectedCalDay) {
+        showDayDetail(selectedCalDay);
+      } else {
+        showDayDetail(fmtDateISO(new Date()));
+      }
+    }).catch(function() {
+      document.getElementById('calendarBody').innerHTML = '<div style="color:#ef4444;font-size:11px;">Failed to load calendar</div>';
+    });
+  }
+
+  function getDayType(rental, dateStr) {
+    var startStr = ((rental.pickupDate || rental.startDate) + '').split('T')[0];
+    var endStr = ((rental.returnDate || rental.endDate) + '').split('T')[0];
+    if (startStr === endStr) {
+      if (dateStr === startStr) return 'pickup';
+      return 'away';
+    }
+    if (dateStr === startStr) return 'pickup';
+    if (dateStr === endStr) return 'dropoff';
+    return 'away';
+  }
+
+  function getEventsForDay(dateStr) {
+    var events = [];
+    for (var i = 0; i < calendarRentals.length; i++) {
+      var r = calendarRentals[i];
+      var rs = ((r.pickupDate || r.startDate) + '').split('T')[0];
+      var re = ((r.returnDate || r.endDate) + '').split('T')[0];
+      var contractStart = r.startDate.split('T')[0];
+      var contractEnd = r.endDate.split('T')[0];
+      var effectiveStart = rs < contractStart ? rs : contractStart;
+      var effectiveEnd = re > contractEnd ? re : contractEnd;
+      if (dateStr >= effectiveStart && dateStr <= effectiveEnd) {
+        events.push({ rental: r, dayType: getDayType(r, dateStr) });
+      }
+    }
+    return events;
+  }
+
+  function renderCarousel(rentals, startDate, numDays) {
+    var el = document.getElementById('calendarBody');
+    var todayStr = fmtDateISO(new Date());
+    var weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var html = '<div class="cal-carousel" id="calCarousel">';
+    for (var i = 0; i < numDays; i++) {
+      var d = new Date(startDate);
+      d.setDate(d.getDate() + i);
+      var ds = fmtDateISO(d);
+      var isToday = ds === todayStr;
+      var isSelected = ds === selectedCalDay;
+      var events = getEventsForDay(ds);
+      var classes = 'cal-day-card';
+      if (isToday) classes += ' today';
+      if (isSelected) classes += ' selected';
+      if (events.length > 0) classes += ' has-events';
+      html += '<div class="' + classes + '" onclick="showDayDetail(\'' + ds + '\')" id="card-' + ds + '">';
+      html += '<div class="cal-day-weekday">' + weekdays[d.getDay()] + '</div>';
+      html += '<div class="cal-day-date">' + d.getDate() + '</div>';
+      if (events.length > 0) {
+        var hasDb = false, hasLeo = false, hasAway = false, hasDelivery = false;
+        for (var j = 0; j < events.length; j++) {
+          if (events[j].rental.account === 'leo') hasLeo = true; else hasDb = true;
+          if (events[j].dayType === 'away') hasAway = true;
+          if ((events[j].dayType === 'pickup' && events[j].rental.pickupMethod === 'delivery') ||
+              (events[j].dayType === 'dropoff' && events[j].rental.returnMethod === 'delivery')) hasDelivery = true;
+        }
+        html += '<div class="cal-day-dots">';
+        if (hasDb) html += '<span class="dot dot-db"></span>';
+        if (hasLeo) html += '<span class="dot dot-leo"></span>';
+        if (hasAway) html += '<span class="dot dot-away"></span>';
+        if (hasDelivery) html += '<span class="dot dot-delivery" title="Delivery"></span>';
+        html += '</div>';
+        html += '<div class="cal-day-count">' + events.length + '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    var targetId = 'card-' + (selectedCalDay || todayStr);
+    var target = document.getElementById(targetId);
+    if (target) {
+      var container = document.getElementById('calCarousel');
+      container.scrollLeft = target.offsetLeft - container.offsetLeft - 20;
+    }
+  }
+
+  function showDayDetail(dateStr) {
+    selectedCalDay = dateStr;
+    document.querySelectorAll('.cal-day-card.selected').forEach(function(el) { el.classList.remove('selected'); });
+    var card = document.getElementById('card-' + dateStr);
+    if (card) card.classList.add('selected');
+    var detail = document.getElementById('calendarDetail');
+    var events = getEventsForDay(dateStr);
+    if (events.length === 0) {
+      detail.innerHTML = '<div class="cal-detail-header">' + formatDetailDate(dateStr) + '</div><div style="color:#8b8fa3;font-size:12px;padding:6px 0;">No bookings</div>';
+      detail.classList.add('open');
+      return;
+    }
+    var html = '<div class="cal-detail-header">' + formatDetailDate(dateStr) + ' &mdash; ' + events.length + ' booking' + (events.length > 1 ? 's' : '') + '</div>';
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      var r = ev.rental;
+      var isLeo = r.account === 'leo';
+      var badgeClass = ev.dayType === 'away' ? 'away' : (isLeo ? ev.dayType + '-leo' : ev.dayType);
+      var isPickupDelivery = ev.dayType === 'pickup' && r.pickupMethod === 'delivery';
+      var isReturnDelivery = ev.dayType === 'dropoff' && r.returnMethod === 'delivery';
+      if (isPickupDelivery || isReturnDelivery) badgeClass = 'delivery-badge';
+      var badgeLabel = ev.dayType === 'pickup' ? (isPickupDelivery ? 'DELIVERY' : 'PICKUP') : ev.dayType === 'dropoff' ? (isReturnDelivery ? 'DELIVERY' : 'RETURN') : 'AWAY';
+      var startD = new Date(r.startDate);
+      var endD = new Date(r.endDate);
+      var diffMs = endD.getTime() - startD.getTime();
+      var days = Math.max(1, Math.round(diffMs / 86400000) + 1);
+      var rangeStr = days === 1
+        ? formatShortDate(startD) + ' (1d)'
+        : formatShortDate(startD) + ' \u2192 ' + formatShortDate(endD) + ' (' + days + 'd)';
+
+      // Photo
+      var photos = r.photos || [];
+      var productPhotos = photos.filter(function(p) { return p.indexOf('/products/') >= 0; });
+      var photoHtml = '';
+      if (productPhotos.length > 0) {
+        photoHtml = '<img style="width:50px;height:50px;border-radius:6px;object-fit:cover;flex-shrink:0;border:1px solid rgba(255,255,255,0.06);" src="' + escapeHtml(productPhotos[0]) + '" loading="lazy" onerror="this.style.display=\'none\'" />';
+      }
+
+      html += '<div class="cal-rental-card">';
+      html += '<div style="display:flex;gap:8px;">';
+      if (photoHtml) html += photoHtml;
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px;flex-wrap:wrap;">';
+      html += '<span class="cal-badge ' + badgeClass + '">' + badgeLabel + '</span>';
+      html += '<span class="cal-rental-acct ' + (isLeo ? 'leo' : 'db') + '">' + (isLeo ? 'Leo' : 'DB') + '</span>';
+      html += '<span class="cal-rental-name">' + escapeHtml(r.renter) + '</span>';
+      html += '<span class="cal-rental-earnings" style="margin-left:auto;">\u00A3' + r.earnings.toLocaleString('en-GB', {minimumFractionDigits:0,maximumFractionDigits:0}) + '</span>';
+      html += '</div>';
+      html += '<div style="font-size:10px;color:#8b8fa3;">' + rangeStr + '</div>';
+
+      // Items chips
+      var notes = r.notes || {};
+      var allItems = (r.items && r.items.length > 0) ? r.items : (notes.allItems || []);
+      if (allItems.length > 0) {
+        html += '<div style="margin-top:3px;">';
+        for (var j = 0; j < allItems.length; j++) {
+          html += '<span class="cal-item-chip">' + escapeHtml(allItems[j]) + '</span>';
+        }
+        html += '</div>';
+      }
+
+      // Progress bar
+      var rentalStartD = new Date(r.pickupDate || r.startDate);
+      if (r.pickupTime) { var pts = r.pickupTime.split(':'); rentalStartD.setHours(parseInt(pts[0], 10), parseInt(pts[1] || '0', 10), 0, 0); }
+      var rentalStart = rentalStartD.getTime();
+      var rentalEndD = new Date(r.returnDate || r.endDate);
+      if (r.returnTime) { var rts = r.returnTime.split(':'); rentalEndD.setHours(parseInt(rts[0], 10), parseInt(rts[1] || '0', 10), 0, 0); }
+      else { rentalEndD.setHours(23, 59, 59, 999); }
+      var rentalEnd = rentalEndD.getTime();
+      var now = Date.now();
+      var totalDuration = rentalEnd - rentalStart;
+      var elapsed = now - rentalStart;
+      var progressPct = 0, progressStatus = 'upcoming', progressLabel = '';
+      if (now < rentalStart) {
+        var hoursUntil = Math.round((rentalStart - now) / 3600000);
+        progressLabel = hoursUntil < 24 ? 'Starts in ' + hoursUntil + 'h' : 'Starts in ' + Math.ceil(hoursUntil / 24) + 'd';
+      } else if (now >= rentalEnd) {
+        progressStatus = 'completed'; progressPct = 100; progressLabel = 'Completed';
+      } else {
+        progressStatus = 'active';
+        progressPct = Math.min(99, Math.max(1, Math.round((elapsed / totalDuration) * 100)));
+        var hoursLeft = Math.round((rentalEnd - now) / 3600000);
+        progressLabel = hoursLeft < 24 ? hoursLeft + 'h remaining' : Math.ceil(hoursLeft / 24) + 'd remaining';
+      }
+      html += '<div class="cal-progress-wrap" data-rental-start="' + rentalStart + '" data-rental-end="' + rentalEnd + '">';
+      html += '<div class="cal-progress-bar ' + progressStatus + '" style="width:' + progressPct + '%"></div>';
+      html += '</div>';
+      html += '<div class="cal-progress-label"><span>' + progressLabel + '</span><span class="pct">' + progressPct + '%</span></div>';
+      html += '</div>'; // close inner flex div
+      html += '</div>'; // close outer flex row with photo
+      html += '</div>';
+    }
+
+    // Summary
+    var totalEarnings = 0, pickups = 0, returns = 0, awayCount = 0;
+    for (var i = 0; i < events.length; i++) {
+      totalEarnings += events[i].rental.earnings;
+      if (events[i].dayType === 'pickup') pickups++;
+      else if (events[i].dayType === 'dropoff') returns++;
+      else awayCount++;
+    }
+    html += '<div class="cal-day-summary">';
+    if (pickups > 0) html += '<span>' + pickups + ' pickup' + (pickups > 1 ? 's' : '') + '</span>';
+    if (returns > 0) html += '<span>' + returns + ' return' + (returns > 1 ? 's' : '') + '</span>';
+    if (awayCount > 0) html += '<span>' + awayCount + ' away</span>';
+    html += '<span style="margin-left:auto;color:#22c55e;font-weight:700;">\u00A3' + Math.round(totalEarnings).toLocaleString('en-GB') + '</span>';
+    html += '</div>';
+    detail.innerHTML = html;
+    detail.classList.add('open');
+  }
+
+  function formatDetailDate(ds) {
+    var d = new Date(ds + 'T12:00:00');
+    var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return days[d.getDay()] + ', ' + d.getDate() + ' ' + months[d.getMonth()];
+  }
+
+  function formatShortDate(d) {
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return d.getDate() + ' ' + months[d.getMonth()];
+  }
+
+  function formatTimeAmPm(time24, dateISO) {
+    if (!time24) return 'tbd';
+    var parts = time24.split(':');
+    var h = parseInt(parts[0], 10);
+    var m = parts[1] || '00';
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12 || 12;
+    var dateLabel = '';
+    if (dateISO) {
+      var d = new Date(dateISO);
+      dateLabel = ', ' + formatShortDate(d);
+    }
+    return h12 + ':' + m + ' ' + ampm + dateLabel;
+  }
+
+  // Live progress bar updater
+  var calProgressTimer = null;
+  function startCalProgressUpdater() {
+    if (calProgressTimer) clearInterval(calProgressTimer);
+    calProgressTimer = setInterval(updateCalProgress, 60000);
+  }
+  function updateCalProgress() {
+    var wraps = document.querySelectorAll('.cal-progress-wrap');
+    if (wraps.length === 0) return;
+    var now = Date.now();
+    wraps.forEach(function(wrap) {
+      var rs = parseInt(wrap.getAttribute('data-rental-start'));
+      var re = parseInt(wrap.getAttribute('data-rental-end'));
+      if (!rs || !re) return;
+      var bar = wrap.querySelector('.cal-progress-bar');
+      var labelEl = wrap.nextElementSibling;
+      if (!bar || !labelEl) return;
+      var total = re - rs;
+      var elapsed = now - rs;
+      var pct, status, label;
+      if (now < rs) {
+        pct = 0; status = 'upcoming';
+        var h = Math.round((rs - now) / 3600000);
+        label = h < 24 ? 'Starts in ' + h + 'h' : 'Starts in ' + Math.ceil(h / 24) + 'd';
+      } else if (now >= re) {
+        pct = 100; status = 'completed'; label = 'Completed';
+      } else {
+        pct = Math.min(99, Math.max(1, Math.round((elapsed / total) * 100)));
+        status = 'active';
+        var h = Math.round((re - now) / 3600000);
+        label = h < 24 ? h + 'h remaining' : Math.ceil(h / 24) + 'd remaining';
+      }
+      bar.style.width = pct + '%';
+      bar.className = 'cal-progress-bar ' + status;
+      var spans = labelEl.querySelectorAll('span');
+      if (spans[0]) spans[0].textContent = label;
+      if (spans[1]) spans[1].textContent = pct + '%';
+    });
+  }
+  startCalProgressUpdater();
+
+  // ---- Return Hub ----
+  var returnHubRentals = [];
+  var currentReturnRental = null;
+  var confettiAnimId = null;
+  var celebrationRentalId = null;
+  var celebrationPendingReturn = false;
+
+  var RETURN_ISSUE_OPTIONS = [
+    'Very late return',
+    'Unreliable / no-show',
+    'No replies to messages',
+    'Rude behaviour',
+    'Sense of entitlement',
+    'Didn\'t pay for extension',
+    'Equipment returned damaged',
+    'Missing accessories',
+    'Gear not cleaned / dirty',
+    'Tried to negotiate after booking',
+    'Cancelled last minute',
+    'Returned to wrong location',
+    'Exceeded rental period without asking',
+    'Suspicious / dishonest behaviour',
+    'Would not recommend',
+  ];
+  var selectedIssues = [];
+
+  function loadReturnHub() {
+    var acct = getAccountQuery();
+    return fetchJSON('/rentals/ongoing' + acct).then(function(data) {
+      returnHubRentals = data || [];
+      renderReturnHub(returnHubRentals);
+    }).catch(function() {
+      returnHubRentals = [];
+      renderReturnHub([]);
+    });
+  }
+
+  function renderReturnHub(rentals) {
+    var section = document.getElementById('returnHubSection');
+    var grid = document.getElementById('returnHubGrid');
+    var count = document.getElementById('returnHubCount');
+    if (!rentals || rentals.length === 0) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = '';
+    count.textContent = rentals.length + ' active';
+    var html = '';
+    for (var i = 0; i < rentals.length; i++) {
+      var r = rentals[i];
+      var items = (r.items || []).slice(0, 3).join(', ');
+      if (r.items && r.items.length > 3) items += ' +' + (r.items.length - 3);
+      var endDate = r.endDate ? new Date(r.endDate) : null;
+      var endStr = endDate ? endDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+      var isOverdue = !!r.overdue;
+      var productPhotos = (r.photos || []).filter(function(p) { return p.indexOf('/products/') >= 0; });
+      var photo = productPhotos.length > 0
+        ? '<img class="return-card-photo" src="' + escapeHtml(productPhotos[0]) + '" alt="">'
+        : '<div class="return-card-placeholder">&#128247;</div>';
+      html += '<div class="return-card' + (isOverdue ? ' overdue' : '') + '" onclick="openReturnModal(' + i + ')">';
+      if (isOverdue) html += '<span class="overdue-tag">Overdue</span>';
+      html += photo;
+      html += '<div class="return-card-body">';
+      html += '<div class="return-card-name">' + escapeHtml(r.renterName) + '</div>';
+      html += '<div class="return-card-items">' + escapeHtml(items || 'Equipment rental') + '</div>';
+      html += '<div class="return-card-bottom">';
+      html += '<span class="return-card-earnings">&pound;' + r.earnings.toFixed(0) + '</span>';
+      var dateLabel = isOverdue ? 'ended ' + endStr : 'ends ' + endStr;
+      html += '<span class="return-card-date">' + dateLabel + '</span>';
+      html += '</div></div></div>';
+    }
+    grid.innerHTML = html;
+  }
+
+  function openReturnModal(idx) {
+    currentReturnRental = returnHubRentals[idx];
+    if (!currentReturnRental) return;
+    document.getElementById('returnModalTitle').textContent = 'Return: ' + currentReturnRental.renterName;
+    var items = (currentReturnRental.items || []).join(', ') || 'Equipment';
+    document.getElementById('returnModalSub').textContent = items + ' \u2014 \u00A3' + currentReturnRental.earnings.toFixed(0);
+    showReturnStep(1);
+    document.getElementById('returnReason').value = '';
+    document.getElementById('returnModalOverlay').classList.add('open');
+  }
+
+  function closeReturnModal() {
+    document.getElementById('returnModalOverlay').classList.remove('open');
+    currentReturnRental = null;
+  }
+
+  function showReturnStep(n) {
+    document.querySelectorAll('.return-step').forEach(function(el) { el.classList.remove('active'); });
+    var step = document.getElementById('returnStep' + n);
+    if (step) step.classList.add('active');
+  }
+
+  function renderIssueChips() {
+    var grid = document.getElementById('returnIssuesGrid');
+    var html = '';
+    for (var i = 0; i < RETURN_ISSUE_OPTIONS.length; i++) {
+      html += '<div class="return-issue-chip" data-issue-idx="' + i + '" onclick="toggleIssueChip(this, ' + i + ')">' + escapeHtml(RETURN_ISSUE_OPTIONS[i]) + '</div>';
+    }
+    grid.innerHTML = html;
+  }
+
+  function toggleIssueChip(el, idx) {
+    var issue = RETURN_ISSUE_OPTIONS[idx];
+    var pos = selectedIssues.indexOf(issue);
+    if (pos >= 0) {
+      selectedIssues.splice(pos, 1);
+      el.classList.remove('selected');
+    } else {
+      selectedIssues.push(issue);
+      el.classList.add('selected');
+    }
+  }
+
+  function getIssueReason() {
+    var custom = document.getElementById('returnReason').value.trim();
+    var parts = selectedIssues.slice();
+    if (custom) parts.push(custom);
+    return parts.join('; ');
+  }
+
+  function returnNoIssues() {
+    if (!currentReturnRental) return;
+    var rental = currentReturnRental;
+    document.getElementById('returnModalOverlay').classList.remove('open');
+    currentReturnRental = null;
+    showCelebration(rental.earnings, false, rental.id, false, 'good');
+    document.getElementById('celebrationSubtitle').textContent = 'Marking as returned on Hygglo...';
+    var btn = document.getElementById('celebrationThankYouBtn');
+    var noFollowBtn = document.getElementById('celebrationNoFollowUpBtn');
+    if (btn) btn.style.display = 'none';
+    if (noFollowBtn) noFollowBtn.style.display = 'none';
+
+    fetch('/rentals/' + rental.id + '/return', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(result) {
+      if (result.success) {
+        var sub = 'earned';
+        if (result.markedOnHygglo) sub += ' \u2014 marked as returned on Hygglo \u2705';
+        else sub += ' \u2014 could not mark on Hygglo (try manually)';
+        document.getElementById('celebrationSubtitle').textContent = sub;
+      } else {
+        document.getElementById('celebrationSubtitle').textContent = result.error || 'Failed to process return';
+      }
+      setTimeout(loadReturnHub, 1000);
+    })
+    .catch(function(err) {
+      document.getElementById('celebrationSubtitle').textContent = 'Error: ' + (err.message || 'Unknown');
+    });
+  }
+
+  function returnHasIssues() {
+    selectedIssues = [];
+    renderIssueChips();
+    showReturnStep(2);
+  }
+
+  function returnGoBack() { showReturnStep(1); }
+
+  function returnBlacklist() {
+    var reason = getIssueReason();
+    processReturnRequest({ outcome: 'issues', blacklist: true, issues: selectedIssues, reason: reason || undefined, dashboardApproved: true });
+  }
+
+  function returnFlagOnly() {
+    var reason = getIssueReason();
+    processReturnRequest({ outcome: 'issues', blacklist: false, issues: selectedIssues, reason: reason || undefined, dashboardApproved: true });
+  }
+
+  function processReturnRequest(body) {
+    if (!currentReturnRental) return;
+    showReturnStep('Processing');
+    var text = body.outcome === 'good' ? 'Leaving review and preparing thank-you...' : 'Processing...';
+    document.getElementById('returnProcessingText').textContent = text;
+    fetch('/rentals/' + currentReturnRental.id + '/return', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(result) {
+      closeReturnModal();
+      if (result.earnings !== undefined) {
+        showCelebration(result.earnings, result.thankYouSent, currentReturnRental && currentReturnRental.id, false, body.outcome, result.markedOnHygglo);
+      }
+      setTimeout(loadReturnHub, 1000);
+    })
+    .catch(function(err) {
+      document.getElementById('returnProcessingText').textContent = 'Error: ' + (err.message || 'Unknown');
+      setTimeout(function() { showReturnStep(1); }, 2000);
+    });
+  }
+
+  // ---- Celebration ----
+  function showCelebration(amount, thankYouSent, rentalId, pendingReturn, outcome, markedOnHygglo) {
+    var overlay = document.getElementById('celebrationOverlay');
+    document.getElementById('celebrationAmount').textContent = '\u00A3' + amount.toFixed(0);
+    var subtitle = 'earned from this rental';
+    if (pendingReturn) subtitle = 'earned \u2014 choose how to close this rental:';
+    else if (markedOnHygglo) subtitle = 'earned \u2014 marked as returned on Hygglo \u2705';
+    else if (markedOnHygglo === false) subtitle = 'earned \u2014 could not mark on Hygglo (try manually)';
+    document.getElementById('celebrationSubtitle').textContent = subtitle;
+    celebrationRentalId = rentalId || null;
+    celebrationPendingReturn = !!pendingReturn;
+    var btnRow = document.getElementById('celebrationBtnRow');
+    var btn = document.getElementById('celebrationThankYouBtn');
+    var noFollowBtn = document.getElementById('celebrationNoFollowUpBtn');
+    if (outcome === 'issues') {
+      btnRow.style.display = 'none';
+    } else if (pendingReturn) {
+      btnRow.style.display = '';
+      btn.style.display = ''; btn.textContent = 'Send Thank You'; btn.disabled = false; btn.style.opacity = '1';
+      noFollowBtn.style.display = ''; noFollowBtn.textContent = 'No follow up'; noFollowBtn.disabled = false; noFollowBtn.style.opacity = '1';
+    } else if (thankYouSent) {
+      btnRow.style.display = '';
+      btn.style.display = ''; btn.textContent = 'Thank You Sent'; btn.disabled = true; btn.style.opacity = '0.6';
+      noFollowBtn.style.display = 'none';
+    } else {
+      btnRow.style.display = '';
+      btn.style.display = ''; btn.textContent = 'Send Thank You'; btn.disabled = false; btn.style.opacity = '1';
+      noFollowBtn.style.display = 'none';
+    }
+    overlay.classList.add('open');
+    setTimeout(launchConfetti, 600);
+  }
+
+  function sendThankYouFromCelebration() {
+    if (!celebrationRentalId) return;
+    var btn = document.getElementById('celebrationThankYouBtn');
+    var noFollowBtn = document.getElementById('celebrationNoFollowUpBtn');
+    if (celebrationPendingReturn) {
+      btn.textContent = 'Processing...'; btn.disabled = true; btn.style.opacity = '0.6';
+      noFollowBtn.disabled = true; noFollowBtn.style.opacity = '0.4';
+      fetch('/rentals/' + celebrationRentalId + '/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outcome: 'good', skipFollowUp: false, dashboardApproved: true }),
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(result) {
+        celebrationPendingReturn = false;
+        if (result.success) {
+          btn.textContent = result.thankYouSent ? 'Thank You Sent' : 'Processed';
+          noFollowBtn.style.display = 'none';
+          document.getElementById('celebrationSubtitle').textContent = result.markedOnHygglo
+            ? 'earned \u2014 marked as returned on Hygglo \u2705'
+            : 'earned \u2014 could not mark on Hygglo (try manually)';
+        } else { btn.textContent = result.error || 'Failed'; }
+        setTimeout(loadReturnHub, 1000);
+      })
+      .catch(function() { btn.textContent = 'Error'; btn.disabled = false; btn.style.opacity = '1'; noFollowBtn.disabled = false; noFollowBtn.style.opacity = '1'; });
+    } else {
+      btn.textContent = 'Sending...'; btn.disabled = true; btn.style.opacity = '0.6';
+      fetch('/rentals/' + celebrationRentalId + '/send-thankyou', { method: 'POST' })
+        .then(function(res) { return res.json(); })
+        .then(function(result) {
+          if (result.success) btn.textContent = 'Thank You Sent';
+          else { btn.textContent = result.error || 'Failed'; setTimeout(function() { btn.textContent = 'Send Thank You'; btn.disabled = false; btn.style.opacity = '1'; }, 3000); }
+        })
+        .catch(function() { btn.textContent = 'Error'; btn.disabled = false; btn.style.opacity = '1'; });
+    }
+  }
+
+  function noFollowUpFromCelebration() {
+    if (!celebrationRentalId || !celebrationPendingReturn) return;
+    var btn = document.getElementById('celebrationThankYouBtn');
+    var noFollowBtn = document.getElementById('celebrationNoFollowUpBtn');
+    noFollowBtn.textContent = 'Processing...'; noFollowBtn.disabled = true; noFollowBtn.style.opacity = '0.6';
+    btn.disabled = true; btn.style.opacity = '0.4';
+    fetch('/rentals/' + celebrationRentalId + '/return', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(result) {
+      celebrationPendingReturn = false;
+      if (result.success) {
+        noFollowBtn.textContent = 'Done \u2014 No follow up'; btn.style.display = 'none';
+        document.getElementById('celebrationSubtitle').textContent = result.markedOnHygglo
+          ? 'earned \u2014 marked as returned on Hygglo \u2705'
+          : 'earned \u2014 could not mark on Hygglo (try manually)';
+      } else { noFollowBtn.textContent = result.error || 'Failed'; }
+      setTimeout(loadReturnHub, 1000);
+    })
+    .catch(function() { noFollowBtn.textContent = 'Error'; noFollowBtn.disabled = false; noFollowBtn.style.opacity = '1'; btn.disabled = false; btn.style.opacity = '1'; });
+  }
+
+  function closeCelebration() {
+    if (celebrationPendingReturn && celebrationRentalId) {
+      celebrationPendingReturn = false;
+      fetch('/rentals/' + celebrationRentalId + '/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
+      })
+      .then(function(res) { return res.json(); })
+      .then(function() { setTimeout(loadReturnHub, 1000); })
+      .catch(function() {});
+    }
+    document.getElementById('celebrationOverlay').classList.remove('open');
+    stopConfetti();
+  }
+
+  function launchConfetti() {
+    var canvas = document.getElementById('celebrationCanvas');
+    var ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    var colors = ['#22c55e', '#6ea8fe', '#f59e0b', '#a78bfa', '#ef4444', '#06b6d4'];
+    var particles = [];
+    for (var i = 0; i < 100; i++) {
+      particles.push({
+        x: Math.random() * canvas.width, y: Math.random() * canvas.height * -1,
+        w: Math.random() * 8 + 4, h: Math.random() * 4 + 2,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        vx: (Math.random() - 0.5) * 4, vy: Math.random() * 3 + 2,
+        rotation: Math.random() * 360, rotationSpeed: (Math.random() - 0.5) * 10, opacity: 1,
+      });
+    }
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      var alive = false;
+      for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.rotation += p.rotationSpeed;
+        if (p.y > canvas.height * 0.7) p.opacity -= 0.015;
+        if (p.opacity <= 0) continue;
+        alive = true;
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rotation * Math.PI / 180);
+        ctx.globalAlpha = p.opacity; ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); ctx.restore();
+      }
+      if (alive) confettiAnimId = requestAnimationFrame(animate);
+    }
+    animate();
+  }
+
+  function stopConfetti() {
+    if (confettiAnimId) { cancelAnimationFrame(confettiAnimId); confettiAnimId = null; }
+    var canvas = document.getElementById('celebrationCanvas');
+    var ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  // ---- Top Bundles ----
+  function renderTopBundles(data) {
+    var el = document.getElementById('topBundlesBody');
+    var bundles = data && data.bundles ? data.bundles : [];
+    var totalRev = data && data.totalBundleRevenue ? data.totalBundleRevenue : 0;
+    if (bundles.length === 0) { el.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No bundle rentals matched</div>'; return; }
+    var html = '<table><tr><th>Bundle</th><th>Count</th><th>Revenue</th></tr>';
+    for (var i = 0; i < bundles.length && i < 15; i++) {
+      var b = bundles[i];
+      html += '<tr><td style="color:#e4e6eb;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (i + 1) + '. ' + escapeHtml(truncate(b.label, 30)) + '</td>';
+      html += '<td style="color:#8b8fa3;">' + b.count + 'x</td>';
+      html += '<td style="color:#a78bfa;">\u00A3' + Math.round(b.revenue) + '</td></tr>';
+    }
+    if (totalRev > 0) {
+      html += '<tr style="border-top:1px solid #333;"><td style="color:#a78bfa;font-weight:700;">Total</td><td></td>';
+      html += '<td style="color:#a78bfa;font-weight:700;">\u00A3' + Math.round(totalRev).toLocaleString('en-GB') + '</td></tr>';
+    }
+    html += '</table>';
+    el.innerHTML = html;
+  }
+
+  function loadTopBundles() {
+    var p = document.getElementById('bundlePeriod').value;
+    fetchJSON('/revenue/top-bundles?period=' + p + '&limit=15' + getAccountParam()).then(renderTopBundles).catch(function() {});
+  }
+
+  // ---- Item Cycle Tracker (simplified for mobile) ----
+  var cycleChartInstance = null;
+  var cycleData = null;
+  var cycleVisibility = {};
+
+  function renderCycleChart(data) {
+    cycleData = data;
+    if (!data || !data.categories || data.categories.length === 0) {
+      document.getElementById('cycleLegend').innerHTML = '<span style="color:#6b7280;font-size:10px;">No seasonal data yet</span>';
+      return;
+    }
+    document.getElementById('cycleYears').textContent = 'Last 2 years';
+    data.categories.forEach(function(cat) {
+      if (cycleVisibility[cat.name] === undefined) cycleVisibility[cat.name] = true;
+    });
+    // Legend
+    var legendHtml = '';
+    data.categories.forEach(function(cat) {
+      var active = cycleVisibility[cat.name];
+      legendHtml += '<button onclick="toggleCycleCat(\'' + escapeHtml(cat.name) + '\')" style="'
+        + 'display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:12px;'
+        + 'border:1px solid ' + (active ? cat.color + '55' : 'rgba(255,255,255,0.06)') + ';'
+        + 'background:' + (active ? cat.color + '14' : 'transparent') + ';'
+        + 'color:' + (active ? cat.color : '#4a4d5e') + ';'
+        + 'font-size:9px;cursor:pointer;font-weight:' + (active ? '600' : '400') + ';">'
+        + '<span style="width:6px;height:6px;border-radius:50%;background:' + (active ? cat.color : '#3a3d4a') + ';display:inline-block;"></span>'
+        + cat.name + '</button>';
+    });
+    document.getElementById('cycleLegend').innerHTML = legendHtml;
+
+    var canvas = document.getElementById('cycleChart');
+    var ctx = canvas.getContext('2d');
+    if (cycleChartInstance) cycleChartInstance.destroy();
+
+    var datasets = data.categories.map(function(cat) {
+      var visible = cycleVisibility[cat.name];
+      return {
+        label: cat.name,
+        data: visible ? cat.data.slice() : cat.data.map(function() { return null; }),
+        borderColor: visible ? cat.color : 'transparent',
+        backgroundColor: 'transparent',
+        borderWidth: visible ? 2 : 0,
+        pointRadius: 0,
+        pointHoverRadius: visible ? 4 : 0,
+        tension: 0.4,
+        fill: false,
+        spanGaps: false,
+      };
+    });
+
+    cycleChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: { labels: data.monthLabels, datasets: datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(12,14,24,0.92)',
+            titleColor: '#e4e6eb', titleFont: { size: 11 },
+            bodyColor: '#c9cdd8', bodyFont: { size: 10 },
+            padding: 8, cornerRadius: 8,
+            displayColors: true, boxWidth: 7, boxHeight: 7,
+            filter: function(item) { return item.raw !== null; },
+            callbacks: {
+              label: function(tipCtx) {
+                if (tipCtx.raw === null) return null;
+                var pct = (tipCtx.parsed.y * 100).toFixed(0);
+                return ' ' + tipCtx.dataset.label + '  ' + pct + '%';
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(255,255,255,0.03)' },
+            ticks: { color: '#565a6e', font: { size: 9 }, padding: 4 },
+          },
+          y: {
+            min: 0, max: 1,
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            ticks: {
+              color: '#565a6e', font: { size: 9 }, stepSize: 0.25,
+              callback: function(v) { if (v === 0) return 'Low'; if (v === 0.5) return 'Mid'; if (v === 1) return 'Peak'; return ''; },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function toggleCycleCat(name) {
+    if (!cycleChartInstance || !cycleData) return;
+    cycleVisibility[name] = !cycleVisibility[name];
+    renderCycleChart(cycleData);
+  }
+
+  // ---- Sell Recommender ----
+  var sellRecoData = null;
+
+  function loadSellReco() {
+    var amp = getAccountParam();
+    fetchJSON('/recommender/sell-items' + (amp ? '?' + amp.substring(1) : '')).then(function(data) {
+      sellRecoData = data;
+      renderSellRecoStat(data);
+      renderSellReco(data);
+    }).catch(function() {});
+  }
+
+  function renderSellReco(data) {
+    var body = document.getElementById('sellRecoBody');
+    var footer = document.getElementById('sellRecoFooter');
+    if (!data || !data.recommendations || data.recommendations.length === 0) {
+      body.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No data. Run eBay scrape first.</div>';
+      return;
+    }
+    var filter = document.getElementById('sellRecoFilter').value;
+    var items = data.recommendations;
+    if (filter !== 'all') items = items.filter(function(r) { return r.sellVerdict === filter; });
+    var html = '<table><tr><th>Item</th><th>Verdict</th><th>eBay</th><th>Earned</th><th>Idle</th></tr>';
+    items.forEach(function(r) {
+      var vc;
+      if (r.sellVerdict === 'sell') vc = '#ef4444';
+      else if (r.sellVerdict === 'consider') vc = '#f59e0b';
+      else vc = '#22c55e';
+      var idleColor = r.daysSinceLastRental !== null && r.daysSinceLastRental > 60 ? '#ef4444' : '#8b8fa3';
+      html += '<tr title="' + escapeHtml(r.sellReason) + '">';
+      html += '<td style="color:#e4e6eb;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(truncate(r.item, 20)) + '</td>';
+      html += '<td style="text-align:center;"><span style="color:' + vc + ';font-weight:600;font-size:10px;">' + r.sellVerdict + '</span></td>';
+      html += '<td style="color:#f59e0b;">' + (r.ebayResalePrice ? '\u00A3' + Math.round(r.ebayResalePrice) : '\u2014') + '</td>';
+      html += '<td style="color:#22c55e;font-weight:600;">\u00A3' + r.lifetimeRevenue.toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}) + '</td>';
+      html += '<td style="color:' + idleColor + ';">' + (r.daysSinceLastRental !== null ? r.daysSinceLastRental + 'd' : '\u2014') + '</td></tr>';
+    });
+    html += '</table>';
+    body.innerHTML = html;
+    if (footer) footer.textContent = data.ebayDataAge ? 'eBay prices: ' + data.ebayDataAge : '';
+  }
+
+  function filterSellReco() {
+    if (sellRecoData) renderSellReco(sellRecoData);
+  }
+
+  function triggerEbayScrape() {
+    var btn = document.getElementById('ebayScrapeBtn');
+    btn.textContent = '...'; btn.disabled = true;
+    fetchJSON('/recommender/ebay-scrape').then(function() {
+      btn.textContent = 'Done'; setTimeout(function() { btn.textContent = 'eBay'; btn.disabled = false; }, 2000);
+      loadSellReco();
+    }).catch(function() {
+      btn.textContent = 'Fail'; btn.disabled = false;
+      setTimeout(function() { btn.textContent = 'eBay'; }, 2000);
+    });
+  }
+
+  // ---- Price Recommendations ----
+  var priceRecoData = null;
+
+  function loadPriceReco() {
+    fetchJSON('/price-recommendations').then(function(data) {
+      priceRecoData = data;
+      renderPriceReco(data);
+    }).catch(function() {});
+  }
+
+  function filterPriceReco() {
+    if (priceRecoData) renderPriceReco(priceRecoData);
+  }
+
+  function renderPriceReco(data) {
+    var body = document.getElementById('priceRecoBody');
+    var footer = document.getElementById('priceRecoFooter');
+    if (!data || !data.items || data.items.length === 0) {
+      body.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No data. Sync competitor data first.</div>';
+      return;
+    }
+    var signalFilter = document.getElementById('priceRecoSignal').value;
+    var catFilter = document.getElementById('priceRecoCat').value;
+    var items = data.items;
+    if (signalFilter !== 'all') items = items.filter(function(r) { return r.signal === signalFilter; });
+    if (catFilter !== 'all') items = items.filter(function(r) { return r.category === catFilter; });
+    var html = '<table><tr><th>Item</th><th>Our \u00A3</th><th>Avg</th><th>Gap</th><th>Signal</th></tr>';
+    items.forEach(function(r) {
+      var sc, slabel;
+      if (r.signal === 'overpriced') { sc = '#ef4444'; slabel = 'Over'; }
+      else if (r.signal === 'underpriced') { sc = '#f59e0b'; slabel = 'Under'; }
+      else if (r.signal === 'competitive') { sc = '#22c55e'; slabel = 'OK'; }
+      else { sc = '#6b6f82'; slabel = 'N/A'; }
+      var gapStr = r.gapPercent !== null ? (r.gapPercent > 0 ? '+' : '') + r.gapPercent + '%' : '\u2014';
+      var gapColor = r.gapPercent > 15 ? '#ef4444' : r.gapPercent < -15 ? '#f59e0b' : '#8b8fa3';
+      html += '<tr>';
+      html += '<td style="color:#e4e6eb;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(truncate(r.item, 20)) + '</td>';
+      html += '<td style="color:#e4e6eb;">' + (r.ourDailyPrice != null ? '\u00A3' + r.ourDailyPrice : '\u2014') + '</td>';
+      html += '<td style="color:#8b8fa3;">' + (r.compAvgPrice != null ? '\u00A3' + r.compAvgPrice : '\u2014') + '</td>';
+      html += '<td style="color:' + gapColor + ';font-weight:600;">' + gapStr + '</td>';
+      html += '<td style="text-align:center;"><span style="color:' + sc + ';font-weight:600;font-size:10px;">' + slabel + '</span></td></tr>';
+    });
+    html += '</table>';
+    body.innerHTML = html;
+    if (footer && data.summary) {
+      var s = data.summary;
+      var parts = [];
+      if (s.overpriced > 0) parts.push('<span style="color:#ef4444;">' + s.overpriced + ' over</span>');
+      if (s.underpriced > 0) parts.push('<span style="color:#f59e0b;">' + s.underpriced + ' under</span>');
+      if (s.competitive > 0) parts.push('<span style="color:#22c55e;">' + s.competitive + ' ok</span>');
+      footer.innerHTML = parts.join(' \u00B7 ');
+    }
+  }
+
+  // ---- AI Insights ----
+  var currentInsightsBudget = '0-500';
+
+  function switchInsightsTab(btn) {
+    document.querySelectorAll('.insights-tab').forEach(function(t) { t.classList.remove('active'); });
+    btn.classList.add('active');
+    currentInsightsBudget = btn.getAttribute('data-budget');
+    loadInsights(currentInsightsBudget);
+  }
+
+  function loadInsights(budget) {
+    budget = budget || currentInsightsBudget;
+    var body = document.getElementById('insightsBody');
+    body.innerHTML = '<div style="color:#06b6d4;font-size:11px;">Generating recommendations for \u00A3' + budget + ' budget...</div>';
+    fetchJSON('/competitor-intel/insights?budget=' + encodeURIComponent(budget)).then(renderInsights).catch(function() {
+      body.innerHTML = '<div style="color:#ef4444;font-size:11px;">Failed to load insights.</div>';
+    });
+  }
+
+  function renderInsights(data) {
+    var body = document.getElementById('insightsBody');
+    if (!data || !data.recommendations || data.recommendations.length === 0) {
+      body.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No insights yet. Click Sync.</div>';
+      return;
+    }
+    var html = '';
+    data.recommendations.forEach(function(rec) {
+      var confClass = rec.confidence === 'high' ? 'confidence-high' : rec.confidence === 'medium' ? 'confidence-medium' : 'confidence-low';
+      var opType = rec.type || rec.opportunityType || '';
+      html += '<div class="insight-card" data-type="' + escapeHtml(opType) + '">';
+      html += '<div class="insight-title">' + escapeHtml(rec.title) + '</div>';
+      html += '<div class="insight-desc">' + escapeHtml(rec.description) + '</div>';
+      html += '<div class="insight-meta">';
+      if (rec.estimatedCost) html += '<span class="insight-cost">' + escapeHtml(rec.estimatedCost) + '</span>';
+      if (rec.estimatedReturn) html += '<span class="insight-revenue">' + escapeHtml(rec.estimatedReturn) + '</span>';
+      html += '<span class="insight-confidence ' + confClass + '">' + escapeHtml(rec.confidence) + '</span>';
+      html += '</div></div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function syncCompetitors() {
+    var btn = document.getElementById('insightsSyncBtn');
+    var body = document.getElementById('insightsBody');
+    btn.disabled = true; btn.textContent = 'Syncing...';
+    body.innerHTML = '<div style="color:#06b6d4;font-size:11px;">Scraping competitor data... This may take 1-2 minutes.</div>';
+    fetchJSON('/competitor-intel/sync').then(function() {
+      btn.disabled = false; btn.textContent = 'Sync';
+      loadInsights(currentInsightsBudget);
+    }).catch(function(err) {
+      btn.disabled = false; btn.textContent = 'Sync';
+      body.innerHTML = '<div style="color:#ef4444;font-size:11px;">Sync failed: ' + (err.message || 'unknown') + '</div>';
+    });
+  }
+
+  // ---- Market Opportunities ----
+  function renderMarketReleases(data) {
+    var body = document.getElementById('marketReleasesBody');
+    var lastScan = document.getElementById('marketReleasesLastScan');
+    if (data.scannedAt) {
+      var d = new Date(data.scannedAt);
+      lastScan.textContent = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    }
+    if (!data.insights || data.insights.length === 0) {
+      body.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No insights yet. Click Scan.</div>';
+      return;
+    }
+    var html = '';
+    data.insights.forEach(function(insight) {
+      var confClass = insight.confidence === 'high' ? 'confidence-high' : insight.confidence === 'medium' ? 'confidence-medium' : 'confidence-low';
+      html += '<div class="insight-card" style="border-left-color:#8b5cf6;">';
+      html += '<div class="insight-title">' + escapeHtml(insight.title) + '</div>';
+      html += '<div class="insight-desc">' + escapeHtml(insight.description) + '</div>';
+      html += '<div class="insight-meta">';
+      if (insight.estimatedRevenue) html += '<span class="insight-revenue">\u00A3' + insight.estimatedRevenue + '/mo</span>';
+      html += '<span class="insight-confidence ' + confClass + '">' + escapeHtml(insight.confidence) + '</span>';
+      html += '</div></div>';
+    });
+    if (data.opportunities && data.opportunities.length > 0) {
+      html += '<div style="margin-top:10px;border-top:1px solid #2a2d3a;padding-top:8px;">';
+      html += '<div style="font-size:10px;color:#8b8fa3;margin-bottom:6px;font-weight:600;">Top Market Items</div>';
+      html += '<table><tr><th>Item</th><th>Price</th><th>Est.</th></tr>';
+      data.opportunities.slice(0, 6).forEach(function(o) {
+        html += '<tr><td style="color:#e4e6eb;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(truncate(o.title, 22)) + '</td>';
+        html += '<td>\u00A3' + o.dailyPrice + '</td>';
+        html += '<td style="color:#22c55e;">\u00A3' + o.estimatedMonthly + '/mo</td></tr>';
+      });
+      html += '</table></div>';
+    }
+    body.innerHTML = html;
+  }
+
+  function scanMarketReleases() {
+    var btn = document.getElementById('marketReleasesScanBtn');
+    var body = document.getElementById('marketReleasesBody');
+    btn.disabled = true; btn.textContent = 'Scanning...';
+    body.innerHTML = '<div style="color:#8b5cf6;font-size:11px;">Scanning marketplace... This may take 2-3 minutes.</div>';
+    fetchJSON('/market-releases/scan').then(function(data) {
+      btn.disabled = false; btn.textContent = 'Scan';
+      renderMarketReleases(data);
+    }).catch(function(err) {
+      btn.disabled = false; btn.textContent = 'Scan';
+      body.innerHTML = '<div style="color:#ef4444;font-size:11px;">Scan failed: ' + (err.message || 'unknown') + '</div>';
+    });
+  }
+
+  // ---- Insurance Claims ----
+  var insuranceIsNew = true;
+
+  function loadInsuranceClaims() {
+    return fetchJSON('/insurance/claims').then(renderInsuranceClaims).catch(function() {});
+  }
+
+  function renderInsuranceClaims(data) {
+    var el = document.getElementById('insuranceBody');
+    var totalEl = document.getElementById('insuranceTotal');
+    if (!data || !data.claims) { el.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No claims yet</div>'; return; }
+    totalEl.textContent = '\u00A3' + data.total.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    if (data.claims.length === 0) {
+      el.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No claims yet. Click + Add to create one.</div>';
+      return;
+    }
+    var html = '';
+    data.claims.forEach(function(c) {
+      var d = new Date(c.claim_date);
+      var dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      var badge = c.is_new
+        ? '<span style="background:#22c55e22;color:#22c55e;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">NEW</span>'
+        : '<span style="background:#8b8fa322;color:#8b8fa3;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;">OLD</span>';
+      var notesHtml = c.notes ? '<div style="margin-top:3px;font-size:10px;color:#6b7080;font-style:italic;">' + c.notes.replace(/</g,'&lt;') + '</div>' : '';
+      html += '<div style="background:#1e2130;border:1px solid #2a2d3a;border-radius:8px;padding:8px 10px;margin-bottom:6px;position:relative;">'
+        + '<button onclick="deleteInsuranceClaim(\'' + c.id + '\')" style="position:absolute;top:6px;right:6px;background:none;border:none;color:#555;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;">&times;</button>'
+        + '<div style="font-weight:600;font-size:12px;color:#e2e4ec;padding-right:20px;">' + escapeHtml(c.item) + ' \u2014 ' + escapeHtml(c.damage) + '</div>'
+        + notesHtml
+        + '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:#8b8fa3;">'
+        + '<span style="color:#22c55e;font-weight:700;">\u00A3' + c.amount.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + '</span>'
+        + '<span>\u00B7</span><span>' + dateStr + '</span>'
+        + '<span>\u00B7</span>' + badge
+        + '</div></div>';
+    });
+    el.innerHTML = html;
+  }
+
+  function openInsuranceModal() {
+    insuranceIsNew = true;
+    document.getElementById('insuranceItem').value = '';
+    document.getElementById('insuranceDamage').value = '';
+    document.getElementById('insuranceAmount').value = '';
+    document.getElementById('insuranceNotes').value = '';
+    setInsuranceType(true);
+    document.getElementById('insuranceModalOverlay').style.display = 'block';
+  }
+
+  function closeInsuranceModal() {
+    document.getElementById('insuranceModalOverlay').style.display = 'none';
+  }
+
+  function setInsuranceType(isNew) {
+    insuranceIsNew = isNew;
+    var newBtn = document.getElementById('insuranceNewBtn');
+    var oldBtn = document.getElementById('insuranceOldBtn');
+    if (isNew) {
+      newBtn.style.background = '#3b82f6'; newBtn.style.color = '#fff';
+      oldBtn.style.background = '#1e2130'; oldBtn.style.color = '#8b8fa3';
+    } else {
+      oldBtn.style.background = '#3b82f6'; oldBtn.style.color = '#fff';
+      newBtn.style.background = '#1e2130'; newBtn.style.color = '#8b8fa3';
+    }
+  }
+
+  function deleteInsuranceClaim(id) {
+    if (!confirm('Delete this claim?')) return;
+    fetch('/insurance/claims/' + id, { method: 'DELETE' })
+      .then(function(r) { return r.json(); })
+      .then(function() { loadInsuranceClaims(); })
+      .catch(function(e) { alert('Failed to delete: ' + e.message); });
+  }
+
+  function saveInsuranceClaim() {
+    var item = document.getElementById('insuranceItem').value.trim();
+    var damage = document.getElementById('insuranceDamage').value.trim();
+    var amount = parseFloat(document.getElementById('insuranceAmount').value);
+    var notes = document.getElementById('insuranceNotes').value.trim();
+    if (!item || !damage || !amount || amount <= 0) { alert('Please fill in all fields'); return; }
+    var btn = document.getElementById('insuranceSaveBtn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+    var payload = { amount: amount, item: item, damage: damage, is_new: insuranceIsNew };
+    if (notes) payload.notes = notes;
+    fetch('/insurance/claims', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function(r) { return r.json(); })
+      .then(function() { closeInsuranceModal(); loadInsuranceClaims(); })
+      .catch(function(e) { alert('Failed to save: ' + e.message); })
+      .finally(function() { btn.disabled = false; btn.textContent = 'Save Claim'; });
+  }
+
+  // ---- Marketing Listings ----
+  var marketingListingsCache = [];
+  var marketingFilter = 'all';
+
+  function loadMarketingListings() {
+    return fetchJSON('/marketing-listings').then(function(data) {
+      marketingListingsCache = data || [];
+      renderMarketingListings();
+    }).catch(function() {
+      marketingListingsCache = [];
+      renderMarketingListings();
+    });
+  }
+
+  function renderMarketingListings() {
+    var body = document.getElementById('marketingListingsBody');
+    var count = document.getElementById('marketingListingsCount');
+    var listings = marketingListingsCache;
+    if (marketingFilter === 'pending') listings = listings.filter(function(l) { return l.image_status === 'pending'; });
+    else if (marketingFilter === 'ready') listings = listings.filter(function(l) { return l.image_status === 'ready'; });
+    else if (marketingFilter === 'uploaded') listings = listings.filter(function(l) { return l.upload_status === 'uploaded'; });
+    count.textContent = marketingListingsCache.length ? '(' + marketingListingsCache.length + ')' : '';
+    if (listings.length === 0) {
+      body.innerHTML = '<div style="color:#8b8fa3;font-size:11px;">No marketing listings yet.</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < listings.length; i++) {
+      var l = listings[i];
+      var acctBadge = l.account === 'leo'
+        ? '<span class="mktg-badge leo">Leo</span>'
+        : '<span class="mktg-badge db">DB Cinema</span>';
+      var statusBadge = '';
+      if (l.upload_status === 'uploaded') statusBadge = '<span class="mktg-badge uploaded">Uploaded</span>';
+      else if (l.image_status === 'ready') statusBadge = '<span class="mktg-badge ready">Ready</span>';
+      else statusBadge = '<span class="mktg-badge pending">' + escapeHtml(l.image_status || 'pending') + '</span>';
+      html += '<div class="mktg-card"><div class="mktg-card-body">'
+        + '<div class="mktg-card-title">' + escapeHtml(l.title || 'Untitled') + '</div>'
+        + '<div class="mktg-card-meta">' + acctBadge + statusBadge + '</div>'
+        + '</div></div>';
+    }
+    body.innerHTML = html;
+  }
+
+  function filterMarketingListings(filter, btn) {
+    marketingFilter = filter;
+    document.querySelectorAll('#marketingFilterBar .mktg-filter-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    renderMarketingListings();
+  }
+
+  function createMarketingListing() {
+    var input = document.getElementById('marketingSearchInput');
+    var itemName = (input.value || '').trim();
+    if (!itemName) return;
+    input.value = '';
+    fetchJSON('/marketing-listings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemName: itemName }) })
+      .then(function() { loadMarketingListings(); })
+      .catch(function(err) { alert('Failed: ' + (err.message || 'unknown')); });
+  }
+
+  function discoverMarketingListings() {
+    var btn = document.getElementById('marketingDiscoverBtn');
+    btn.disabled = true; btn.textContent = 'Discovering...';
+    fetchJSON('/marketing-listings/discover').then(function(data) {
+      btn.disabled = false; btn.textContent = 'Discover';
+      loadMarketingListings();
+      if (data && data.newListings) alert('Discovered ' + data.newListings + ' new listing candidates!');
+    }).catch(function() {
+      btn.disabled = false; btn.textContent = 'Discover';
+    });
+  }
+
+  // ---- Health & Scanner ----
+  function renderHealth(data) {
+    document.getElementById('statusDot').className = 'status-dot ' + (data.status === 'healthy' ? 'healthy' : 'unhealthy');
+    var sc = data.scanner || {};
+    var html = '<div class="health-grid">';
+    html += '<div class="health-item"><div class="health-label">Status</div><div class="health-value">' + escapeHtml(data.status || '--') + '</div></div>';
+    html += '<div class="health-item"><div class="health-label">Uptime</div><div class="health-value">' + formatUptime(data.uptime) + '</div></div>';
+    html += '<div class="health-item"><div class="health-label">Database</div><div class="health-value">' + escapeHtml(data.db || '--') + '</div></div>';
+    html += '<div class="health-item"><div class="health-label">Scan Interval</div><div class="health-value">' + (sc.currentScanInterval ? (sc.currentScanInterval / 1000) + 's' : '--') + '</div></div>';
+    html += '<div class="health-item"><div class="health-label">Last Activity</div><div class="health-value">' + timeAgo(sc.lastActivityTime) + '</div></div>';
+    html += '<div class="health-item"><div class="health-label">Authenticated</div><div class="health-value">' + (sc.authenticated != null ? (sc.authenticated ? 'Yes' : 'No') : '--') + '</div></div>';
+    var acctLabel = sc.currentAccount === 'dbcinema' ? 'DB Cinema' : sc.currentAccount === 'leo' ? 'Leo Adams' : (sc.currentAccount || 'None');
+    html += '<div class="health-item"><div class="health-label">Active Account</div><div class="health-value">' + escapeHtml(acctLabel) + '</div></div>';
+    var configuredLabel = (sc.configuredAccounts && sc.configuredAccounts.length > 0) ? sc.configuredAccounts.join(', ') : 'None';
+    html += '<div class="health-item"><div class="health-label">Configured</div><div class="health-value">' + escapeHtml(configuredLabel) + '</div></div>';
+    html += '</div>';
+    document.getElementById('healthBody').innerHTML = html;
+  }
+
+  // ---- AI Chat ----
+  function sendChatMessage() {
+    var chatInput = document.getElementById('chatInput');
+    var chatSendBtn = document.getElementById('chatSendBtn');
+    var chatMessages = document.getElementById('chatMessages');
+    var text = chatInput.value.trim();
+    if (!text) return;
+    chatInput.value = '';
+    appendChatMessage(text, 'user');
+    chatSendBtn.disabled = true; chatSendBtn.textContent = '...';
+    var thinkingEl = appendChatMessage('Thinking...', 'thinking');
+    fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      chatMessages.removeChild(thinkingEl);
+      if (data.error) appendChatMessage(data.error, 'error');
+      else appendChatMessage(data.reply || 'No response', 'assistant');
+    })
+    .catch(function(err) {
+      chatMessages.removeChild(thinkingEl);
+      appendChatMessage('Error: ' + err.message, 'error');
+    })
+    .finally(function() {
+      chatSendBtn.disabled = false; chatSendBtn.textContent = 'Send';
+      chatInput.focus();
+    });
+  }
+
+  function appendChatMessage(text, role) {
+    var chatMessages = document.getElementById('chatMessages');
+    var div = document.createElement('div');
+    div.className = 'chat-msg ' + role;
+    div.textContent = text;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return div;
+  }
+
+  // Chat Enter key handler
+  document.getElementById('chatInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  // Marketing search Enter key handler
+  document.getElementById('marketingSearchInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') createMarketingListing();
+  });
+
+  // ESC key closes modals
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (document.getElementById('insuranceModalOverlay').style.display !== 'none') closeInsuranceModal();
+      else if (document.getElementById('celebrationOverlay').classList.contains('open')) closeCelebration();
+      else if (document.getElementById('returnModalOverlay').classList.contains('open')) closeReturnModal();
+    }
+  });
+
+  function renderOutOfStockStat(data) {
+    var statEl = document.getElementById('statOutOfStock');
+    var statSub = document.getElementById('statOutOfStockSub');
+    if (!data || data.length === 0) {
+      if (statEl) { statEl.textContent = '0'; statEl.className = 'value green'; }
+      if (statSub) statSub.textContent = 'All items available';
+    } else {
+      if (statEl) { statEl.textContent = data.length; statEl.className = 'value red'; }
+      var soonest = data.reduce(function(min, d) { return d.bookedUntil < min ? d.bookedUntil : min; }, data[0].bookedUntil);
+      var soonestDate = new Date(soonest);
+      var soonestStr = soonestDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      if (statSub) statSub.textContent = data.length + ' item' + (data.length > 1 ? 's' : '') + ' fully booked \u00B7 next back ' + soonestStr;
+    }
+    var statExp = document.getElementById('expandOutOfStock');
+    if (statExp) {
+      if (!data || data.length === 0) {
+        statExp.innerHTML = '<div style="font-size:10px;color:#22c55e;">All items available</div>';
+      } else {
+        statExp.innerHTML = data.slice(0, 5).map(function(item) {
+          var returnDate = new Date(item.bookedUntil);
+          var returnStr = returnDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+          return '<div class="stat-rental-row"><div class="stat-rental-info"><div class="stat-rental-name" style="color:#ef4444;">' + escapeHtml(item.item) + '</div><div class="stat-rental-items">Back ' + returnStr + '</div></div></div>';
+        }).join('');
+      }
+    }
+  }
+
+  function renderVacation(blocks) {
+    var el = document.getElementById('statVacation');
+    var sub = document.getElementById('statVacationSub');
+    if (!blocks || blocks.length === 0) {
+      el.textContent = 'None';
+      el.style.color = '#22c55e';
+      sub.textContent = 'No upcoming blocks';
+      return;
+    }
+    var lines = [];
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i];
+      var start = new Date(b.startTime);
+      var dateStr = start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+      if (b.allDay) {
+        lines.push(dateStr + ' (all day)');
+      } else {
+        var startTime = start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        var endStr = '';
+        if (b.endTime) {
+          var end = new Date(b.endTime);
+          endStr = end.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        }
+        lines.push(dateStr + ' ' + startTime + (endStr ? '\u2013' + endStr : '+'));
+      }
+    }
+    el.innerHTML = lines.slice(0, 2).map(function(l) { return '<div>' + l + '</div>'; }).join('');
+    if (blocks.length > 2) sub.textContent = '+' + (blocks.length - 2) + ' more';
+    else sub.textContent = blocks.length + ' block' + (blocks.length > 1 ? 's' : '');
+  }
+
+  function renderSellRecoStat(data) {
+    var el = document.getElementById('statSellReco');
+    var sub = document.getElementById('statSellRecoSub');
+    if (!data || !data.summary) { el.textContent = '--'; sub.textContent = 'No data'; return; }
+    var s = data.summary;
+    el.textContent = s.sellCount > 0 ? s.sellCount : '0';
+    var subParts = [];
+    if (s.considerCount > 0) subParts.push(s.considerCount + ' to consider');
+    if (s.totalPotentialResaleValue > 0) subParts.push('\u00A3' + s.totalPotentialResaleValue.toLocaleString('en-GB', {minimumFractionDigits:0,maximumFractionDigits:0}) + ' resale');
+    sub.textContent = subParts.join(' \u00B7 ') || s.keepCount + ' items \u2014 all good';
+    var exp = document.getElementById('expandSellReco');
+    if (exp && data.recommendations) {
+      var sellItems = data.recommendations.filter(function(r) { return r.sellVerdict === 'sell'; }).slice(0, 3);
+      if (sellItems.length > 0) {
+        exp.innerHTML = sellItems.map(function(r) {
+          return '<div style="font-size:10px;color:#8b8fa3;padding:1px 0;"><span style="color:#ef4444;">' + escapeHtml(r.item) + '</span>' + (r.daysSinceLastRental !== null ? ' \u00B7 idle ' + r.daysSinceLastRental + 'd' : '') + (r.ebayResalePrice ? ' \u00B7 eBay \u00A3' + Math.round(r.ebayResalePrice) : '') + '</div>';
+        }).join('');
+      }
+    }
+  }
+
+  function renderInventoryWorth(data) {
+    var el = document.getElementById('statInventoryWorth');
+    var sub = document.getElementById('statInventoryWorthSub');
+    if (!data || data.totalResaleValue == null) { el.textContent = '--'; sub.textContent = 'No eBay data'; return; }
+    el.textContent = '\u00A3' + data.totalResaleValue.toLocaleString('en-GB');
+    var subParts = [];
+    subParts.push('Cost: \u00A3' + data.totalPurchaseCost.toLocaleString('en-GB'));
+    var glSign = data.gainLoss >= 0 ? '+' : '';
+    var glColor = data.gainLoss >= 0 ? '#22c55e' : '#ef4444';
+    subParts.push('<span style="color:' + glColor + ';">' + glSign + data.gainLossPercent + '%</span>');
+    sub.innerHTML = subParts.join(' \u00B7 ');
+    var exp = document.getElementById('expandInventoryWorth');
+    if (exp && data.items) {
+      var top = data.items.filter(function(i) { return i.totalResale > 0; }).slice(0, 5);
+      if (top.length > 0) {
+        exp.innerHTML = top.map(function(i) {
+          return '<div style="display:flex;justify-content:space-between;font-size:10px;color:#8b8fa3;padding:1px 0;"><span style="color:#c9cde0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;">' + escapeHtml(i.name) + '</span><span style="color:#3b82f6;font-weight:600;">\u00A3' + i.totalResale.toLocaleString('en-GB') + '</span></div>';
+        }).join('');
+      }
+    }
+  }
+
+  function renderMultiYearTax(data) {
+    var el = document.getElementById('statTaxLiability');
+    var sub = document.getElementById('statTaxSub');
+    if (!data || !data.years) { el.textContent = '--'; sub.textContent = ''; return; }
+    var gt = data.grandTotals;
+    el.textContent = '\u00A3' + gt.totalOwed.toLocaleString();
+    sub.innerHTML = '<span style="color:#ef4444;">Tax+penalties</span> \u00B7 4 years';
+    var exp = document.getElementById('expandTax');
+    if (exp && data.years) {
+      exp.innerHTML = data.years.map(function(y) {
+        return '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;"><span style="color:#e4e6eb;">' + y.taxYear + '</span><span style="color:#ef4444;">\u00A3' + y.totalOwed.toLocaleString() + '</span></div>';
+      }).join('');
+    }
+  }
+
   // ---- Loaders ----
 
   function loadMissedRevenue() {
@@ -1023,10 +3298,30 @@
       fetchJSON('/inventory/unavailable').then(renderUnavailable),
       fetchJSON('/bookings/by-stage' + acct).then(renderFunnel),
       fetchJSON('/revenue/top-items?period=' + (document.getElementById('itemPeriod').value || '6m') + '&limit=10' + amp).then(renderTopItems),
+      fetchJSON('/scanner/status').then(renderScanner).catch(function(){}),
+      fetchJSON('/denied-revenue/summary?period=month' + amp).then(renderDeniedStat).catch(function(){}),
+      fetchJSON('/missed-revenue/summary?period=month' + amp).then(renderMissedStat).catch(function(){}),
+      fetchJSON('/revenue/ai-boost?period=month' + amp).then(renderAiBoost).catch(function(){}),
+      fetchJSON('/vacation/upcoming').then(renderVacation).catch(function(){}),
+      fetchJSON('/recommender/sell-items' + (amp ? '?' + amp.substring(1) : '')).then(renderSellRecoStat).catch(function(){}),
+      fetchJSON('/inventory/valuation').then(renderInventoryWorth).catch(function(){}),
+      fetchJSON('/revenue/tax-multi-year' + (amp ? '?' + amp.substring(1) : '')).then(renderMultiYearTax).catch(function(){}),
+      fetchJSON('/health').then(renderHealth).catch(function(){}),
+      fetchJSON('/revenue/top-bundles?period=' + (document.getElementById('bundlePeriod').value || '6m') + '&limit=15' + amp).then(renderTopBundles).catch(function(){}),
+      fetchJSON('/revenue/item-cycle' + acct).then(renderCycleChart).catch(function(){}),
+      fetchJSON('/competitor-intel/insights?budget=' + encodeURIComponent(currentInsightsBudget)).then(renderInsights).catch(function(){}),
+      fetchJSON('/market-releases/insights').then(renderMarketReleases).catch(function(){}),
+      loadReturnHub(),
+      loadSellReco(),
+      loadPriceReco(),
+      loadInsuranceClaims(),
+      loadMarketingListings(),
     ]).then(function() {
       document.getElementById('statusDot').className = 'status-dot healthy';
     });
     loadLifetimeChart();
+    loadCharts();
+    loadCalendar();
   }
 
   // Poll activity every 15s

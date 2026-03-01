@@ -223,5 +223,64 @@ export class RulesService implements OnModuleInit {
         this.logger.log(`Added new rule: [${rule.category}] ${rule.name}`);
       }
     }
+
+    // --- Deactivate rules that are fully covered by prompt components ---
+    // These duplicate content already in communication_style, security_rules, location_rules,
+    // scheduling_rules, delivery_domain, enquiry_handling, pricing_domain.
+    // Saves ~2,000-3,000 tokens from --- BUSINESS RULES --- in every TALK call.
+    const duplicateRules = [
+      // Covered by communication_style prompt component
+      { name: 'DB Cinema Voice', category: 'communication' },
+      { name: 'Leo Adams Voice', category: 'communication' },
+      { name: 'Concise Writing Style', category: 'communication' },
+      { name: 'No Code/Tables in Chat', category: 'communication' },
+      // Covered by security_rules prompt component
+      { name: 'Privacy - Never Disclose', category: 'communication' },
+      { name: 'Account Separation', category: 'communication' },
+      // Covered by location_rules prompt component
+      { name: 'Location Handling', category: 'communication' },
+      { name: 'Travel Distance Discount', category: 'pricing' },
+      { name: 'Travel Discount Proactive', category: 'pricing' },
+      // Covered by security_rules prompt component (disclosure rules)
+      { name: 'No Internal Pricing Disclosure', category: 'disclosure' },
+      { name: 'No Dual-Account Disclosure', category: 'disclosure' },
+      { name: 'No System Architecture Disclosure', category: 'disclosure' },
+      { name: 'No Personal Details Disclosure', category: 'disclosure' },
+      { name: 'Payment Details Restriction', category: 'disclosure' },
+      // Covered by scheduling_rules prompt component
+      { name: 'Working Hours', category: 'policy' },
+      { name: 'Booking Changes', category: 'policy' },
+      { name: 'Listing Components', category: 'policy' },
+      // Covered by delivery_domain prompt component
+      { name: 'Delivery - Only When Asked', category: 'faq' },
+      { name: 'Delivery Mandatory Cases', category: 'faq' },
+      // Covered by enquiry_handling prompt component
+      { name: 'Enquiry vs Request', category: 'communication' },
+      // Covered by pricing_domain prompt component
+      { name: 'Upsell Opportunities', category: 'faq' },
+      // --- Round 2: covered by decision_guidelines (after authority block migration) ---
+      { name: 'Credential Security', category: 'policy' },  // → security_rules DB component
+      { name: 'No Invented Rules', category: 'policy' },    // → decision_guidelines (escalation list)
+      { name: 'Day Before/After Pickup', category: 'policy' }, // → scheduling_rules DB component
+      // --- Round 2: covered by pricing_domain (discount rules now consolidated) ---
+      { name: 'High Value Discount', category: 'pricing' },
+      { name: 'Long Rental Discount', category: 'pricing' },
+      { name: 'One Discount Only', category: 'pricing' },
+      { name: 'No Loyalty Discounts', category: 'pricing' },
+      { name: 'Bundle Recommendation', category: 'pricing' },
+      { name: 'Bundle vs Individual Pricing', category: 'pricing' },
+      // --- Round 2: covered by delivery_domain ---
+      { name: 'Delivery London Only', category: 'faq' },
+    ];
+
+    for (const { name, category } of duplicateRules) {
+      const rule = await this.prisma.rule.findFirst({
+        where: { name, category, is_active: true },
+      });
+      if (rule) {
+        await this.prisma.rule.update({ where: { id: rule.id }, data: { is_active: false } });
+        this.logger.log(`Deactivated duplicate rule: ${name} (covered by prompt component)`);
+      }
+    }
   }
 }

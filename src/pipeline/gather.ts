@@ -53,6 +53,15 @@ export interface GatherServices {
   contentionService?: {
     getActiveContentionsForRental(rentalId: string): Promise<any[]>;
   };
+  renterProfileService?: {
+    getProfileForRental(rentalId: string): Promise<any>;
+    buildCompactCrossRentalSummary(profileId: string, currentRentalId: string): Promise<string | null>;
+    isReturningRenter(renterName: string, currentRentalId: string): Promise<{
+      isReturning: boolean;
+      previousRentalCount: number;
+      profileId?: string;
+    }>;
+  };
   prisma: any;
 }
 
@@ -122,6 +131,11 @@ export async function gatherFacts(
     conversationHistory: { role: 'user' | 'assistant'; content: string }[];
     rental?: any;
     isSimulation: boolean;
+    // Pre-loaded context from pipeline orchestrator (eliminates redundant DB calls)
+    preloadedState?: Record<string, any>;
+    preloadedStage?: string;
+    preloadedConvState?: any; // Full conversation stage state object
+    preloadedExtractedItems?: string[];
   },
 ): Promise<FactPack> {
   const { message, account, conversationHistory, rental } = input;
@@ -132,15 +146,17 @@ export async function gatherFacts(
   // --- Mandatory Facts (always loaded, ~300 tokens) ---
 
   // Resolve items from rental extracteditem records or classification
+  // Use pre-loaded items from pipeline orchestrator when available (saves 1 DB call)
   let resolvedItems = classification.mentionedItems;
-  if (rental) {
+  if (input.preloadedExtractedItems && input.preloadedExtractedItems.length > 0) {
+    resolvedItems = [...new Set([...input.preloadedExtractedItems, ...classification.mentionedItems])];
+  } else if (rental) {
     try {
       const extracted = await services.prisma.extracteditem.findMany({
         where: { rental_id: rental.id },
         select: { item_name: true, source: true },
       });
       if (extracted.length > 0) {
-        // Deduplicate: photo_reference is authoritative over listing_title
         const seen = new Map<string, string>();
         for (const e of extracted) {
           const existing = seen.get(e.item_name);
@@ -168,9 +184,9 @@ export async function gatherFacts(
   }
   const allRelevantItems = [...resolvedItems, ...historyItems];
 
-  // Conversation state from DB
-  let conversationState: Record<string, any> = {};
-  if (rental) {
+  // Conversation state — use pre-loaded from pipeline orchestrator (saves 1 DB call)
+  let conversationState: Record<string, any> = input.preloadedState || {};
+  if (!input.preloadedState && rental) {
     try {
       conversationState = await services.followUpService.getStructuredState(rental.id);
     } catch { /* non-critical */ }
@@ -246,14 +262,21 @@ export async function gatherFacts(
     })(),
   );
 
-  // Inventory context (always needed for accurate item awareness)
-  fetchPromises.push(
-    (async () => {
-      try {
-        facts.inventoryContext = await services.calendarService.getCompactInventoryContext();
-      } catch { /* non-critical */ }
-    })(),
-  );
+  // Inventory context — only when items/pricing/availability are relevant (saves DB call on ~40% of messages)
+  const needsInventory = classification.hasPricingIntent
+    || classification.mentionedItems.length > 0
+    || classification.intent === Intent.AVAILABILITY_CHECK
+    || classification.intent === Intent.EQUIPMENT_QUESTION
+    || classification.intent === Intent.PRICING_INQUIRY;
+  if (needsInventory) {
+    fetchPromises.push(
+      (async () => {
+        try {
+          facts.inventoryContext = await services.calendarService.getCompactInventoryContext();
+        } catch { /* non-critical */ }
+      })(),
+    );
+  }
 
   // Pricing (on-demand)
   if (needsPrice && allRelevantItems.length > 0) {
@@ -405,18 +428,24 @@ export async function gatherFacts(
     );
   }
 
-  // Stage guidance (production only)
+  // Stage guidance (production only) — use pre-loaded convState when available (saves 1 DB call)
   if (rental) {
-    fetchPromises.push(
-      (async () => {
-        try {
-          const convState = await services.conversationStageService.getConversationState(rental.id);
-          if (convState) {
-            facts.stageGuidance = services.conversationStageService.getStagePromptFromState(convState);
-          }
-        } catch { /* non-critical */ }
-      })(),
-    );
+    if (input.preloadedConvState) {
+      facts.stageGuidance = services.conversationStageService.getStagePromptFromState(input.preloadedConvState);
+      facts.conversationStage = input.preloadedConvState.currentStage;
+    } else {
+      fetchPromises.push(
+        (async () => {
+          try {
+            const convState = await services.conversationStageService.getConversationState(rental.id);
+            if (convState) {
+              facts.stageGuidance = services.conversationStageService.getStagePromptFromState(convState);
+              facts.conversationStage = convState.currentStage;
+            }
+          } catch { /* non-critical */ }
+        })(),
+      );
+    }
   }
 
   // Contention urgency context (production only, favored rental)
@@ -467,24 +496,31 @@ export async function gatherFacts(
       })(),
     );
 
-    // Verified listing item context
-    fetchPromises.push(
-      (async () => {
-        try {
-          const extracted = await services.prisma.extracteditem.findMany({
-            where: { rental_id: rental.id },
-            select: { item_name: true },
-          });
-          if (extracted.length > 0) {
-            const names = [...new Set(extracted.map((e: any) => e.item_name))].join(', ');
-            facts.verifiedListingItem = `Actual item(s): ${names}. Ignore SEO keywords in listing title.`;
-          }
-        } catch { /* non-critical */ }
-      })(),
-    );
+    // Verified listing item context — reuse resolvedItems (already fetched above, no extra DB call)
+    if (resolvedItems.length > 0) {
+      facts.verifiedListingItem = `Actual item(s): ${resolvedItems.join(', ')}. Ignore SEO keywords in listing title.`;
+    }
+
+    // Renter profile — cross-rental memory for returning renters
+    if (services.renterProfileService) {
+      fetchPromises.push(
+        (async () => {
+          try {
+            const profile = await services.renterProfileService!.getProfileForRental(rental.id);
+            if (profile) {
+              const compactSummary = await services.renterProfileService!.buildCompactCrossRentalSummary(profile.id, rental.id);
+              if (compactSummary) {
+                facts.renterProfile = compactSummary;
+                facts.welcomeBack = true;
+              }
+            }
+          } catch { /* non-critical */ }
+        })(),
+      );
+    }
   }
 
-  // Conversation history — smart truncation with structured summary
+  // Conversation history — smart truncation with AI summary (preferred) or regex fallback
   if (conversationHistory.length > 0) {
     if (conversationHistory.length <= 10) {
       facts.conversationHistory = conversationHistory;
@@ -492,13 +528,27 @@ export async function gatherFacts(
       const first2 = conversationHistory.slice(0, 2);
       const last8 = conversationHistory.slice(-8);
       const droppedMessages = conversationHistory.slice(2, -8);
-      const structuredSummary = buildStructuredSummary(droppedMessages, allRelevantItems);
+
+      // Prefer AI-built summary from DB (zero extra AI cost, better quality)
+      let summaryText: string | null = null;
+      if (rental) {
+        try {
+          summaryText = await services.memoryService.getCachedSummary(rental.id);
+        } catch { /* non-critical */ }
+      }
+      // Fall back to regex summary if no AI summary available
+      if (!summaryText) {
+        summaryText = buildStructuredSummary(droppedMessages, allRelevantItems);
+      }
+
+      // Fix role alternation: ensure summary doesn't create consecutive same-role turns
+      const summaryRole = last8[0]?.role === 'assistant' ? 'user' as const : 'assistant' as const;
       const summaryMsg = {
-        role: 'assistant' as const,
-        content: structuredSummary,
+        role: summaryRole,
+        content: summaryRole === 'user' ? `[System summary] ${summaryText}` : summaryText,
       };
       facts.conversationHistory = [...first2, summaryMsg, ...last8];
-      facts.conversationSummary = structuredSummary;
+      facts.conversationSummary = summaryText;
     }
   }
 

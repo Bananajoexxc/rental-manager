@@ -64,6 +64,24 @@ export async function generateInnerMonologue(
     ? 'Momentum is DROPPING — address concerns, rebuild confidence.'
     : '';
 
+  // Slim state — only the fields THINK needs (saves ~300-600 tokens per call)
+  const slimState: Record<string, any> = {};
+  if (conversationState.confirmedItems?.length) slimState.confirmed = conversationState.confirmedItems;
+  if (conversationState.agreedPickupTime) slimState.pickup = conversationState.agreedPickupTime;
+  if (conversationState.agreedReturnTime) slimState.return = conversationState.agreedReturnTime;
+  if (conversationState.priceQuoted) slimState.quoted = `£${conversationState.priceQuoted}`;
+  if (conversationState.upsellAttempted) slimState.upsellDone = true;
+  if (conversationState.deliveryDiscussed) slimState.deliveryDone = true;
+  if (conversationState.renterShootType) slimState.shoot = conversationState.renterShootType;
+  if (conversationState.questionsAsked?.length) slimState.asked = conversationState.questionsAsked.slice(-3);
+  if (conversationState.unavailabilityMentioned) slimState.unavailMentioned = true;
+
+  // Correction feedback — inject if previous response was corrected
+  const lastCorrections = conversationState.lastCorrections;
+  const correctionNote = lastCorrections && Array.isArray(lastCorrections) && lastCorrections.length > 0
+    ? `\nWARNING: Your previous response was corrected for: ${lastCorrections.join(', ')}. Avoid these patterns.`
+    : '';
+
   const prompt = `You are the internal reasoning engine for a camera rental business chat agent.
 
 SITUATION:
@@ -71,7 +89,7 @@ SITUATION:
 - Stage: ${rentalStage} | Items: ${resolvedItems.join(', ') || 'unknown'}
 - Their message: "${renterMessage}"
 - Intent: ${classification.intent}
-- State: ${JSON.stringify(conversationState)}
+- State: ${Object.keys(slimState).length > 0 ? JSON.stringify(slimState) : 'fresh conversation'}${correctionNote}
 
 SALES DIRECTIVE for stage "${rentalStage}":
 - Goal: ${stageDirective.goal}
@@ -161,6 +179,39 @@ export function generateQuickMonologue(
         avoid: ['Upselling', 'Asking more questions', 'Being clingy'],
         tone: 'warm and brief',
         salesAction: 'Warm sign-off, leave door open for future rentals',
+      };
+    case 'return_confirmation':
+      return {
+        want: 'Confirming they returned the gear',
+        know: 'They say the gear is back',
+        missing: '',
+        goal: 'Acknowledge return, set expectations for inspection',
+        plan: ['Thank them for returning', 'Explain inspection takes 24-72 hours'],
+        avoid: ['Making promises about deposit/review timing', 'Being cold'],
+        tone: dna.style === 'casual' ? 'warm and appreciative' : 'professional and grateful',
+        salesAction: 'Thank and mention future rentals',
+      };
+    case 'damage_report':
+      return {
+        want: 'Reporting damage to equipment',
+        know: 'Something is damaged',
+        missing: 'Photos, extent of damage, which item',
+        goal: 'Express concern, gather details, reassure',
+        plan: ['Thank them for telling us', 'Ask for photos if not provided', 'Escalate to Daniel'],
+        avoid: ['Blaming the renter', 'Making insurance promises', 'Minimizing damage'],
+        tone: 'calm, empathetic, and professional',
+        salesAction: 'Gather damage info and escalate',
+      };
+    case 'logistics':
+      return {
+        want: 'Logistics coordination',
+        know: 'They want pickup/return info',
+        missing: '',
+        goal: 'Provide clear logistics info',
+        plan: ['Address their logistics question directly', 'Confirm time/location details'],
+        avoid: ['Upselling', 'Adding unnecessary info', 'Repeating known details'],
+        tone: dna.style === 'casual' ? 'quick and helpful' : 'clear and professional',
+        salesAction: 'Confirm logistics details',
       };
     default:
       return {

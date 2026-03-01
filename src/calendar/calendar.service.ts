@@ -1,14 +1,18 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames, isAccessoryItem } from '../utils/item-matcher';
 import { PRICING_CATALOG, getOneDayPrice } from '../data/pricing-catalog';
 import { DELIVERY_SPECS } from '../data/delivery-specs';
+import { DiagnosticService } from '../monitoring/diagnostic.service';
 
 @Injectable()
 export class CalendarService implements OnModuleInit {
   private readonly logger = new Logger(CalendarService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private diagnosticService?: DiagnosticService,
+  ) {}
 
   /**
    * Startup validation: cross-check PRICING_CATALOG and DELIVERY_SPECS against MASTER_INVENTORY.
@@ -60,6 +64,64 @@ export class CalendarService implements OnModuleInit {
       this.logger.error(`Startup validation: ${issues} data mismatch(es) detected — review logs above`);
     } else {
       this.logger.log('Startup validation: all data sources consistent');
+    }
+
+    // One-time cleanup of noisy owner notes from bookings
+    await this.pruneNoisyOwnerNotes();
+  }
+
+  /**
+   * One-time cleanup: remove noisy/non-actionable notes from booking ownerNotes.
+   * Runs on startup, idempotent — only touches bookings that have noisy patterns.
+   */
+  private async pruneNoisyOwnerNotes(): Promise<void> {
+    const NOISE_PATTERNS = [
+      /renter (is )?(arriving|arrived|at|heading|on the way|coming)/i,
+      /pickup (confirmed|location|at |on )/i,
+      /renter (confirmed|acknowledged|agreed to standard)/i,
+      /standard (terms|conditions|pickup|return)/i,
+      /booking (confirmed|created|updated|accepted)/i,
+      /payment (received|confirmed|pending)/i,
+      /rental (starts?|ends?|begins?|finishes?) /i,
+      /will (collect|pick up|return) (at|on|from) /i,
+      /evening pickup agreed/i,
+      /morning (pickup|return)/i,
+    ];
+
+    try {
+      const bookings = await this.prisma.booking.findMany({
+        where: { notes: { not: null } },
+        select: { id: true, notes: true },
+      });
+
+      let pruned = 0;
+      for (const booking of bookings) {
+        let notesObj: any;
+        if (!booking.notes) continue;
+        try { notesObj = JSON.parse(booking.notes); } catch { continue; }
+        if (!notesObj.ownerNotes || !Array.isArray(notesObj.ownerNotes)) continue;
+
+        const original = notesObj.ownerNotes;
+        const cleaned = original.filter((entry: any) => {
+          const text = typeof entry === 'string' ? entry : entry.note || '';
+          return !NOISE_PATTERNS.some(p => p.test(text));
+        });
+
+        if (cleaned.length < original.length) {
+          notesObj.ownerNotes = cleaned;
+          await this.prisma.booking.update({
+            where: { id: booking.id },
+            data: { notes: JSON.stringify(notesObj) },
+          });
+          pruned++;
+        }
+      }
+
+      if (pruned > 0) {
+        this.logger.log(`Pruned noisy owner notes from ${pruned} booking(s)`);
+      }
+    } catch (err) {
+      this.logger.warn(`Owner notes cleanup failed (non-critical): ${err.message}`);
     }
   }
 
@@ -157,7 +219,7 @@ export class CalendarService implements OnModuleInit {
       },
     });
 
-    const bookedQuantity = overlapping.reduce((sum, b) => sum + b.quantity, 0);
+    const bookedQuantity = overlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
 
     return {
       available: bookedQuantity < maxQuantity,
@@ -627,6 +689,22 @@ export class CalendarService implements OnModuleInit {
       updateData.return_method = returnMethod;
     }
 
+    // Default missing dates: when a time is stored but no date was extracted,
+    // default to the booking's contract date. Makes data explicit rather than
+    // relying on dashboard fallback logic (pickupDate || startDate).
+    if (updateData.pickup_time && !updateData.pickup_date && !refBooking.pickup_date) {
+      if (refBooking.start_date) {
+        updateData.pickup_date = refBooking.start_date;
+        this.logger.debug(`updateBookingTimes: defaulted pickup_date to start_date (${refBooking.start_date.toISOString().split('T')[0]}) for rental ${rentalId}`);
+      }
+    }
+    if (updateData.return_time && !updateData.return_date && !refBooking.return_date) {
+      if (refBooking.end_date) {
+        updateData.return_date = refBooking.end_date;
+        this.logger.debug(`updateBookingTimes: defaulted return_date to end_date (${refBooking.end_date.toISOString().split('T')[0]}) for rental ${rentalId}`);
+      }
+    }
+
     if (Object.keys(updateData).length === 0) return null;
 
     const updated = await this.prisma.booking.updateMany({
@@ -793,7 +871,8 @@ export class CalendarService implements OnModuleInit {
     }
 
     // Filter items that are irrelevant to the listing title (e.g., stock photo misidentification)
-    const filteredItems = this.filterByListingRelevance(matchedItems, rental.title || '');
+    // Spread to break reference — filterByListingRelevance may return the same array (for length<=1)
+    const filteredItems = [...this.filterByListingRelevance(matchedItems, rental.title || '')];
     matchedItems.length = 0;
     matchedItems.push(...filteredItems);
 
@@ -1793,16 +1872,19 @@ export class CalendarService implements OnModuleInit {
     if (totalWeight <= 0) return 0;
 
     let updated = 0;
-    for (const iw of itemWeights) {
-      const newRevenue = Math.round((iw.weight * iw.quantity / totalWeight) * newRentalPrice * 100) / 100;
-      await this.prisma.booking.update({
-        where: { id: iw.id },
-        data: { revenue: newRevenue, net_profit: newRevenue },
-      });
-      updated++;
-    }
+    await this.prisma.$transaction(async (tx) => {
+      for (const iw of itemWeights) {
+        const newRevenue = Math.round((iw.weight * iw.quantity / totalWeight) * newRentalPrice * 100) / 100;
+        await tx.booking.update({
+          where: { id: iw.id },
+          data: { revenue: newRevenue, net_profit: newRevenue },
+        });
+        updated++;
+      }
+    });
     if (updated > 0) {
       this.logger.log(`Revenue recomputed for rental ${rentalId}: £${newRentalPrice} across ${updated} booking(s)`);
+      this.diagnosticService?.log('revenue', 'recompute', `Recomputed revenue for ${bookings.length} bookings`, { rentalId, bookingCount: bookings.length }, rentalId);
     }
     return updated;
   }

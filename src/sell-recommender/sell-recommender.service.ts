@@ -236,9 +236,10 @@ export class SellRecommenderService {
   }
 
   /**
-   * Quarterly cron (1st of Jan/Apr/Jul/Oct at 5 AM) — refresh eBay sold prices.
+   * Quarterly cron (1st of Jan/Apr/Jul/Oct at 8 AM) — refresh eBay sold prices.
+   * Moved from 5am to avoid quiet hours (2-7 AM).
    */
-  @Cron('0 5 1 1,4,7,10 *')
+  @Cron('0 8 1 1,4,7,10 *')
   async quarterlyEbayScrape(): Promise<void> {
     this.logger.log('=== Quarterly eBay price scrape starting ===');
     try {

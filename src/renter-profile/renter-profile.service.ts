@@ -654,5 +654,168 @@ export class RenterProfileService {
     });
 
     this.logger.log(`Snapshotted agreements for profile ${profileId}: ${snapshot.substring(0, 100)}...`);
+
+    // Persist renter preferences for cross-rental memory
+    try {
+      const currentProfile = await this.prisma.renter_profile.findUnique({
+        where: { id: profileId },
+        select: { preferences: true },
+      });
+      const existingPrefs = (currentProfile?.preferences as any) || {};
+
+      // Get conversation state for RenterDNA + negotiation data
+      const followUpState = await this.prisma.follow_up_state.findUnique({
+        where: { rental_id: rentalId },
+        select: { structured_state: true },
+      });
+      const ss = (followUpState?.structured_state as any) || {};
+
+      const updatedPrefs = { ...existingPrefs };
+
+      // Communication style (RenterDNA)
+      if (ss.renterDNA) {
+        updatedPrefs.communication_style = ss.renterDNA;
+      }
+
+      // Pickup time preference
+      if (ss.agreedPickupTime) {
+        updatedPrefs.preferred_pickup_time = ss.agreedPickupTime;
+      }
+
+      // Shoot types (accumulate, deduplicate)
+      if (ss.renterShootType) {
+        const shootTypes = new Set<string>(existingPrefs.shoot_types || []);
+        shootTypes.add(ss.renterShootType);
+        updatedPrefs.shoot_types = [...shootTypes];
+      }
+
+      // Price sensitivity (from negotiation state)
+      const objections = ss.priceObjectionCount || 0;
+      if (objections >= 3) updatedPrefs.price_sensitivity = 'high';
+      else if (objections >= 1) updatedPrefs.price_sensitivity = 'medium';
+      else updatedPrefs.price_sensitivity = 'low';
+
+      // Preferred items (top items by frequency)
+      const allItems = [...(existingPrefs.preferred_items || []), ...items];
+      const freq = new Map<string, number>();
+      for (const item of allItems) {
+        freq.set(item, (freq.get(item) || 0) + 1);
+      }
+      updatedPrefs.preferred_items = [...freq.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([item]) => item);
+
+      await this.prisma.renter_profile.update({
+        where: { id: profileId },
+        data: { preferences: updatedPrefs },
+      });
+
+      this.logger.log(`Persisted preferences for profile ${profileId}: pickup=${updatedPrefs.preferred_pickup_time}, items=${updatedPrefs.preferred_items?.join(',')}, sensitivity=${updatedPrefs.price_sensitivity}`);
+    } catch (prefErr) {
+      this.logger.debug(`Preference persistence failed: ${(prefErr as Error).message}`);
+    }
+  }
+
+  /**
+   * Build a compact cross-rental summary for pipeline injection.
+   * Pulls from: renter_profile preferences, rental history, conversation_archive insights.
+   * Target: <150 tokens.
+   */
+  async buildCompactCrossRentalSummary(
+    profileId: string,
+    currentRentalId: string,
+  ): Promise<string | null> {
+    const profile = await this.prisma.renter_profile.findUnique({
+      where: { id: profileId },
+      include: {
+        renter_links: {
+          include: {
+            rental: {
+              select: {
+                id: true, title: true, status: true,
+                start_date: true, end_date: true,
+                rental_price: true, account: true,
+              },
+            },
+          },
+          orderBy: { created_at: 'desc' },
+          take: 6,
+        },
+      },
+    });
+
+    if (!profile) return null;
+
+    // Filter to completed rentals (not the current one)
+    const completedRentals = profile.renter_links.filter(
+      (link) =>
+        link.rental_id !== currentRentalId &&
+        link.rental &&
+        ['completed', 'obsolete'].includes((link.rental.status || '').toLowerCase()),
+    );
+
+    if (completedRentals.length === 0) return null;
+
+    const parts: string[] = [];
+    const totalRentals = completedRentals.length;
+    const loyalty = this.getLoyaltyTier(profile.total_rentals);
+
+    parts.push(
+      `RETURNING RENTER (${this.ordinal(totalRentals + 1)} rental` +
+      (loyalty ? `, ${loyalty.tier} tier` : '') + '):',
+    );
+
+    // Preferences summary
+    const prefs = profile.preferences as any;
+    if (prefs) {
+      const prefParts: string[] = [];
+      if (prefs.preferred_pickup_time) prefParts.push(`prefers ${prefs.preferred_pickup_time} pickups`);
+      if (prefs.preferred_items?.length) prefParts.push(`usually rents ${prefs.preferred_items.slice(0, 3).join(', ')}`);
+      if (prefs.shoot_types?.length) prefParts.push(`shoots: ${prefs.shoot_types.join(', ')}`);
+      if (prefs.price_sensitivity === 'high') prefParts.push('price-sensitive');
+      if (prefParts.length > 0) parts.push(prefParts.join('. ') + '.');
+    }
+
+    // Last rental summary
+    const lastRental = completedRentals[0]?.rental;
+    if (lastRental) {
+      const price = lastRental.rental_price ? `£${lastRental.rental_price}` : '';
+      parts.push(`Last rental: ${lastRental.title}${price ? `, ${price}` : ''}.`);
+    }
+
+    // Cross-rental conversation insights from conversation_archive
+    try {
+      const archives = await this.prisma.conversation_archive.findMany({
+        where: {
+          rental_id: {
+            in: completedRentals.map((l) => l.rental_id),
+          },
+        },
+        select: {
+          pricing_sensitivity: true,
+          final_outcome: true,
+        },
+        take: 3,
+        orderBy: { archived_at: 'desc' },
+      });
+
+      if (archives.length > 0) {
+        const issues = archives.filter((a) => a.final_outcome === 'lost');
+        if (issues.length > 0) {
+          parts.push('Previous issues: Lost deal(s) in history.');
+        } else {
+          parts.push('Previous issues: None.');
+        }
+      }
+    } catch { /* conversation_archive may not have entries yet */ }
+
+    return parts.join(' ');
+  }
+
+  private ordinal(n: number): string {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
   }
 }

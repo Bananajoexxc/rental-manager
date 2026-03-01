@@ -433,7 +433,7 @@ export class VerificationService {
     // Extract renter notes from chat if times are confirmed
     if (booking?.pickup_time && booking?.return_time) {
       try {
-        const chatMessages = await this.hyggloService.readMessages(orderId);
+        const chatMessages = await this.hyggloService.readMessages(orderId, account);
         const chatText = chatMessages.map(m => `${m.sender}: ${m.content}`).join('\n');
         const renterNotes = this.extractRenterNotesFromChat(chatText);
         if (renterNotes && profileId) {

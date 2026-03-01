@@ -47,14 +47,24 @@ export class AutolearnService {
 
   // --- Cron schedules ---
 
-  @Cron('0 * * * *')
+  @Cron('0 */4 * * *')
   async runHourlyCycle(): Promise<void> {
     const enabled = await this.configManager.getBool('autolearn.enabled');
     const paused = await this.configManager.getBool('autolearn.paused');
     if (!enabled || paused || this.isQuietHours()) return;
 
+    // Gate: skip cycle if insufficient new data since last run (4 hours)
+    const sinceLastCycle = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    const newDecisionCount = await this.prisma.ai_decision.count({
+      where: { created_at: { gte: sinceLastCycle } },
+    });
+    if (newDecisionCount < 3) {
+      this.logger.log(`Skipping autolearn cycle — insufficient new data (${newDecisionCount} decisions in last 4h)`);
+      return;
+    }
+
     const cycleId = randomUUID();
-    this.logger.log(`Starting hourly cycle ${cycleId}`);
+    this.logger.log(`Starting 4-hourly cycle ${cycleId} (${newDecisionCount} new decisions)`);
 
     await this.prisma.autolearn_log.create({
       data: { event_type: LogEventType.CYCLE_START, details: { cycleId } },
@@ -73,7 +83,7 @@ export class AutolearnService {
         return;
       }
 
-      const since = new Date(Date.now() - 60 * 60 * 1000); // Last hour
+      const since = new Date(Date.now() - 4 * 60 * 60 * 1000); // Last 4 hours
 
       // Run all analyzers + correction detector in parallel
       const [violations, quality, conversion, tokens, corrections] = await Promise.all([
@@ -257,7 +267,7 @@ export class AutolearnService {
     }
   }
 
-  @Cron('*/5 * * * *')
+  @Cron('*/30 * * * *')
   async applyApprovedProposals(): Promise<void> {
     const enabled = await this.configManager.getBool('autolearn.enabled');
     if (!enabled) return;
@@ -286,7 +296,7 @@ export class AutolearnService {
     });
   }
 
-  @Cron('*/15 * * * *')
+  @Cron('0 * * * *')
   async monitorPostChangeQuality(): Promise<void> {
     const enabled = await this.configManager.getBool('autolearn.enabled');
     if (!enabled) return;
@@ -385,7 +395,7 @@ export class AutolearnService {
     });
   }
 
-  @Cron('0 3 * * 1')
+  @Cron('0 8 * * 1')
   async weeklyDspyOptimization(): Promise<void> {
     if (!this.dspyService.isEnabled()) return;
 
@@ -416,7 +426,7 @@ export class AutolearnService {
     await this.rollbackManager.cleanupSnapshots();
   }
 
-  @Cron('*/10 * * * *')
+  @Cron('0 */2 * * *')
   async processReworkPipeline(): Promise<void> {
     const enabled = await this.configManager.getBool('autolearn.enabled');
     const paused = await this.configManager.getBool('autolearn.paused');

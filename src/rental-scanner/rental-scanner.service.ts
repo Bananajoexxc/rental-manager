@@ -12,6 +12,8 @@ import { FollowUpService } from '../follow-up/follow-up.service';
 import { VerificationService } from '../verification/verification.service';
 import { TitleParserService } from '../revenue/title-parser.service';
 import { ContentionService } from '../contention/contention.service';
+import { DiagnosticService } from '../monitoring/diagnostic.service';
+import { findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
 
 @Injectable()
 export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
@@ -23,6 +25,12 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
   private scanCount = 0;
   private shuttingDown = false;
   private failedBackfillRentals = new Set<string>(); // rental IDs where backfill returned 0 (unmatchable items) — also persisted via ai_decision
+
+  // Scan data cache — shared with other services to eliminate redundant API calls
+  private messageCache = new Map<string, { messages: { sender: string; content: string; timestamp: string; imageUrls?: string[] }[]; fetchedAt: number; messageCount: number }>();
+  private lastScanRentals: any[] = [];
+  private recentlyCompletedRentals: any[] = [];
+  private static readonly MESSAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
   private readonly INITIAL_SCAN_INTERVAL: number;
   private readonly REDUCED_SCAN_INTERVAL: number;
@@ -42,6 +50,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     private verificationService: VerificationService,
     @Optional() @Inject(forwardRef(() => TitleParserService)) private titleParserService: TitleParserService,
     private contentionService: ContentionService,
+    @Optional() private diagnosticService?: DiagnosticService,
   ) {
     // Load configuration from environment variables
     this.INITIAL_SCAN_INTERVAL = this.parseIntOrDefault(process.env.INITIAL_SCAN_INTERVAL_MS, 60000);
@@ -153,6 +162,22 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     const scanStartTime = Date.now();
 
     try {
+      // 90s timeout prevents scanner from hanging indefinitely on Hygglo API or processing
+      await Promise.race([
+        this.executeScanBody(scanStartTime),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Scan timeout (90s)')), 90_000)),
+      ]);
+    } catch (error) {
+      this.logger.error('Error during scan: ' + error.message);
+      this.loggingService.error('Scan failed', { error: error.message, stack: error?.stack });
+
+    } finally {
+      this.isScanning = false;
+      this.scheduleNextScan();
+    }
+  }
+
+  private async executeScanBody(scanStartTime: number) {
       this.logger.log('🔍 ========== Starting Rental Scan ==========');
       this.loggingService.info('Scan started');
 
@@ -178,6 +203,18 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(`📊 Total rentals found: ${dedupedRentals.length}`);
+
+      // Cache scan results + messages from _detail for other services to consume
+      this.lastScanRentals = dedupedRentals;
+      const now = Date.now();
+      for (const rental of dedupedRentals) {
+        if (rental._detail?.activities) {
+          try {
+            const messages = this.hyggloService.extractChatMessages(rental._detail, rental.account || 'dbcinema', true, 'scanner-cache');
+            this.messageCache.set(rental.listingId, { messages, fetchedAt: now, messageCount: messages.length });
+          } catch { /* non-critical — message extraction from cache */ }
+        }
+      }
 
       // Process each rental and collect new ones for grouping
       const newRentalResults: Array<{ savedRental: any; rawRental: any }> = [];
@@ -251,7 +288,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       // IMPORTANT: Exclude messages from rentals that were just processed as new (prevents duplicate replies)
       if (this.autonomousService) {
         try {
-          const messages = await this.hyggloService.checkNewMessages();
+          const messages = await this.hyggloService.checkNewMessages(dedupedRentals);
           let newMessages = messages.filter((m) => m.isNew);
           if (newRentalListingIds.size > 0 && newMessages.length > 0) {
             const before = newMessages.length;
@@ -263,6 +300,22 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           if (newMessages.length > 0) {
             this.logger.log(`New messages found: ${newMessages.length}`);
             await this.autonomousService.onNewMessages(newMessages);
+
+            // Event-driven time extraction: if any new renter message looks like it contains times,
+            // trigger extraction immediately (vs waiting for the 30-min cron)
+            const TIME_REGEX = /\d{1,2}\s*(am|pm|:\d{2})|\bmorning\b|\bevening\b|\bafternoon\b/i;
+            for (const msg of newMessages) {
+              if (TIME_REGEX.test(msg.content)) {
+                try {
+                  const rental = await this.prisma.rental.findUnique({ where: { listing_id: msg.rentalId } });
+                  if (rental && ['upcoming', 'ongoing'].includes(rental.status)) {
+                    this.autonomousService.extractAndUpdateTimes(rental, msg as any).catch(err => {
+                      this.logger.debug(`Event-driven time extraction failed for ${msg.rentalId}: ${err.message}`);
+                    });
+                  }
+                } catch { /* non-critical */ }
+              }
+            }
           }
         } catch (msgError) {
           this.logger.warn(`Message check failed: ${msgError.message}`);
@@ -289,6 +342,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         const toComplete = missingOngoing.filter(r => !scannedListingIds.has(r.listing_id));
 
         for (const rental of toComplete) {
+          if (this.recentlyCompletedRentals.length >= 100) {
+            this.recentlyCompletedRentals.splice(0, this.recentlyCompletedRentals.length - 50);
+          }
+          this.recentlyCompletedRentals.push(rental);
           this.logger.log(`✅ Auto-completing rental (returned on Hygglo): ${rental.title} [${rental.listing_id}]`);
           await this.prisma.rental.update({
             where: { id: rental.id },
@@ -310,19 +367,36 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Auto-complete check failed: ${err.message}`);
       }
 
+      // Stale pending_review cleanup — every 10th scan (~10 min)
+      if (this.scanCount % 10 === 0) {
+        try {
+          const staleBookings: { id: string }[] = await this.prisma.$queryRaw`
+            SELECT b.id FROM booking b
+            JOIN rental r ON b.rental_id = r.id
+            WHERE b.status = 'pending_review'
+              AND (r.status IN ('cancelled', 'obsolete')
+                OR r.end_date < NOW() - INTERVAL '7 days')
+          `;
+          if (staleBookings.length > 0) {
+            const ids = staleBookings.map(b => b.id);
+            await this.prisma.booking.updateMany({
+              where: { id: { in: ids }, status: 'pending_review' },
+              data: { status: 'cancelled' },
+            });
+            this.logger.log(`🧹 Cleaned ${staleBookings.length} stale pending_review bookings`);
+            this.diagnosticService?.log('scan_cycle', 'stale_cleanup', `Cleaned ${staleBookings.length} stale pending_review bookings`, { count: staleBookings.length, ids: staleBookings.map(b => b.id).slice(0, 10) });
+          }
+        } catch (err) {
+          this.logger.warn(`Stale booking cleanup failed: ${err.message}`);
+        }
+      }
+
       const scanDuration = Date.now() - scanStartTime;
       this.scanCount++;
       this.logger.log(`Scan #${this.scanCount} completed in ${scanDuration}ms`);
       this.loggingService.info('Scan completed', { duration: scanDuration, newRentals: newRentalsCount });
+      this.diagnosticService?.log('scan_cycle', 'scan_complete', `Scan completed in ${scanDuration}ms`, { duration: scanDuration, total: allRentals?.length || 0 });
 
-    } catch (error) {
-      this.logger.error('Error during scan: ' + error.message);
-      this.loggingService.error('Scan failed', { error: error.message, stack: error.stack });
-
-    } finally {
-      this.isScanning = false;
-      this.scheduleNextScan();
-    }
   }
 
   private async processRental(rental: any): Promise<{ isNew: boolean; savedRental?: any; rawRental?: any }> {
@@ -411,11 +485,15 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
               where: {
                 rental_id: existingRental.id,
                 status: { in: ['confirmed', 'pending_review'] },
-                // Only cascade if return_date matches old end_date (wasn't manually adjusted)
-                ...(dateUpdate.return_date ? { OR: [
-                  { return_date: existingRental.end_date },
-                  { return_date: null },
-                ] } : {}),
+                // Only cascade if return_date is on the same DAY as old end_date (wasn't manually adjusted to a different day)
+                ...(dateUpdate.return_date && existingRental.end_date ? (() => {
+                  const dayStart = new Date(existingRental.end_date); dayStart.setHours(0, 0, 0, 0);
+                  const dayEnd = new Date(existingRental.end_date); dayEnd.setHours(23, 59, 59, 999);
+                  return { OR: [
+                    { return_date: { gte: dayStart, lte: dayEnd } },
+                    { return_date: null },
+                  ] };
+                })() : {}),
               },
               data: dateUpdate,
             });
@@ -514,17 +592,6 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
                   mapsLink = '\nGoogle Maps: https://maps.app.goo.gl/ry8ea4tySBoah7d7A';
                 }
 
-                const infoMessage =
-                  `Your booking is confirmed! Here are the details:\n` +
-                  `\nItems: ${items}${dateRange}` +
-                  `\nPickup address: ${pickupAddress}${mapsLink}` +
-                  `\nOpening times: 10am–12pm & 7–9pm` +
-                  `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
-                  `\nDelivery available (separate charge) — let us know if needed.`;
-
-                await this.hyggloService.sendMessage(rental.listingId, infoMessage);
-                await this.memoryService.storeConversation(`rental:${existingRental.id}`, 'assistant', infoMessage, { model: 'system' });
-
                 // Check if times already exist
                 const bookings = await this.prisma.booking.findMany({
                   where: { rental_id: existingRental.id, status: 'confirmed' },
@@ -532,20 +599,31 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
                 });
                 const hasAllTimes = bookings.length > 0 && bookings[0].pickup_time && bookings[0].return_time;
 
-                if (hasAllTimes) {
-                  await this.prisma.follow_up_state.update({
-                    where: { id: followUpState.id },
-                    data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'confirmed' },
-                  });
-                } else {
-                  // Send time request as separate message so renter reads and replies to it
-                  const timeRequest = `One last thing — what are your exact pickup and return times? (Please include AM or PM)`;
-                  await this.hyggloService.sendMessage(rental.listingId, timeRequest);
-                  await this.memoryService.storeConversation(`rental:${existingRental.id}`, 'assistant', timeRequest, { model: 'system' });
-                  await this.prisma.follow_up_state.update({
-                    where: { id: followUpState.id },
-                    data: { time_request_sent: true, time_request_sent_at: new Date(), times_status: 'none' },
-                  });
+                // Merge confirmation + time request into single message
+                let infoMessage =
+                  `Your booking is confirmed! Here are the details:\n` +
+                  `\nItems: ${items}${dateRange}` +
+                  `\nPickup address: ${pickupAddress}${mapsLink}` +
+                  `\nOpening times: 10am–12pm & 7–9pm` +
+                  `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
+                  `\nDelivery available (separate charge) — let us know if needed.`;
+
+                if (!hasAllTimes) {
+                  infoMessage += `\n\nOne last thing — what are your exact pickup and return times? (Please include AM or PM)`;
+                }
+
+                await this.hyggloService.sendMessage(rental.listingId, infoMessage);
+                await this.memoryService.storeConversation(`rental:${existingRental.id}`, 'assistant', infoMessage, { model: 'system' });
+
+                await this.prisma.follow_up_state.update({
+                  where: { id: followUpState.id },
+                  data: {
+                    time_request_sent: true,
+                    time_request_sent_at: new Date(),
+                    times_status: hasAllTimes ? 'confirmed' : 'none',
+                  },
+                });
+                if (!hasAllTimes) {
                   this.logger.log(`Auto-sent confirmation info + time request for ${updatedRental.title}`);
                 }
               }
@@ -591,39 +669,41 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
                 const renter = rental.renterInfo || updatedRental.renter_info || 'Renter';
                 const items = updatedRental.title || rental.title || 'gear';
 
-                // Check idempotency — don't send twice
-                const alreadyEscalated = await this.prisma.ai_decision.findFirst({
-                  where: {
-                    rental_id: existingRental.id,
-                    decision_type: 'delivery_escalation_sent',
-                  },
-                });
-
-                if (!alreadyEscalated) {
-                  await this.telegramService.sendProactiveMessage(
-                    `📦 Delivery booking needed!\n` +
-                    `${renter} — ${items}\n` +
-                    `Postcode: ${postcode}\n` +
-                    `Estimated cost: ${costEstimate}\n` +
-                    `Please verify and confirm actual delivery cost with the renter.`,
-                    'Markdown',
-                    { force: true },
-                  );
-
-                  await this.prisma.ai_decision.create({
-                    data: {
+                // Idempotent delivery escalation — transaction prevents race condition duplicates
+                await this.prisma.$transaction(async (tx) => {
+                  const alreadyEscalated = await tx.ai_decision.findFirst({
+                    where: {
                       rental_id: existingRental.id,
                       decision_type: 'delivery_escalation_sent',
-                      input_summary: `Delivery escalation: ${postcode}, est ${costEstimate}`,
-                      output_summary: `Telegram notification sent for delivery verification`,
-                      confidence: 1.0,
-                      action_taken: 'delivery_escalation_sent',
-                      notified: true,
                     },
                   });
 
-                  this.logger.log(`Delivery escalation sent for ${items} (${postcode}, ${costEstimate})`);
-                }
+                  if (!alreadyEscalated) {
+                    await this.telegramService.sendProactiveMessage(
+                      `📦 Delivery booking needed!\n` +
+                      `${renter} — ${items}\n` +
+                      `Postcode: ${postcode}\n` +
+                      `Estimated cost: ${costEstimate}\n` +
+                      `Please verify and confirm actual delivery cost with the renter.`,
+                      'Markdown',
+                      { force: true },
+                    );
+
+                    await tx.ai_decision.create({
+                      data: {
+                        rental_id: existingRental.id,
+                        decision_type: 'delivery_escalation_sent',
+                        input_summary: `Delivery escalation: ${postcode}, est ${costEstimate}`,
+                        output_summary: `Telegram notification sent for delivery verification`,
+                        confidence: 1.0,
+                        action_taken: 'delivery_escalation_sent',
+                        notified: true,
+                      },
+                    });
+
+                    this.logger.log(`Delivery escalation sent for ${items} (${postcode}, ${costEstimate})`);
+                  }
+                });
               }
             } catch (delErr) {
               this.logger.warn(`Delivery escalation check failed: ${delErr.message}`);
@@ -650,13 +730,24 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review'] } },
         });
 
+        // Check if this rental was previously unmatchable but now has valid parsed_items
+        const wasUnmatchable = this.failedBackfillRentals.has(existingRental.id);
+        const validParsedItems = this.extractValidItemsFromParsedItems(updatedRental.parsed_items);
+        const hasParsedItemsForRetry = wasUnmatchable && validParsedItems.length > 0;
+
         if (hasBookings === 0 && updatedRental.start_date && updatedRental.end_date
-            && !this.failedBackfillRentals.has(existingRental.id)) {
+            && (!wasUnmatchable || hasParsedItemsForRetry)) {
           try {
-            // Get item names from _detail or use title
-            const itemNames = this.extractItemNamesFromDetail(rental._detail, rental.title);
+            // Prefer parsed_items (AI-parsed from title + photos, persisted in DB)
+            // Fall back to _detail extraction (transient Hygglo API data)
+            let itemNames: string[];
+            if (validParsedItems.length > 0) {
+              itemNames = validParsedItems;
+            } else {
+              itemNames = this.extractItemNamesFromDetail(rental._detail, rental.title);
+            }
+
             const ownerEarnings = rental._detail?.price?.ownerEarnings;
-            // Use owner earnings as the revenue (what the owner actually receives)
             const rentalForBooking = {
               ...updatedRental,
               rental_price: ownerEarnings ?? updatedRental.rental_price,
@@ -668,22 +759,33 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             );
 
             if (createdBookings.length > 0) {
-              this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}`);
+              this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}${hasParsedItemsForRetry ? ' [RECOVERED from unmatchable via parsed_items]' : ''}`);
+
+              // If this was a retry after unmatchable, clean up the failure markers
+              if (hasParsedItemsForRetry) {
+                this.failedBackfillRentals.delete(existingRental.id);
+                await this.prisma.ai_decision.deleteMany({
+                  where: { rental_id: existingRental.id, decision_type: 'backfill_unmatchable' },
+                }).catch(() => {});
+                this.logger.log(`🔓 Cleared unmatchable flag for rental ${rental.title} (parsed_items matched inventory)`);
+              }
             } else {
               // No bookings created — items don't match inventory. Stop retrying.
               this.failedBackfillRentals.add(existingRental.id);
-              // Persist to DB so it survives restarts
-              await this.prisma.ai_decision.create({
-                data: {
-                  rental_id: existingRental.id,
-                  decision_type: 'backfill_unmatchable',
-                  input_summary: `Backfill failed: "${rental.title}"`,
-                  output_summary: 'Items do not match inventory — permanently skipped',
-                  confidence: 1,
-                  action_taken: 'marked_unmatchable',
-                  notified: false,
-                },
-              }).catch(() => {}); // non-critical
+              // Only persist if not already persisted (avoid duplicate records)
+              if (!hasParsedItemsForRetry) {
+                await this.prisma.ai_decision.create({
+                  data: {
+                    rental_id: existingRental.id,
+                    decision_type: 'backfill_unmatchable',
+                    input_summary: `Backfill failed: "${rental.title}"`,
+                    output_summary: 'Items do not match inventory — permanently skipped',
+                    confidence: 1,
+                    action_taken: 'marked_unmatchable',
+                    notified: false,
+                  },
+                }).catch(() => {}); // non-critical
+              }
               this.logger.warn(`Backfill produced 0 bookings for "${rental.title}" — marked as unmatchable, won't retry`);
             }
           } catch (err) {
@@ -722,6 +824,33 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
                   promoted++;
                 }
               }
+              // Force-promote: pending bookings >24h on accepted rental (even if some already confirmed)
+              if (pendingBookings.length > 0) {
+                const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+                const oldPending = pendingBookings.filter(
+                  pb => (Date.now() - new Date(pb.updated_at).getTime()) >= TWENTY_FOUR_HOURS_MS,
+                );
+
+                if (oldPending.length > 0) {
+                  await this.prisma.booking.updateMany({
+                    where: { id: { in: oldPending.map(pb => pb.id) } },
+                    data: { status: 'confirmed' },
+                  });
+                  promoted += oldPending.length;
+                  this.logger.warn(`⚠️ Force-promoted ${oldPending.length} pending bookings (>24h) for: ${rental.title}`);
+                  this.diagnosticService?.log('scan_cycle', 'force_promote', `Force-promoted ${oldPending.length} bookings for ${rental.title}`, { rental: rental.title, count: oldPending.length, items: oldPending.map(pb => pb.item_name) }, rental.id);
+
+                  try {
+                    await this.telegramService?.sendProactiveMessage?.(
+                      `⚠️ *Force-promoted* — ${rental.title}\n` +
+                      `${oldPending.length} booking(s) pending >24h.\n` +
+                      `Items: ${oldPending.map(pb => pb.item_name).join(', ')}\n` +
+                      `Check for overbooking.`,
+                    );
+                  } catch { /* best-effort */ }
+                }
+              }
+
               if (promoted > 0) {
                 this.logger.log(`📅 Auto-promoted ${promoted} pending bookings for accepted rental: ${rental.title}`);
               }
@@ -1044,6 +1173,28 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     return detail.items
       .filter((item: any) => item.name && item.type === 'PRODUCT')
       .map((item: any) => item.name.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+  }
+
+  /**
+   * Extract validated item names from rental's parsed_items field.
+   * Returns only items that match MASTER_INVENTORY (prevents false retries).
+   * parsed_items structure: { item: string; qty: number }[]
+   */
+  private extractValidItemsFromParsedItems(parsedItems: any): string[] {
+    if (!parsedItems || !Array.isArray(parsedItems)) return [];
+    const inventoryNames = getInventoryItemNames();
+    const items: string[] = [];
+    for (const pi of parsedItems) {
+      const name = pi.item || pi.name;
+      if (!name) continue;
+      const matched = findBestMatch(name, inventoryNames);
+      if (matched) {
+        for (let i = 0; i < (pi.qty || 1); i++) {
+          items.push(matched);
+        }
+      }
+    }
+    return items;
   }
 
   /**
@@ -1430,6 +1581,37 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         `Closed Leo "${leoRental.title}" → keeping DB Cinema "${dbCinemaRental.title}"`,
       );
     } catch { /* non-critical */ }
+  }
+
+  // --- Public scan data accessors (for other services to consume cached scan data) ---
+
+  /**
+   * Get cached messages for a listing from the last scan.
+   * Returns null if no cache or cache is stale (> 10 min).
+   */
+  getCachedMessages(listingId: string): { sender: string; content: string; timestamp: string; imageUrls?: string[] }[] | null {
+    const cached = this.messageCache.get(listingId);
+    if (!cached) return null;
+    if (Date.now() - cached.fetchedAt > RentalScannerService.MESSAGE_CACHE_TTL_MS) {
+      this.messageCache.delete(listingId);
+      return null;
+    }
+    return cached.messages;
+  }
+
+  /** Get the last successful scan's rental list (for other services to check status). */
+  getLastScanResults(): any[] {
+    return this.lastScanRentals;
+  }
+
+  /**
+   * Get rentals that were auto-completed since last check.
+   * Drains the list (returns and clears).
+   */
+  getRecentlyCompleted(): any[] {
+    const completed = [...this.recentlyCompletedRentals];
+    this.recentlyCompletedRentals = [];
+    return completed;
   }
 
   getStatus() {

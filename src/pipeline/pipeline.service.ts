@@ -29,8 +29,9 @@ import { DemandService } from '../demand/demand.service';
 import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
 import { ContentionService } from '../contention/contention.service';
+import { RenterProfileService } from '../renter-profile/renter-profile.service';
 
-import { PipelineInput, PipelineResult, InnerMonologue, RenterDNA, DEFAULT_RENTER_DNA } from './types';
+import { PipelineInput, PipelineResult, InnerMonologue, RenterDNA, DEFAULT_RENTER_DNA, Intent } from './types';
 import { classifyMessage, profileRenter, shouldSuppressUpsell } from './classify';
 import { generateInnerMonologue, generateQuickMonologue } from './think';
 import { gatherFacts, GatherServices } from './gather';
@@ -39,6 +40,7 @@ import { verifyResponse, buildCorrectionPrompt } from './verify';
 import { filterResponse } from './filter';
 import { enforceContract, surgicalContractFix } from './contract';
 import { verifyGrounding } from './ground';
+import { DiagnosticService } from '../monitoring/diagnostic.service';
 
 @Injectable()
 export class PipelineService {
@@ -56,6 +58,8 @@ export class PipelineService {
     private conversationStageService: ConversationStageService,
     private followUpService: FollowUpService,
     @Optional() private contentionService?: ContentionService,
+    @Optional() private renterProfileService?: RenterProfileService,
+    @Optional() private diagnosticService?: DiagnosticService,
   ) {}
 
   /**
@@ -64,26 +68,37 @@ export class PipelineService {
   async process(input: PipelineInput): Promise<PipelineResult> {
     const startTime = Date.now();
 
-    // --- Layer 1: CLASSIFY ---
-    // Recover existing RenterDNA from conversation state (if available)
+    // --- Pre-load shared context (single load, passed through all layers) ---
+    // Eliminates 5 redundant DB calls per message.
+    let preConversationState: Record<string, any> = {};
+    let preRentalStage = 'inquiry';
+    let preConvState: any = null; // Full conversation stage state (for stage guidance)
+    let preExtractedItems: string[] = [];
     let existingDNA: RenterDNA | undefined;
     if (input.rental) {
       try {
-        const state = await this.followUpService.getStructuredState(input.rental.id) as any;
-        if (state?.renterDNA) existingDNA = state.renterDNA as RenterDNA;
-      } catch { /* non-critical */ }
-    }
-
-    // Pre-fetch conversation state + stage for classify (needed for upsell logic)
-    let preConversationState: Record<string, any> = {};
-    let preRentalStage = 'inquiry';
-    if (input.rental) {
-      try {
         preConversationState = await this.followUpService.getStructuredState(input.rental.id);
+        if ((preConversationState as any)?.renterDNA) existingDNA = (preConversationState as any).renterDNA as RenterDNA;
       } catch { /* non-critical */ }
       try {
-        const convState = await this.conversationStageService.getConversationState(input.rental.id);
-        preRentalStage = convState?.currentStage || 'inquiry';
+        preConvState = await this.conversationStageService.getConversationState(input.rental.id);
+        preRentalStage = preConvState?.currentStage || 'inquiry';
+      } catch { /* non-critical */ }
+      try {
+        const extracted = await this.prisma.extracteditem.findMany({
+          where: { rental_id: input.rental.id },
+          select: { item_name: true, source: true },
+        });
+        if (extracted.length > 0) {
+          const seen = new Map<string, string>();
+          for (const e of extracted) {
+            const existing = seen.get(e.item_name);
+            if (!existing || e.source === 'photo_reference') {
+              seen.set(e.item_name, e.source);
+            }
+          }
+          preExtractedItems = [...seen.keys()];
+        }
       } catch { /* non-critical */ }
     } else {
       const msgCount = input.conversationHistory.length / 2;
@@ -91,6 +106,8 @@ export class PipelineService {
       else if (msgCount <= 2) preRentalStage = 'interest';
       else preRentalStage = 'qualified';
     }
+
+    // --- Layer 1: CLASSIFY ---
 
     const classification = classifyMessage(
       input.message,
@@ -109,14 +126,14 @@ export class PipelineService {
 
     // --- Stage reassessment: ensure monologue + gather use current stage ---
     let rentalStage = preRentalStage;
+    let freshConvState = preConvState;
     if (input.rental) {
       try {
         await this.conversationStageService.reassessStage(input.rental.id);
-        const freshState = await this.conversationStageService.getConversationState(input.rental.id);
-        rentalStage = freshState?.currentStage || rentalStage;
+        freshConvState = await this.conversationStageService.getConversationState(input.rental.id);
+        rentalStage = freshConvState?.currentStage || rentalStage;
         if (rentalStage !== preRentalStage) {
           this.logger.log(`[Pipeline] Stage reassessed: ${preRentalStage} → ${rentalStage}`);
-          // Re-evaluate upsell with fresh stage
           classification.suppressUpsell = shouldSuppressUpsell(input.message, preConversationState, rentalStage);
         }
       } catch { /* non-critical */ }
@@ -125,24 +142,20 @@ export class PipelineService {
     // --- Layer 2: THINK ---
     let monologue: InnerMonologue;
 
-    if (classification.contextLevel === 'minimal') {
-      // Skip AI call for simple messages
+    if (classification.contextLevel === 'minimal' ||
+        classification.intent === Intent.ACKNOWLEDGMENT ||
+        classification.intent === Intent.GOODBYE ||
+        classification.intent === Intent.RETURN_CONFIRMATION ||
+        classification.intent === Intent.DAMAGE_REPORT ||
+        (classification.intent === Intent.LOGISTICS && classification.complexity === 'low')) {
+      // Skip AI call for simple/terminal messages
       monologue = generateQuickMonologue(input.message, classification);
-      this.logger.debug(`[Pipeline] L2 THINK: quick monologue (no AI call)`);
+      this.logger.debug(`[Pipeline] L2 THINK: quick monologue (no AI call, intent=${classification.intent})`);
     } else {
-      // Get resolved items for the inner monologue
-      let resolvedItems = classification.mentionedItems;
-      if (input.rental) {
-        try {
-          const extracted = await this.prisma.extracteditem.findMany({
-            where: { rental_id: input.rental.id },
-            select: { item_name: true },
-          });
-          if (extracted.length > 0) {
-            resolvedItems = [...new Set([...extracted.map((e: any) => e.item_name), ...resolvedItems])];
-          }
-        } catch { /* non-critical */ }
-      }
+      // Use pre-loaded extracted items (no redundant DB call)
+      let resolvedItems = preExtractedItems.length > 0
+        ? [...new Set([...preExtractedItems, ...classification.mentionedItems])]
+        : classification.mentionedItems;
 
       // Use pre-fetched conversation state (already loaded above)
       const conversationState = preConversationState;
@@ -174,6 +187,7 @@ export class PipelineService {
       conversationStageService: this.conversationStageService,
       followUpService: this.followUpService,
       contentionService: this.contentionService,
+      renterProfileService: this.renterProfileService,
       prisma: this.prisma,
     };
 
@@ -181,7 +195,13 @@ export class PipelineService {
       classification,
       monologue,
       gatherServices,
-      input,
+      {
+        ...input,
+        preloadedState: preConversationState,
+        preloadedStage: rentalStage,
+        preloadedConvState: freshConvState,
+        preloadedExtractedItems: preExtractedItems,
+      },
     );
 
     this.logger.debug(
@@ -259,6 +279,8 @@ export class PipelineService {
       responseContent,
       input.conversationHistory,
       input.message,
+      input.account,
+      rentalStage,
     );
     responseContent = filterResult.response;
 
@@ -321,10 +343,12 @@ export class PipelineService {
       i.action === 'flagged' && ['PHYSICAL_PRESENCE', 'FABRICATED_QUOTE', 'SELF_CONTRADICTION', 'TIME_LOGIC'].includes(i.type),
     );
 
-    // Also run grounding if the response contains spec-like claims not in the fact pack
-    const hasSpecClaims = /\b\d+\s*(?:cm|mm|kg|gb|tb|w|watt|hour|mah)\b/i.test(responseContent);
+    // Also run grounding if the response contains spec-like claims — but ONLY when pricing
+    // is involved (where hallucinated specs cause real harm). Saves ~1 Haiku call on 60-70% of messages.
+    const hasSpecClaims = /\b(\d+\s*(?:cm|mm|kg|gb|tb|w|watt|hour|mah)|4k|8k|120fps|60fps|full frame|aps-c|10-bit|12-bit|dual card|phase detect|ibis|eye.?af)\b/i.test(responseContent);
+    const specClaimsNeedGrounding = hasSpecClaims && (classification.hasPricingIntent || classification.intent === Intent.PRICING_INQUIRY);
 
-    if (hasGroundingFlags || hasSpecClaims) {
+    if (hasGroundingFlags || specClaimsNeedGrounding) {
       try {
         const groundingResult = await verifyGrounding(this.aiService, responseContent, factPack);
 
@@ -333,6 +357,7 @@ export class PipelineService {
             `[Pipeline] L8 GROUND: ${groundingResult.ungroundedClaims.length} ungrounded claims: ` +
             groundingResult.ungroundedClaims.join('; '),
           );
+          this.diagnosticService?.log('pipeline', 'grounding_failure', `Grounding found ${groundingResult.ungroundedClaims.length} ungrounded claims`, { claims: groundingResult.ungroundedClaims, rentalId: input.rentalId }, input.rentalId);
 
           if (groundingResult.correctedResponse) {
             responseContent = groundingResult.correctedResponse;
@@ -381,9 +406,28 @@ export class PipelineService {
       this.logger.debug(`[Pipeline] L9 CHECK: PASSED`);
     }
 
+    // --- Correction feedback loop ---
+    // Track what was corrected so next THINK can avoid the same mistakes
+    const corrections: string[] = [];
+    if (filterResult.issues.length > 0) {
+      corrections.push(...filterResult.issues.map(i => `filter:${i.type}`));
+    }
+    if (!contractResult.passed) {
+      corrections.push(...contractResult.violations.map(v => `contract:${v.rule}`));
+    }
+
     // --- Layer 10: STATE UPDATE ---
+    // Skip for intents that won't meaningfully change conversation state
+    // Saves ~300 tokens + 1 Haiku call per simple message
+    const skipStateExtraction =
+      classification.intent === Intent.ACKNOWLEDGMENT ||
+      classification.intent === Intent.GOODBYE ||
+      classification.intent === Intent.GREETING ||
+      classification.intent === Intent.RETURN_CONFIRMATION ||
+      (classification.intent === Intent.LOGISTICS && classification.complexity === 'low') ||
+      classification.contextLevel === 'minimal';
     let stateUpdate: Record<string, any> | undefined;
-    if (input.rental) {
+    if (input.rental && !skipStateExtraction) {
       try {
         const stateExtraction = await this.aiService.processExtraction(
           `Extract conversation state from this exchange. Reply in JSON only, no markdown fences.
@@ -391,7 +435,7 @@ Bot response: "${responseContent.substring(0, 500)}"
 Renter message: "${input.message.substring(0, 300)}"
 
 Return ONLY a JSON object with changed fields (omit unchanged):
-{"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false}`,
+{"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false,"rentalNote":"brief note if renter shared project/personal info worth remembering"}`,
           { maxTokens: 150 },
         );
         const jsonStr = stateExtraction.content.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
@@ -401,6 +445,40 @@ Return ONLY a JSON object with changed fields (omit unchanged):
         parsed.renterDNA = classification.renterDNA;
         parsed.lastGoal = monologue.goal;
         parsed.lastMissing = monologue.missing;
+
+        // Store corrections for feedback loop (cleared after 2 messages)
+        if (corrections.length > 0) {
+          parsed.lastCorrections = corrections;
+          parsed.correctionAge = 0;
+        } else if (preConversationState.lastCorrections) {
+          const age = (preConversationState.correctionAge || 0) + 1;
+          if (age >= 2) {
+            parsed.lastCorrections = null;
+            parsed.correctionAge = null;
+          } else {
+            parsed.correctionAge = age;
+          }
+        }
+
+        // Track if bot mentioned unavailability (prevents broken-record warnings)
+        if (/\b(not available|unavailable|out of stock|isn't available|aren't available|fully booked|no longer available)\b/i.test(responseContent)) {
+          parsed.unavailabilityMentioned = true;
+        }
+
+        // Negotiation intelligence: track price objections + competitor mentions
+        if (classification.intent === Intent.NEGOTIATION || classification.hasCompetitorMention) {
+          // Reuse pre-loaded state (no redundant DB call)
+          const currentObjections = (preConversationState as any).priceObjectionCount || 0;
+          parsed.priceObjectionCount = currentObjections + 1;
+          parsed.negotiationStance = currentObjections >= 2 ? 'yield' : currentObjections >= 1 ? 'flexible' : 'firm';
+          if (classification.hasCompetitorMention) {
+            parsed.competitorMentioned = true;
+          }
+          const priceMatch = responseContent.match(/£(\d+(?:\.\d{2})?)/);
+          if (priceMatch) {
+            parsed.lastPriceOffered = parseFloat(priceMatch[1]);
+          }
+        }
 
         await this.followUpService.mergeStructuredState(input.rental.id, parsed);
         stateUpdate = parsed;

@@ -848,7 +848,7 @@ export class MemoryService implements OnModuleInit {
 
   async getConversationHistory(chatId: string, limit = 30): Promise<{ role: 'user' | 'assistant'; content: string; timestamp?: Date }[]> {
     // Fetch more than needed so we can build a facts summary from older messages
-    const fetchCount = Math.max(limit * 5, 30);
+    const fetchCount = Math.max(limit * 2, 15);
     const messages = await this.prisma.conversation.findMany({
       where: { chat_id: chatId },
       orderBy: { created_at: 'desc' },
@@ -1221,9 +1221,10 @@ export class MemoryService implements OnModuleInit {
 
       const messageCount = messages.length;
       if (!forceRefresh && state?.conversation_summary && messageCount > 0) {
-        // Return cached summary only if no new messages since last build
+        // Return cached summary if fewer than 5 new messages since last build
         const lastBuildCount = this.summaryMessageCount.get(rentalId) || 0;
-        if (lastBuildCount >= messageCount) return state.conversation_summary;
+        const delta = messageCount - lastBuildCount;
+        if (delta < 5) return state.conversation_summary;
       }
 
       // Build summary from even a single message — don't wait for 4
@@ -1238,9 +1239,14 @@ export class MemoryService implements OnModuleInit {
         ? `Summarize this first rental message in 2-3 short lines. Capture:\n- What the renter wants (items, dates, purpose)\n- Any specific requests (delivery, time preferences, questions asked)\n- Their tone (casual, urgent, professional)\n\nMessage:\n${convoText}\n\nRespond with ONLY the summary, no labels.`
         : `Summarize this rental conversation in 4-5 short lines. Capture ALL of these:\n1. Who they are and what they're shooting/using it for\n2. Items discussed, what's confirmed available, what was quoted\n3. What the bot promised or committed to (delivery quotes, times, discounts)\n4. What the renter agreed to, asked about, or is still deciding on\n5. Any concerns, rejections, or unresolved questions\n\nConversation:\n${convoText}\n\nRespond with ONLY the summary, no labels or numbers.`;
 
-      const response = await this.aiService.processExtraction(prompt);
-
-      const summary = response.content.trim();
+      let summary: string;
+      try {
+        const response = await this.aiService.processExtraction(prompt);
+        summary = response.content.trim();
+      } catch (aiErr) {
+        this.logger.debug(`AI summary extraction failed, using cached: ${aiErr.message}`);
+        return state?.conversation_summary || null;
+      }
 
       // Persist to follow_up_state and track message count for cache invalidation
       await this.prisma.follow_up_state.update({

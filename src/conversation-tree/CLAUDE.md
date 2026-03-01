@@ -14,6 +14,7 @@
 | #384 | 7:31 PM | 🔵 | Stage Transition Detection and Persistence | ~416 |
 | #370 | 7:29 PM | 🔵 | CONFIRMED Stage Objectives for Time Collection | ~357 |
 | #364 | 7:28 PM | 🔵 | Conversation Stage Tracking System | ~397 |
+| #310 | 7:11 PM | 🔵 | Conversation Stage Service Architecture | ~444 |
 
 ### Feb 7, 2026
 
@@ -28,4 +29,11 @@
 |----|------|---|-------|------|
 | #897 | 12:20 PM | 🔵 | Stage Override Logic Reads Rental Status But Doesn't Persist Back to Database | ~418 |
 | #891 | 12:19 PM | 🔵 | Conversation Stage System Has Critical Bugs: DEAD Stage Inert, setStage() Never Called, 82% Stuck in Inquiry | ~710 |
+
+### Feb 9, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1151 | 1:45 PM | 🔵 | Conversation Stage Service Uses Rental Status for Stage Detection | ~482 |
+| #1148 | " | 🔵 | Conversation Stage Service Defines Progressive Funnel Stages | ~475 |
 </claude-mem-context>

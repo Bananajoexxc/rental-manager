@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const TelegramBot = require('node-telegram-bot-api');
@@ -28,6 +28,7 @@ import { HyggloAccount } from '../hygglo/hygglo.service';
 import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
 import { PipelineService } from '../pipeline/pipeline.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
+import { DiagnosticService } from '../monitoring/diagnostic.service';
 
 // --- Consolidated rental notification types ---
 export type RentalSectionType =
@@ -125,6 +126,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly NOTIF_MIN_INTERVAL_MS = 1500; // min 1.5s between sends
   private readonly NOTIF_MAX_PER_MINUTE = 5; // max 5 notifications per minute
 
+  // Rate-limited message queue (drains at 1.5s intervals when rate limit lifts)
+  private rateLimitQueue: Array<{ text: string; parseMode: string }> = [];
+  private rateLimitDrainTimer: NodeJS.Timeout | null = null;
+  private readonly RATE_LIMIT_QUEUE_MAX = 20;
+
   // --- Consolidated rental notification buffer ---
   private rentalNotifBuffer = new Map<string, RentalNotifBufferEntry>();
   private readonly RENTAL_NOTIF_BUFFER_MS = 3000;
@@ -148,6 +154,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private awaitingCustomReply = new Map<string, string>(); // ownerChatId → decisionId
   private decisionCounter = 0;
   private readonly DECISION_EXPIRY_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+  // --- 409 Circuit Breaker ---
+  private conflictTimestamps: number[] = [];
+  private isHealingPolling = false;
 
   // Unified renter chat state (replaces separate renter bot)
   private renterChatHistories = new Map<string, { role: 'user' | 'assistant'; content: string }[]>();
@@ -180,6 +190,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private lostRevenueService: LostRevenueService,
     private pipelineService: PipelineService,
     @Inject(forwardRef(() => FollowUpService)) private followUpService: FollowUpService,
+    @Optional() private diagnosticService?: DiagnosticService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -229,9 +240,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.bot.on('polling_error', (err: any) => {
-      // Suppress 409 Conflict logs — they're transient during restart
       if (err.message?.includes('409')) {
-        this.logger.warn('Telegram 409 conflict — another instance may be stopping. Will retry.');
+        // Track 409s in sliding window for circuit breaker
+        const now = Date.now();
+        this.conflictTimestamps.push(now);
+        // Keep only last 60 seconds
+        this.conflictTimestamps = this.conflictTimestamps.filter(t => now - t < 60_000);
+        if (this.conflictTimestamps.length > 10 && !this.isHealingPolling) {
+          this.logger.warn(`[409-CircuitBreaker] ${this.conflictTimestamps.length} conflicts in 60s — self-healing...`);
+          this.selfHealPolling();
+        }
+        // Don't spam logs — only log every 30th occurrence
+        if (this.conflictTimestamps.length % 30 === 1) {
+          this.logger.warn(`Telegram 409 conflict (${this.conflictTimestamps.length} in last 60s)`);
+        }
         return;
       }
       this.logger.error('Telegram polling error: ' + err.message);
@@ -258,6 +280,27 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy() {
     await this.bot.stopPolling();
+  }
+
+  private async selfHealPolling() {
+    if (this.isHealingPolling) return;
+    this.isHealingPolling = true;
+    try {
+      this.logger.log('[409-CircuitBreaker] Stopping polling...');
+      await this.bot.stopPolling();
+      // Wait for Telegram to release the connection
+      await new Promise(resolve => setTimeout(resolve, 30_000));
+      // Clear webhook again
+      try { await this.bot.deleteWebHook({ drop_pending_updates: false }); } catch {}
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      await this.bot.startPolling();
+      this.conflictTimestamps = [];
+      this.logger.log('[409-CircuitBreaker] Self-healed — polling restarted successfully');
+    } catch (err) {
+      this.logger.error(`[409-CircuitBreaker] Self-heal failed: ${err.message}`);
+    } finally {
+      this.isHealingPolling = false;
+    }
   }
 
   // --- Proactive messaging for autonomous pipeline ---
@@ -291,6 +334,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Drain rate-limited message queue after the window resets */
+  private scheduleRateLimitDrain(): void {
+    if (this.rateLimitDrainTimer) return;
+    this.rateLimitDrainTimer = setTimeout(async () => {
+      this.rateLimitDrainTimer = null;
+      while (this.rateLimitQueue.length > 0) {
+        const item = this.rateLimitQueue.shift()!;
+        try {
+          await this.sendProactiveMessage(item.text, item.parseMode);
+        } catch (err) {
+          this.logger.warn(`[NotifGateway] Drain send failed: ${err.message}`);
+        }
+        await new Promise(r => setTimeout(r, this.NOTIF_MIN_INTERVAL_MS));
+      }
+    }, 61_000); // wait for rate-limit window to reset
+  }
+
   /**
    * Central notification gateway. ALL owner notifications pass through here.
    * Provides: content-hash dedup (30 min window) + rate limiting (5/min, 1.5s spacing).
@@ -318,9 +378,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.notificationsThisMinute = 0;
     }
     if (!options?.force && this.notificationsThisMinute >= this.NOTIF_MAX_PER_MINUTE) {
-      this.logger.warn(
-        `[NotifGateway] RATE LIMITED (${this.notificationsThisMinute}/${this.NOTIF_MAX_PER_MINUTE} this minute): ${text.substring(0, 80)}...`,
-      );
+      if (this.rateLimitQueue.length < this.RATE_LIMIT_QUEUE_MAX) {
+        this.rateLimitQueue.push({ text, parseMode });
+        this.scheduleRateLimitDrain();
+        this.logger.debug(`[NotifGateway] QUEUED (${this.rateLimitQueue.length} pending): ${text.substring(0, 80)}...`);
+        this.diagnosticService?.log('notification', 'rate_limited', `Message queued (${this.rateLimitQueue.length} pending)`, { queueSize: this.rateLimitQueue.length, textPreview: text.substring(0, 100) });
+      } else {
+        this.logger.warn(`[NotifGateway] QUEUE FULL — dropping: ${text.substring(0, 80)}...`);
+      }
       return;
     }
 
@@ -507,14 +572,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           }
         }
       }
+      // Debounce: reset timer to consolidate more sections (max 10s total buffer age)
+      const age = Date.now() - ((existing as any)._startedAt || Date.now());
+      if (age < 10_000) {
+        clearTimeout(existing.timer);
+        existing.timer = setTimeout(() => this.flushRentalBuffer(key), this.RENTAL_NOTIF_BUFFER_MS);
+      }
     } else {
-      // First section for this rental — start timer (timer is NOT reset on subsequent sections)
+      // First section for this rental — start timer
       const timer = setTimeout(() => this.flushRentalBuffer(key), this.RENTAL_NOTIF_BUFFER_MS);
       this.rentalNotifBuffer.set(key, {
         sections: [section],
         timer,
         meta: meta || {},
-      });
+        _startedAt: Date.now(),
+      } as any);
     }
   }
 
@@ -803,6 +875,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * Returns the decision ID for tracking.
    */
   async sendDecisionPrompt(config: DecisionPromptConfig): Promise<string> {
+    // --- Dedup: skip if there's already an unresolved decision for same rental + type ---
+    for (const [, existing] of this.pendingDecisions) {
+      if (
+        !existing.resolved &&
+        existing.rentalId === config.rentalId &&
+        existing.type === config.type &&
+        Date.now() - existing.createdAt < 24 * 60 * 60 * 1000 // within 24 hours
+      ) {
+        this.logger.debug(
+          `[DecisionDedup] Suppressed duplicate ${config.type} for rental ${config.rentalId} (existing: ${existing.id}, ${Math.round((Date.now() - existing.createdAt) / 60000)}m ago)`,
+        );
+        return existing.id;
+      }
+    }
+
     const id = `D${++this.decisionCounter}`;
 
     // Build inline keyboard rows: option buttons + custom reply button

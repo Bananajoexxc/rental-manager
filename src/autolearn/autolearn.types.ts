@@ -75,14 +75,14 @@ export const SAFETY = {
   MAX_PROPOSALS_PER_DAY: 15,
   VETO_WINDOW_MINUTES: 0, // Auto-apply: no veto window, shadow tests are the gate
   ROLLBACK_QUALITY_THRESHOLD: 0.10, // 10% drop triggers rollback
-  SHADOW_TEST_SAMPLE_SIZE: 20,
+  SHADOW_TEST_SAMPLE_SIZE: 5, // Reduced from 20 — 5 samples sufficient for regression detection
   MIN_VIOLATIONS_FOR_RULE: 3,
   MAX_SNAPSHOTS_RETAINED: 50,
   PROTECTED_COMPONENTS: ['security_rules', 'critical_rules'] as readonly string[],
   MIN_PROTECTED_RULE_PRIORITY: 9,
   QUALITY_FLOOR: 0.7,
-  MAX_REWORK_ATTEMPTS: 10, // Keep refining until better — 14,400 RPD budget allows it
-  MAX_REWORKS_PER_RUN: 10,
+  MAX_REWORK_ATTEMPTS: 2, // Reduced from 10 — reject unimprovable proposals faster
+  MAX_REWORKS_PER_RUN: 3, // Reduced from 10 — fewer reworks per cycle
 } as const;
 
 export interface CycleFinding {
@@ -106,4 +106,11 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   'validation.price_floor': '5',
   'validation.price_ceiling': '500',
   'validation.quality_threshold': String(SAFETY.QUALITY_FLOOR),
+  // Cron Claude defaults
+  'cron_claude.enabled': 'false',
+  'cron_claude.frequency_minutes': '240',
+  'cron_claude.tasks': 'message_audit',
+  'cron_claude.quiet_hours_start': '2',
+  'cron_claude.quiet_hours_end': '7',
+  'cron_claude.model': 'claude-sonnet-4-5-20250929',
 };

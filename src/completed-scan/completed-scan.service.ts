@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional, forwardRef } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyggloService, HyggloAccount } from '../hygglo/hygglo.service';
@@ -9,6 +9,7 @@ import { MemoryService } from '../memory/memory.service';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { TitleParserService } from '../revenue/title-parser.service';
+import { RentalScannerService } from '../rental-scanner/rental-scanner.service';
 
 @Injectable()
 export class CompletedScanService {
@@ -24,6 +25,7 @@ export class CompletedScanService {
     private renterProfileService: RenterProfileService,
     private calendarService: CalendarService,
     private titleParserService: TitleParserService,
+    @Optional() @Inject(forwardRef(() => RentalScannerService)) private rentalScannerService: RentalScannerService,
   ) {}
 
   /**
@@ -68,7 +70,7 @@ export class CompletedScanService {
         // Snapshot agreements for the renter profile when rental reaches terminal state
         await this.snapshotRenterAgreements(rental);
 
-        const shouldProcess = await this.shouldProcessCompletedRental(rental);
+        const shouldProcess = await this.shouldProcessCompletedRental(rental, account);
         if (shouldProcess) {
           await this.processCompletedRentalMessage(rental, account);
           actioned++;
@@ -115,9 +117,11 @@ export class CompletedScanService {
    * Determine if a completed rental needs processing.
    * Criteria: last message is from renter (not owner), within 48 hours.
    */
-  private async shouldProcessCompletedRental(rental: any): Promise<boolean> {
+  private async shouldProcessCompletedRental(rental: any, account?: HyggloAccount): Promise<boolean> {
     try {
-      const messages = await this.hyggloService.readMessages(rental.listingId);
+      // Try scanner cache first (recently-completed rentals still have cached messages)
+      const messages = this.rentalScannerService?.getCachedMessages(rental.listingId)
+        ?? await this.hyggloService.readMessages(rental.listingId, account);
       if (messages.length === 0) return false;
 
       // Get last 3 messages
@@ -153,7 +157,9 @@ export class CompletedScanService {
    * Generates an appropriate response using AI.
    */
   async processCompletedRentalMessage(rental: any, account: HyggloAccount): Promise<void> {
-    const messages = await this.hyggloService.readMessages(rental.listingId);
+    // Try scanner cache first, fall back to Hygglo API
+    const messages = this.rentalScannerService?.getCachedMessages(rental.listingId)
+      ?? await this.hyggloService.readMessages(rental.listingId, account);
     if (messages.length === 0) return;
 
     const recentMessages = messages.slice(-3);
@@ -221,7 +227,7 @@ export class CompletedScanService {
    * Runs on the 1st of each month at 4am. Also reconciles active bookings.
    * This ensures the rental table (used for all revenue calculations) stays complete.
    */
-  @Cron('0 4 1 * *')
+  @Cron('0 7 1 * *')
   async monthlyRevenueSync(): Promise<void> {
     this.logger.log('=== MONTHLY REVENUE SYNC: Starting ===');
 
@@ -352,7 +358,7 @@ export class CompletedScanService {
    * Many (especially on Leo's account) end up as 'obsolete' on Hygglo (cancelled/expired)
    * but the DB derives status from dates, so they appear as completed revenue.
    */
-  @Cron('0 6 * * *')
+  @Cron('0 7 * * *')
   async dailyReconciliation(): Promise<void> {
     this.logger.log('=== DAILY RECONCILIATION: Starting ===');
     const cancelled = await this.reconcilePastRentals();

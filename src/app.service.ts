@@ -25,6 +25,10 @@ interface BookingRow {
   net_profit: number | null;
   rental_id: string | null;
   account: string;
+  pickup_time?: string | null;
+  return_time?: string | null;
+  pickup_date?: Date | null;
+  return_date?: Date | null;
 }
 
 /** A unique rental = one renter + date range, possibly with multiple items */
@@ -36,6 +40,10 @@ interface GroupedRental {
   startDate: Date;
   endDate: Date;
   earnings: number; // Daniel's take-home (sum of booking.revenue for this rental)
+  pickupTime: string | null;
+  returnTime: string | null;
+  pickupDate: Date | null;
+  returnDate: Date | null;
 }
 
 @Injectable()
@@ -111,6 +119,10 @@ export class AppService {
         // Expand date range to cover all items
         if (b.start_date < existing.startDate) existing.startDate = b.start_date;
         if (b.end_date > existing.endDate) existing.endDate = b.end_date;
+        if (!existing.pickupTime && b.pickup_time) existing.pickupTime = b.pickup_time;
+        if (!existing.returnTime && b.return_time) existing.returnTime = b.return_time;
+        if (!existing.pickupDate && b.pickup_date) existing.pickupDate = b.pickup_date;
+        if (!existing.returnDate && b.return_date) existing.returnDate = b.return_date;
       } else {
         groups.set(groupKey, {
           rentalId: b.rental_id,
@@ -120,6 +132,10 @@ export class AppService {
           startDate: b.start_date,
           endDate: b.end_date,
           earnings: b.revenue || 0,
+          pickupTime: b.pickup_time || null,
+          returnTime: b.return_time || null,
+          pickupDate: b.pickup_date || null,
+          returnDate: b.return_date || null,
         });
       }
     }
@@ -142,6 +158,8 @@ export class AppService {
         start_date: true, end_date: true,
         revenue: true, net_profit: true,
         rental_id: true, account: true,
+        pickup_time: true, return_time: true,
+        pickup_date: true, return_date: true,
       },
     });
 
@@ -288,6 +306,10 @@ export class AppService {
         endDate: grouped.endDate,
         account: grouped.account,
         photo: getProductPhoto(detail?.photos_urls) || null,
+        pickupTime: grouped.pickupTime,
+        returnTime: grouped.returnTime,
+        pickupDate: grouped.pickupDate,
+        returnDate: grouped.returnDate,
       };
     };
 

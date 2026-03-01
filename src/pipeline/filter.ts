@@ -34,6 +34,8 @@ export function filterResponse(
   response: string,
   conversationHistory: { role: string; content: string }[],
   message: string,
+  account?: string,
+  rentalStage?: string,
 ): FilterResult {
   const issues: FilterIssue[] = [];
   let text = response;
@@ -70,6 +72,30 @@ export function filterResponse(
     }
   }
 
+  // --- 1b. PLAIN-TEXT INTERNAL LEAKS ---
+  // Catch CRITICAL/SECURITY/ALERT patterns not wrapped in asterisks
+  const internalPlainPatterns = [
+    /CRITICAL\s*(?:SECURITY\s*)?ALERT[^.!?\n]*/gi,
+    /INTERNAL\s*(?:NOTE|MEMO|ACTION)[^.!?\n]*/gi,
+    /MANDATORY\s*DELIVERY\s*(?:RULE|POLICY)[^.!?\n]*/gi,
+    /\[INTERNAL\][^.!?\n]*/gi,
+    /\[ESCALATION\][^.!?\n]*/gi,
+    /DRAFT\s*REPLY\s*:/gi,
+  ];
+  for (const pattern of internalPlainPatterns) {
+    if (pattern.test(text)) {
+      text = text.replace(pattern, '').replace(/\n{3,}/g, '\n\n').trim();
+      issues.push({ type: 'INTERNAL_ACTION', detail: 'Stripped plain-text internal leak', action: 'stripped' });
+    }
+  }
+
+  // --- 1c. CROSS-ACCOUNT NAME LEAK ---
+  // "Daniel" must not appear in Leo account responses
+  if (account === 'leo' && /\bDaniel\b/.test(text)) {
+    text = text.replace(/\bDaniel\b/g, 'I');
+    issues.push({ type: 'INTERNAL_ACTION', detail: 'Replaced "Daniel" with "I" on Leo account', action: 'rewritten' });
+  }
+
   // --- 2. PLATFORM NAME LEAK ---
   if (/\bHygglo\b/gi.test(text)) {
     text = text.replace(/\bHygglo\b/gi, 'the platform');
@@ -81,27 +107,49 @@ export function filterResponse(
   }
 
   // --- 3. PHYSICAL PRESENCE CLAIMS ---
-  // The AI is a chat agent. It cannot physically arrive, grab gear, come out, etc.
+  // The AI is a chat agent. It CANNOT physically arrive, move, grab gear, be at locations, etc.
+  // This applies to ALL stages including confirmed/pickup — the AI arranges handoffs, Daniel/Leo do them.
   const physicalPresencePatterns = [
+    // Gear-specific physical claims
     /\bI'?m here with your (gear|kit|equipment|lens|camera)\b/i,
     /\bjust (grabbed|picked up|got) (the|your) (gear|kit|lens|camera|equipment)\b/i,
     /\b(arriving|arrived) with (the|your) (gear|kit|equipment)\b/i,
     /\bI'?ll (come|bring|carry|hand) (it |the gear |your gear |everything )?(out|over|to you|down)\b/i,
     /\bcoming out to (you|meet you) (now|with)\b/i,
-    /\bI'?m (at|by|near) the (statue|entrance|door|gate|front|building)\b/i,
     /\bjust arrived with your\b/i,
     /\bI'?ve got (the|your) (gear|kit|equipment|lens|camera) (here|ready|with me)\b/i,
     /\bdon'?t have a phone with me\b/i,
     /\bI'?m (bringing|carrying) (the|your|it)\b/i,
+    // General mobility/presence claims — the AI cannot move or be at places
+    /\b(on my way|heading (to |over|there)|coming over|coming (to|now))\b/i,
+    /\bbe with you in\b/i,
+    /\bI'?ll (be there|meet you|wait for you|come to you)\b/i,
+    /\bI'?m (at|by|near|outside|waiting|here)\b/i,
+    /\bspotted you\b/i,
+    /\bsee you (in|shortly|soon|there)\b/i,
+    /\bjust (parking|arrived|pulled up|getting out)\b/i,
+    /\bI'?ll wait (for you |here )/i,
   ];
 
   for (const pattern of physicalPresencePatterns) {
     if (pattern.test(text)) {
-      issues.push({
-        type: 'PHYSICAL_PRESENCE',
-        detail: `Physical presence claim detected: "${text.match(pattern)?.[0]}"`,
-        action: 'flagged',
-      });
+      // Strip the sentence containing the physical presence claim
+      const sentences = text.split(/(?<=[.!?])\s+/);
+      const cleaned = sentences.filter(s => !pattern.test(s));
+      if (cleaned.length < sentences.length) {
+        text = cleaned.join(' ').replace(/\n{3,}/g, '\n\n').trim();
+        issues.push({
+          type: 'PHYSICAL_PRESENCE',
+          detail: `Physical presence claim stripped: "${text.match(pattern)?.[0] || 'removed'}"`,
+          action: 'stripped',
+        });
+      } else {
+        issues.push({
+          type: 'PHYSICAL_PRESENCE',
+          detail: `Physical presence claim detected: "${text.match(pattern)?.[0]}"`,
+          action: 'flagged',
+        });
+      }
     }
   }
 

@@ -28,6 +28,7 @@ model rental {
   listing_location String?        // Advertised pickup location from the listing (e.g. "Stratford", "Shoreditch") — may be fake
   parsed_items    Json?           // AI-parsed items: [{item: "Sony FX3", qty: 1}, {item: "Sony GM 24-70mm f2.8", qty: 1}]
   order_step      String?         // Active Hygglo order step: REQUEST, APPROVED, FUNDS_RESERVED, VERIFIED, BOOKED_AFTER_VERIFIED, DELIVERED, RETURNED, REVIEWED
+  transcript_hash String?         // Hash of last processed transcript — skip AI extraction if unchanged
   created_at      DateTime        @default(now())
   updated_at      DateTime        @updatedAt
   extracted_items extracteditem[]
@@ -184,6 +185,7 @@ model booking {
   @@index([status])
   @@index([account])
   @@index([item_name, status, start_date, end_date])
+  @@index([item_name, status, return_date, end_date])
 }
 
 // === Phase 1B: Renter Blacklist ===
@@ -277,6 +279,23 @@ model error_log {
   @@index([created_at])
 }
 
+// === System Diagnostics ===
+
+model system_diagnostic {
+  id          String   @id @default(uuid())
+  category    String   // scan_cycle, cleanup, promotion, revenue, notification, pipeline
+  event_type  String   // stale_cleanup, force_promote, rate_limited, grounding_failure, etc.
+  summary     String
+  data        Json     // compact structured payload — counts/deltas, not full payloads
+  rental_id   String?
+  created_at  DateTime @default(now())
+
+  @@index([category])
+  @@index([event_type])
+  @@index([created_at])
+  @@index([rental_id])
+}
+
 // === Intelligence & Safety Improvements ===
 
 model validation_log {
@@ -359,6 +378,7 @@ model renter_profile {
   rental_progress           String?              @db.Text // Current request progress summary (e.g. "agreed on FX3+24-70, dates 5-7 Feb, pickup 10am")
   previous_agreements       String?              @db.Text // What was agreed in prior rentals/cancelled requests — for re-request context
   last_inquiry_summary      String?              @db.Text // What they last asked about
+  preferences               Json?                // {preferred_pickup_time, preferred_items, shoot_types, communication_style, price_sensitivity}
   first_seen_at             DateTime             @default(now())
   last_seen_at              DateTime             @default(now())
   renter_links              rental_renter_link[]
@@ -904,6 +924,56 @@ model ebay_price_cache {
   scraped_at    DateTime @default(now())
 
   @@index([scraped_at])
+}
+
+// === Conversation Archival & Insight Extraction ===
+
+model conversation_archive {
+  id                String    @id @default(uuid())
+  rental_id         String
+  chat_id           String
+  message_count     Int
+  renter_name       String?
+  items_requested   String[]
+  use_cases         String[]
+  renter_tone       String?   // professional, casual, urgent, frustrated
+  pricing_sensitivity String? // budget, moderate, premium
+  engagement_level  String?   // low, medium, high
+  first_message_at  DateTime?
+  last_message_at   DateTime?
+  final_outcome     String?   // converted, lost, cancelled, ongoing
+  final_rental_value Float?
+  compressed_summary String?  @db.Text
+  key_decisions     Json?     // [{decision, reason, timestamp}]
+  archived_at       DateTime  @default(now())
+
+  insights          conversation_insight[]
+
+  @@index([rental_id])
+  @@index([chat_id])
+  @@index([archived_at])
+  @@index([final_outcome])
+}
+
+model conversation_insight {
+  id                String    @id @default(uuid())
+  rental_id         String
+  archive_id        String
+  archive           conversation_archive @relation(fields: [archive_id], references: [id], onDelete: Cascade)
+  insight_type      String    // item_demand, marketing_angle, renter_behavior, objection_pattern
+  category          String?   // sub-category within the type
+  content           String    @db.Text
+  confidence        Float     @default(0.8)
+  occurrence_count  Int       @default(1)
+  is_actionable     Boolean   @default(false)
+  suggested_action  String?   @db.Text
+  created_at        DateTime  @default(now())
+
+  @@index([rental_id])
+  @@index([archive_id])
+  @@index([insight_type])
+  @@index([is_actionable])
+  @@index([created_at])
 }
 
 // === Marketing Listings (demand testing via Hygglo — NOT real inventory) ===

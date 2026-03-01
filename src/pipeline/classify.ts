@@ -56,7 +56,7 @@ const INTENT_PATTERNS: { intent: Intent; patterns: RegExp[]; weight: number }[] 
   {
     intent: Intent.NEGOTIATION,
     patterns: [
-      /\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for|feels? steep|saw.*cheaper|over.?priced|rip.?off)\b/i,
+      /\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for|feels? steep|saw.*cheaper|over.?priced|rip.?off|found.*cheaper|another.*rental|price match|beat.*price|cheaper.*elsewhere|match.*price)\b/i,
     ],
     weight: 2,
   },
@@ -115,8 +115,10 @@ function classifyIntent(message: string, historyLength: number): Intent {
   const trimmed = message.trim();
   const wordCount = trimmed.split(/\s+/).length;
 
-  // Short messages: check ack/goodbye first
-  if (wordCount <= 5) {
+  // Short messages: check ack/goodbye first — BUT skip if action verbs are present
+  // "Yes, book it" should be BOOKING_ACTION, not ACKNOWLEDGMENT
+  const hasActionVerb = /\b(book|cancel|confirm|add|change|remove|extend|shorten|deliver)\b/i.test(trimmed);
+  if (wordCount <= 5 && !hasActionVerb) {
     if (INTENT_PATTERNS.find(p => p.intent === Intent.ACKNOWLEDGMENT)!.patterns.some(r => r.test(trimmed))) {
       return Intent.ACKNOWLEDGMENT;
     }
@@ -125,8 +127,9 @@ function classifyIntent(message: string, historyLength: number): Intent {
     }
   }
 
-  // Greeting on first message
-  if (historyLength === 0 && INTENT_PATTERNS.find(p => p.intent === Intent.GREETING)!.patterns.some(r => r.test(trimmed))) {
+  // Greeting on first user message (count user messages, not total — Hygglo auto-messages create history)
+  const userMessageCount = historyLength > 0 ? Math.ceil(historyLength / 2) : 0; // approximate
+  if (userMessageCount <= 1 && INTENT_PATTERNS.find(p => p.intent === Intent.GREETING)!.patterns.some(r => r.test(trimmed))) {
     return Intent.GREETING;
   }
 
@@ -192,10 +195,19 @@ export function profileRenter(
 ): RenterDNA {
   const words = message.split(/\s+/).length;
 
+  // For very short messages (<4 words), preserve previous DNA — prevents "ok" overriding
+  // a pro filmmaker's profile with style:'terse', energy:'neutral'
+  if (words < 4) {
+    // Only update decision speed (short confirmations = fast decisions)
+    const decisionSpeed: RenterDNA['decisionSpeed'] =
+      /\b(book it|go ahead|let'?s do it|confirmed?|done|i'll take|send the request)\b/i.test(message) ? 'fast'
+      : currentDNA.decisionSpeed;
+    return { ...currentDNA, decisionSpeed };
+  }
+
   // Style: short messages + slang = casual, longer + proper = formal
   const style: RenterDNA['style'] =
     words < 8 && /\b(hey|yeah|yep|cool|cheers|ta|mate|wicked|sick|lol|haha)\b/i.test(message) ? 'casual'
-    : words < 4 ? 'terse'
     : words > 30 && !/\b(hey|yeah|cool|mate)\b/i.test(message) ? 'formal'
     : currentDNA.style;
 
@@ -294,6 +306,10 @@ function determineContextLevel(message: string): 'minimal' | 'standard' | 'compr
   if (/\b(deliver|delivery|courier|postcode|address)\b/i.test(message)) return 'comprehensive';
   if (/\b(bundle|package|together|combo)\b/i.test(message)) return 'comprehensive';
   if (/\b(available|availability|dates|booking)\b/i.test(message)) return 'comprehensive';
+  // Damage, cancellation, complaints need full context (policies, insurance, rental details)
+  if (/\b(scratched|broke|broken|cracked|dropped|damaged|dent|bent|won'?t turn on|not working)\b/i.test(message)) return 'comprehensive';
+  if (/\b(cancel|cancellation|don'?t need|no longer need)\b/i.test(message)) return 'comprehensive';
+  if (/\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund)\b/i.test(message)) return 'comprehensive';
 
   return 'standard';
 }
@@ -341,6 +357,7 @@ export function classifyMessage(
   const isLogisticsMessage = /\b(i'?m here|on my way|waiting|arrived|outside|coming|here now|at the|be there|minutes away)\b/i.test(message);
   const isGoodbyeMessage = /^(thanks?|cheers|ok|okay|no worries|perfect|great|cool|lovely|brilliant|sorted|bye|see you|ta)\b/i.test(message.trim()) && message.trim().length < 80;
   const isSimpleAck = message.trim().split(/\s+/).length <= 5 && /^(yes|yeah|yep|ok|okay|sure|no|nah|confirmed?|done|sent|here|ready)\b/i.test(message.trim());
+  const hasCompetitorMention = /\b(saw.*cheaper|found.*cheaper|another.*rental|competitor|cheaper.*elsewhere|price.*match|beat.*price)\b/i.test(message);
 
   return {
     intent,
@@ -356,5 +373,6 @@ export function classifyMessage(
     isSimpleAck,
     contextLevel,
     momentum,
+    hasCompetitorMention,
   };
 }

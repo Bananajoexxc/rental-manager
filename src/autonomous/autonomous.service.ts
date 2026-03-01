@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional, forwardRef } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService, ToolHandlers } from '../ai/ai.service';
@@ -30,7 +30,55 @@ import { DspyService } from '../dspy/dspy.service';
 import { CouponService } from '../coupon/coupon.service';
 import { PlaywrightService } from '../playwright/playwright.service';
 import { ContentionService } from '../contention/contention.service';
+import { RentalScannerService } from '../rental-scanner/rental-scanner.service';
 import { getVerifiedItems } from '../data/listing-photo-reference';
+import { filterResponse } from '../pipeline/filter';
+import { enforceContract, surgicalContractFix } from '../pipeline/contract';
+import { classifyMessage } from '../pipeline/classify';
+import { DiagnosticService } from '../monitoring/diagnostic.service';
+
+// Negotiation intelligence — builds strategy prompt based on price objection history
+const NEGOTIATION_PATTERNS = /\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for|feels? steep|saw.*cheaper|over.?priced|rip.?off|found.*cheaper|another.*rental|price match|beat.*price|cheaper.*elsewhere|match.*price)\b/i;
+const COMPETITOR_PATTERNS = /\b(saw.*cheaper|found.*cheaper|another.*rental|competitor|cheaper.*elsewhere|price.*match|beat.*price)\b/i;
+
+function buildNegotiationStrategy(structuredState: any, discountContext: string | null): string {
+  const objections = structuredState?.priceObjectionCount || 0;
+  const competitor = structuredState?.competitorMentioned || false;
+  if (objections === 0 && !competitor) return '';
+
+  const parts = ['--- NEGOTIATION GUIDANCE ---'];
+
+  if (competitor) {
+    parts.push(
+      'COMPETITOR MENTIONED: Acknowledge, don\'t dismiss. ' +
+      '"I appreciate you sharing that — our prices reflect professional maintenance and support. Let me see what I can do."',
+    );
+  }
+
+  if (objections === 1) {
+    parts.push(
+      'STANCE: HOLD FIRM. First pushback. Emphasize value: professional gear, flexible logistics, insurance coverage. ' +
+      'Mention multi-day savings if relevant. Do NOT offer discounts yet.',
+    );
+  } else if (objections === 2) {
+    parts.push(
+      'STANCE: OFFER ALTERNATIVES. Second pushback. Suggest: (1) longer rental for better daily rate, (2) alternative gear at lower price point.' +
+      (discountContext ? ' A discount IS available — you may surface it now.' : ''),
+    );
+  } else if (objections >= 3) {
+    parts.push(
+      'STANCE: SOFT YIELD. Third+ pushback.' +
+      (discountContext ? ' Surface the available discount now.' : ' Offer to check with Daniel for a special rate.') +
+      ' Never go below cost. If still unsatisfied, gracefully offer them time to compare options.',
+    );
+  }
+
+  if (structuredState?.lastPriceOffered) {
+    parts.push(`Last price quoted: £${structuredState.lastPriceOffered}. Don't contradict unless offering a discount.`);
+  }
+
+  return parts.join('\n');
+}
 
 export interface HyggloMessage {
   rentalId: string;
@@ -54,6 +102,13 @@ export class AutonomousService {
   private listingIdentityBackfillDone = false;
   private recentlyNotifiedRentals = new Map<number, number>(); // rental DB id → timestamp for new-rental notification dedup
   private readonly RENTAL_NOTIFICATION_DEDUP_TTL_MS = 10 * 60 * 1000; // 10 minute dedup window for rental notifications
+  private timeSlotWarnings = new Map<string, number>(); // rentalId → timestamp for out-of-slot warning dedup
+  private readonly TIME_SLOT_WARNING_TTL_MS = 24 * 60 * 60 * 1000; // 24 hour dedup window for slot warnings
+  private extensionAlerts = new Map<string, number>(); // `rentalId:pickupDate:returnDate` → timestamp for extension alert dedup
+  private readonly EXTENSION_ALERT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hour dedup window for extension alerts
+  private timeExtractHashes = new Map<string, string>(); // rentalId → last transcript hash (skip if unchanged)
+  private timeExtractLowConfidence = new Map<string, { count: number; lastAttempt: number }>(); // backoff for repeated LOW confidence
+  private readonly TIME_EXTRACT_BACKOFF_MS = 6 * 60 * 60 * 1000; // 6 hour backoff after 3 consecutive LOWs
 
   constructor(
     private prisma: PrismaService,
@@ -82,6 +137,8 @@ export class AutonomousService {
     private couponService: CouponService,
     private playwrightService: PlaywrightService,
     private contentionService: ContentionService,
+    @Optional() @Inject(forwardRef(() => RentalScannerService)) private rentalScannerService: RentalScannerService,
+    @Optional() private diagnosticService?: DiagnosticService,
   ) {}
 
   /**
@@ -197,33 +254,50 @@ export class AutonomousService {
 
     if (bookings.length === 0) return;
 
+    // Batch: collect IDs for pickup and return confirmations
+    const returnIds: string[] = [];
+    const pickupIds: string[] = [];
+    const returnBookings: typeof bookings = [];
+    const pickupBookings: typeof bookings = [];
+
     for (const booking of bookings) {
-      // Return phase: pickup already confirmed, return not yet confirmed
       if (booking.pickup_arrival_confirmed && !booking.return_arrival_confirmed) {
-        await this.prisma.booking.update({
-          where: { id: booking.id },
-          data: { return_arrival_confirmed: true },
-        });
-        this.logger.log(`Return arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
-
-        await this.telegramService.sendRentalUpdate(rental.id, {
-          type: 'info', priority: 'normal',
-          data: { message: `✅ ${booking.renter_name} confirmed return arrival` },
-        }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
+        returnIds.push(booking.id);
+        returnBookings.push(booking);
+      } else if (!booking.pickup_arrival_confirmed) {
+        pickupIds.push(booking.id);
+        pickupBookings.push(booking);
       }
-      // Pickup phase: not yet confirmed
-      else if (!booking.pickup_arrival_confirmed) {
-        await this.prisma.booking.update({
-          where: { id: booking.id },
-          data: { pickup_arrival_confirmed: true },
-        });
-        this.logger.log(`Pickup arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
+    }
 
-        await this.telegramService.sendRentalUpdate(rental.id, {
-          type: 'info', priority: 'critical',
-          data: { message: `📍 ${booking.renter_name} has arrived for pickup — head to the meeting point!` },
-        }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
-      }
+    // Batch DB updates (2 queries instead of N)
+    if (returnIds.length > 0) {
+      await this.prisma.booking.updateMany({
+        where: { id: { in: returnIds } },
+        data: { return_arrival_confirmed: true },
+      });
+    }
+    if (pickupIds.length > 0) {
+      await this.prisma.booking.updateMany({
+        where: { id: { in: pickupIds } },
+        data: { pickup_arrival_confirmed: true },
+      });
+    }
+
+    // Notifications still per-booking (different messages per renter)
+    for (const booking of returnBookings) {
+      this.logger.log(`Return arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'info', priority: 'normal',
+        data: { message: `✅ ${booking.renter_name} confirmed return arrival` },
+      }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
+    }
+    for (const booking of pickupBookings) {
+      this.logger.log(`Pickup arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
+      await this.telegramService.sendRentalUpdate(rental.id, {
+        type: 'info', priority: 'critical',
+        data: { message: `📍 ${booking.renter_name} has arrived for pickup — head to the meeting point!` },
+      }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
     }
   }
 
@@ -763,7 +837,7 @@ export class AutonomousService {
       // Read chat messages ONCE — reused for scam detection, chat context, and time extraction
       let initialMessages: { sender: string; content: string; timestamp: string }[] = [];
       try {
-        initialMessages = await this.hyggloService.readMessages(rental.listing_id);
+        initialMessages = await this.hyggloService.readMessages(rental.listing_id, rental.account);
         for (const chatMsg of initialMessages) {
           // Only check renter messages (skip Owner messages)
           if (chatMsg.sender === 'Owner' || chatMsg.sender === 'owner') continue;
@@ -2294,7 +2368,7 @@ export class AutonomousService {
           where: {
             input_summary: { contains: msgContentHash.substring(0, 100) },
             decision_type: 'message',
-            created_at: { gte: new Date(Date.now() - 60_000) },
+            created_at: { gte: new Date(Date.now() - 120_000) },
           },
           select: { id: true },
         });
@@ -2368,27 +2442,32 @@ export class AutonomousService {
         }
 
         // Contention hold gate — check if this rental is being held for a higher-value competitor
-        const contentionHold = await this.contentionService.isHeld(rental.id);
-        if (contentionHold.held) {
-          // Send one-time hold message, then absorb silently
-          await this.contentionService.sendHoldMessageIfNeeded(rental.id, contentionHold.contentionId!);
-          // Store message in conversation history (so context is preserved on release)
-          await this.prisma.conversation.create({
-            data: { chat_id: rental.listing_id, role: 'user', content: msg.content },
-          });
-          await this.prisma.ai_decision.create({
-            data: {
-              rental_id: rental.id,
-              decision_type: 'message',
-              input_summary: `[CONTENTION HOLD] ${msg.content.substring(0, 200)}`,
-              output_summary: 'Message absorbed — rental held for higher-value contention',
-              confidence: 1.0,
-              action_taken: 'contention_hold_absorb',
-              was_sent: false,
-            },
-          });
-          this.logger.log(`Contention hold: absorbed message from ${msg.sender} on rental ${rental.listing_id}`);
-          return;
+        try {
+          const contentionHold = await this.contentionService.isHeld(rental.id);
+          if (contentionHold.held) {
+            // Send one-time hold message, then absorb silently
+            await this.contentionService.sendHoldMessageIfNeeded(rental.id, contentionHold.contentionId!);
+            // Store message in conversation history (so context is preserved on release)
+            await this.prisma.conversation.create({
+              data: { chat_id: rental.listing_id, role: 'user', content: msg.content },
+            });
+            await this.prisma.ai_decision.create({
+              data: {
+                rental_id: rental.id,
+                decision_type: 'message',
+                input_summary: `[CONTENTION HOLD] ${msg.content.substring(0, 200)}`,
+                output_summary: 'Message absorbed — rental held for higher-value contention',
+                confidence: 1.0,
+                action_taken: 'contention_hold_absorb',
+                was_sent: false,
+              },
+            });
+            this.logger.log(`Contention hold: absorbed message from ${msg.sender} on rental ${rental.listing_id}`);
+            return;
+          }
+        } catch (contentionErr) {
+          this.logger.warn(`Contention check failed for ${rental.listing_id}, continuing with response: ${contentionErr.message}`);
+          // Continue processing — responding is more important than contention gating
         }
 
         // Scam detection on incoming message (with scoring)
@@ -2504,9 +2583,9 @@ export class AutonomousService {
         // Retrieve conversation history — 8 recent messages + facts summary from older ones
         const conversationHistory = await this.memoryService.getConversationHistory(chatId, 8);
 
-        // Always refresh conversation summary on new messages — stale summaries cause context amnesia
+        // Refresh conversation summary when enough new messages have arrived (delta ≥ 5)
         try {
-          await this.memoryService.buildConversationSummary(rental.id, chatId, true);
+          await this.memoryService.buildConversationSummary(rental.id, chatId, false);
         } catch {
           // Non-critical — cached summary will be used as fallback
         }
@@ -3032,14 +3111,20 @@ export class AutonomousService {
           }
         }
 
-        // RENTER PROFILE CONTEXT: Always provide full renter history and progress
+        // RENTER PROFILE CONTEXT: Use compact cross-rental summary when available, full context as fallback
         let renterProfileContext = '';
         let currentProfileId: string | undefined;
         try {
           const renterProfile = await this.renterProfileService.getProfileForRental(rental.id);
           if (renterProfile) {
             currentProfileId = renterProfile.id;
-            renterProfileContext = await this.renterProfileService.buildRenterContext(renterProfile.id, rental.id);
+            // Try compact summary first (returning renters — ~150 tokens vs ~400)
+            const compactSummary = await this.renterProfileService.buildCompactCrossRentalSummary(renterProfile.id, rental.id);
+            if (compactSummary) {
+              renterProfileContext = compactSummary;
+            } else {
+              renterProfileContext = await this.renterProfileService.buildRenterContext(renterProfile.id, rental.id);
+            }
           }
         } catch (rpErr) {
           this.logger.debug(`Renter profile context fetch failed: ${rpErr.message}`);
@@ -3305,6 +3390,13 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
         const antiUpsell = (suppressUpsell || isLateStage)
           ? 'Do NOT suggest additional items, accessories, or upgrades in this response. Just answer what the renter asked — keep it focused and concise.'
           : '';
+        // Negotiation strategy — inject if renter has pushed back on price
+        let negotiationStrategy = '';
+        try {
+          const convStateForNeg = await this.followUpService.getStructuredState(rental.id);
+          negotiationStrategy = buildNegotiationStrategy(convStateForNeg, discountContext || null);
+        } catch { /* non-critical */ }
+
         const commercialBlock = [
           pricingInstruction,
           deliveryInstruction,
@@ -3314,6 +3406,7 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           antiUpsell,
           discountContext,
           sameDayInstruction,
+          negotiationStrategy,
         ].filter(Boolean).join('\n');
 
         // Block 3: STAGE & RENTER (stage guidance + rental stage + renter profile)
@@ -3706,6 +3799,32 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           .replace(/^\s+|\s+$/g, '')             // Trim leading/trailing whitespace
           .replace(/  +/g, ' ');                 // Collapse double spaces
 
+        // PIPELINE SAFETY NET: Apply FILTER + CONTRACT from pipeline (catches physical presence,
+        // fabricated quotes, internal actions, upsell violations, intent contract breaches)
+        try {
+          const pipelineClassification = classifyMessage(msg.content, conversationHistory);
+          // L6 FILTER
+          const filterResult = filterResponse(response.content, conversationHistory, msg.content, rental.account || 'dbcinema', currentStage);
+          if (filterResult.issues.length > 0) {
+            response.content = filterResult.response;
+            this.logger.debug(`[Autonomous] Pipeline FILTER: ${filterResult.issues.length} issues fixed: ${filterResult.issues.map(i => i.type).join(', ')}`);
+          }
+          // L7 CONTRACT
+          const contractResult = enforceContract(response.content, pipelineClassification, hasPricingIntent);
+          if (!contractResult.passed) {
+            const blockViolations = contractResult.violations.filter(v => v.severity === 'block');
+            if (blockViolations.length > 0) {
+              const surgicalFix = surgicalContractFix(response.content, contractResult.violations);
+              if (surgicalFix) {
+                response.content = surgicalFix;
+                this.logger.debug(`[Autonomous] Pipeline CONTRACT: surgical fix applied (${blockViolations.length} violations)`);
+              }
+            }
+          }
+        } catch (pipelineErr) {
+          this.logger.debug(`[Autonomous] Pipeline safety layers skipped: ${(pipelineErr as Error).message}`);
+        }
+
         // FEATURE 3: Extract conversation state changes from this exchange (best-effort, non-blocking)
         try {
           const stateExtraction = await this.aiService.processExtraction(
@@ -3715,13 +3834,53 @@ Renter message: "${msg.content.substring(0, 300)}"
 
 Return ONLY a JSON object with changed fields (omit unchanged):
 {"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false,"rentalNotes":["needs extra batteries","shooting outdoors"]}
-rentalNotes: include anything the OWNER should know — extras requested, special conditions, delivery preferences, location specifics, project details, fragile items, time constraints. Only add genuinely useful notes, not generic info.`,
+rentalNotes: ONLY include if the renter requested something unusual that the owner must act on or remember. Examples: "needs FX3 handle", "approved out-of-hours pickup at 8pm", "agreed 10% discount", "wants extra V-mount battery", "fragile antique lens — handle with care". Do NOT include: status updates, arrival times, confirmations of standard terms, location directions, generic booking info, or anything already captured in other fields above.`,
             { maxTokens: 150 },
           );
           // Strip markdown fences if present, then parse
           const jsonStr = stateExtraction.content.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
           const parsed = JSON.parse(jsonStr);
           await this.followUpService.mergeStructuredState(rental.id, parsed);
+
+          // Negotiation intelligence: track price objections + competitor mentions
+          if (NEGOTIATION_PATTERNS.test(msg.content)) {
+            try {
+              const currentNegState = await this.followUpService.getStructuredState(rental.id);
+              const currentObjections = (currentNegState as any).priceObjectionCount || 0;
+              const newObjections = currentObjections + 1;
+              const stance = newObjections >= 3 ? 'yield' : newObjections >= 2 ? 'flexible' : 'firm';
+              const competitor = COMPETITOR_PATTERNS.test(msg.content) || !!(currentNegState as any).competitorMentioned;
+
+              const negUpdate: Record<string, any> = {
+                priceObjectionCount: newObjections,
+                negotiationStance: stance,
+              };
+              if (COMPETITOR_PATTERNS.test(msg.content)) {
+                negUpdate.competitorMentioned = true;
+              }
+              // Extract last price from bot response
+              const priceMatch = response.content.match(/£(\d+(?:\.\d{2})?)/);
+              if (priceMatch) {
+                negUpdate.lastPriceOffered = parseFloat(priceMatch[1]);
+              }
+              await this.followUpService.mergeStructuredState(rental.id, negUpdate);
+
+              // Log negotiation decision
+              await this.prisma.ai_decision.create({
+                data: {
+                  rental_id: rental.id,
+                  decision_type: 'negotiation_response',
+                  input_summary: `Objection #${newObjections}. Competitor: ${competitor}. Last: £${priceMatch?.[1] || '?'}`,
+                  output_summary: `Stance: ${stance}. Discount available: ${!!discountContext}`,
+                  confidence: 1.0,
+                  action_taken: `negotiation_${stance}`,
+                },
+              });
+              this.logger.log(`[Negotiation] Rental ${rental.listing_id}: objection #${newObjections}, stance=${stance}, competitor=${competitor}`);
+            } catch (negErr) {
+              this.logger.debug(`Negotiation state tracking failed: ${(negErr as Error).message}`);
+            }
+          }
 
           // Flush new notes to booking records immediately if bookings exist
           if (parsed.rentalNotes?.length) {
@@ -4392,22 +4551,29 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     rental: any,
     triggerMsg?: HyggloMessage,
   ): Promise<{ pickupTime?: string; returnTime?: string; pickupDate?: string; returnDate?: string } | null> {
-    // 1. Fetch full conversation (Hygglo API → DB fallback)
+    // 1. Fetch full conversation (Scanner cache → Hygglo API → DB fallback)
     const chatId = `rental:${rental.id}`;
     let messages: { sender?: string; role?: string; content: string; timestamp?: string }[] = [];
 
     if (rental.listing_id) {
-      try {
-        const hyggloMessages = await Promise.race([
-          this.hyggloService.readMessages(rental.listing_id),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000)),
-        ]);
-        if (hyggloMessages.length > 0) {
-          messages = hyggloMessages.slice(-20);
-          this.cacheMessagesInDb(chatId, hyggloMessages).catch(() => {});
+      // Try scanner message cache first (avoids redundant Hygglo API call)
+      const cachedMessages = this.rentalScannerService?.getCachedMessages(rental.listing_id);
+      if (cachedMessages && cachedMessages.length > 0) {
+        messages = cachedMessages.slice(-20);
+        this.logger.debug(`extractAndUpdateTimes: using scanner cache for ${rental.title} (${cachedMessages.length} msgs)`);
+      } else {
+        try {
+          const hyggloMessages = await Promise.race([
+            this.hyggloService.readMessages(rental.listing_id, rental.account),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000)),
+          ]);
+          if (hyggloMessages.length > 0) {
+            messages = hyggloMessages.slice(-20);
+            this.cacheMessagesInDb(chatId, hyggloMessages).catch(() => {});
+          }
+        } catch (err) {
+          this.logger.debug(`extractAndUpdateTimes: Hygglo API failed for ${rental.title}: ${err.message}`);
         }
-      } catch (err) {
-        this.logger.debug(`extractAndUpdateTimes: Hygglo API failed for ${rental.title}: ${err.message}`);
       }
     }
 
@@ -4448,6 +4614,39 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     if (!/\d{1,2}\s*(am|pm|:\d{2})|\bmorning\b|\bevening\b|\bafternoon\b|\bnoon\b/i.test(transcript)) {
       this.logger.debug(`extractAndUpdateTimes: no time content in ${messages.length} msgs for ${rental.title}`);
       return null;
+    }
+
+    // 2b. Change detection — skip if transcript hasn't changed since last extraction (cron-only optimization)
+    const rentalKey = rental.id || rental.listing_id;
+    // Compute hash in outer scope so it's accessible for DB persist after successful extraction
+    const transcriptHash = `${messages.length}:${transcript.slice(-200)}`;
+    if (!triggerMsg) {
+      // DB-backed check (survives restarts)
+      try {
+        const dbRental = await this.prisma.rental.findUnique({
+          where: { id: rental.id },
+          select: { transcript_hash: true },
+        });
+        if (dbRental?.transcript_hash === transcriptHash) {
+          this.logger.debug(`extractAndUpdateTimes: transcript unchanged (DB) for ${rental.title}, skipping`);
+          this.diagnosticService?.log('autonomous', 'transcript_skip', `Skipped unchanged transcript for ${rental.title}`, { rentalId: rental.id, title: rental.title }, rental.id);
+          return null;
+        }
+      } catch { /* non-critical — fall through to in-memory check */ }
+      // In-memory check (same-cycle dedup)
+      const lastHash = this.timeExtractHashes.get(rentalKey);
+      if (lastHash === transcriptHash) {
+        this.logger.debug(`extractAndUpdateTimes: transcript unchanged for ${rental.title}, skipping AI call`);
+        return null;
+      }
+      this.timeExtractHashes.set(rentalKey, transcriptHash);
+
+      // LOW confidence backoff — skip if consistently low
+      const lowConf = this.timeExtractLowConfidence.get(rentalKey);
+      if (lowConf && lowConf.count >= 3 && (Date.now() - lowConf.lastAttempt) < this.TIME_EXTRACT_BACKOFF_MS) {
+        this.logger.debug(`extractAndUpdateTimes: LOW confidence backoff for ${rental.title} (${lowConf.count} consecutive LOWs)`);
+        return null;
+      }
     }
 
     // Deferral detection on trigger message
@@ -4515,7 +4714,7 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       `- Pickup can be the EVENING BEFORE the rental starts (e.g., evening of ${startDateStr} minus 1 day).\n` +
       `- Return can be the MORNING AFTER the rental ends (e.g., morning of ${endDateStr} plus 1 day).\n` +
       `- Determine the actual date for pickup and return from context (day mentioned, "tomorrow", "next day", etc).\n` +
-      `- If no specific date context, default pickup to ${startDateStr} and return to ${endDateStr}.\n\n` +
+      `- If no specific date context, ALWAYS default pickup to ${startDateStr} and return to ${endDateStr}. NEVER output NONE for dates — use the rental period dates as the default.\n\n` +
       `DELIVERY METHOD DETECTION:\n` +
       `- Determine if pickup and/or return is via Addison Lee courier DELIVERY or in-person COLLECTION.\n` +
       `- ONLY mark as DELIVERY if the courier was ACTUALLY BOOKED/CONFIRMED in the conversation.\n` +
@@ -4531,10 +4730,10 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
       `- If conversation is proceeding normally, set STATUS to ACTIVE.\n\n` +
       `Respond ONLY with these nine lines:\n` +
       `PICKUP_TIME: HH:MM or NONE\n` +
-      `PICKUP_DATE: YYYY-MM-DD or NONE\n` +
+      `PICKUP_DATE: YYYY-MM-DD (default to ${startDateStr} if unknown — NEVER output NONE)\n` +
       `PICKUP_METHOD: DELIVERY or COLLECTION or UNKNOWN\n` +
       `RETURN_TIME: HH:MM or NONE\n` +
-      `RETURN_DATE: YYYY-MM-DD or NONE\n` +
+      `RETURN_DATE: YYYY-MM-DD (default to ${endDateStr} if unknown — NEVER output NONE)\n` +
       `RETURN_METHOD: DELIVERY or COLLECTION or UNKNOWN\n` +
       `STATUS: ACTIVE or CANCELLED\n` +
       `CONFIDENCE: HIGH or LOW\n` +
@@ -4549,7 +4748,7 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     let returnMethod: string | undefined;
 
     try {
-      const response = await this.aiService.processExtractionComplex(extractionPrompt);
+      const response = await this.aiService.processExtraction(extractionPrompt, { maxTokens: 300 });
       const pMatch = response.content.match(/PICKUP_TIME:\s*(\d{1,2}:\d{2})/);
       const rMatch = response.content.match(/RETURN_TIME:\s*(\d{1,2}:\d{2})/);
       const pdMatch = response.content.match(/PICKUP_DATE:\s*(\d{4}-\d{2}-\d{2})/);
@@ -4594,11 +4793,15 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
         return null;
       }
 
-      // LOW confidence — skip the update entirely
+      // LOW confidence — skip the update entirely + track for backoff
       if (confMatch && confMatch[1].toUpperCase() === 'LOW') {
-        this.logger.debug(`extractAndUpdateTimes: LOW confidence for ${rental.title}, skipping`);
+        const existing = this.timeExtractLowConfidence.get(rentalKey) || { count: 0, lastAttempt: 0 };
+        this.timeExtractLowConfidence.set(rentalKey, { count: existing.count + 1, lastAttempt: Date.now() });
+        this.logger.debug(`extractAndUpdateTimes: LOW confidence for ${rental.title}, skipping (${existing.count + 1} consecutive)`);
         return null;
       }
+      // HIGH confidence — reset backoff counter
+      if (rentalKey) this.timeExtractLowConfidence.delete(rentalKey);
     } catch (aiErr) {
       this.logger.debug(`extractAndUpdateTimes AI failed for ${rental.title}: ${aiErr.message}`);
       return null;
@@ -4633,13 +4836,20 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
         if (returnOutsideSlot) returnTime = undefined;
         if (!pickupTime && !returnTime) return null;
       } else {
-        // Batch re-extraction: accept the time (already agreed in conversation) but warn Daniel
-        this.logger.warn(`Time(s) outside slots for ${rental.title}: ${parts.join(', ')} — accepted from conversation history`);
-        try {
-          await this.telegramService.sendProactiveMessage(
-            `\u26a0\ufe0f *Out-of-slot time* — ${rental.title}\n${parts.join(', ')}\nAccepted from conversation (already agreed)`,
-          );
-        } catch { /* best-effort */ }
+        // Batch re-extraction: accept the time (already agreed in conversation) but warn Daniel ONCE
+        const slotKey = `${rental.id}:${pickupTime || ''}:${returnTime || ''}`;
+        const lastWarned = this.timeSlotWarnings.get(slotKey);
+        if (!lastWarned || Date.now() - lastWarned > this.TIME_SLOT_WARNING_TTL_MS) {
+          this.logger.warn(`Time(s) outside slots for ${rental.title}: ${parts.join(', ')} — accepted from conversation history`);
+          this.timeSlotWarnings.set(slotKey, Date.now());
+          try {
+            await this.telegramService.sendProactiveMessage(
+              `\u26a0\ufe0f *Out-of-slot time* — ${rental.title}\n${parts.join(', ')}\nAccepted from conversation (already agreed)`,
+            );
+          } catch { /* best-effort */ }
+        } else {
+          this.logger.debug(`[SlotWarningDedup] Suppressed repeat slot warning for ${rental.title} (sent ${Math.round((Date.now() - lastWarned) / 60000)}m ago)`);
+        }
       }
     }
 
@@ -4766,65 +4976,88 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     // 8. Save times — always overwrite with conversation-level truth
     await this.calendarService.updateBookingTimes(rental.id, pickupTime, returnTime, pickupDate, returnDate, pickupMethod, returnMethod);
 
-    // 9. Extension detection: if pickup/return dates fall outside rental period, alert Daniel
+    // Persist transcript hash to DB (survives restarts — prevents redundant AI calls)
+    try {
+      await this.prisma.rental.update({
+        where: { id: rental.id },
+        data: { transcript_hash: transcriptHash },
+      });
+    } catch { /* non-critical */ }
+
+    // 9. Extension detection: if pickup/return dates fall outside rental period, alert Daniel (once per 24h per rental+date combo)
     const rentalStartDate = rental.start_date ? new Date(rental.start_date) : null;
     const rentalEndDate = rental.end_date ? new Date(rental.end_date) : null;
+    const extAlertKey = `${rental.id}:${pickupDate || ''}:${returnDate || ''}`;
+    const lastExtAlert = this.extensionAlerts.get(extAlertKey);
+    const extAlertSuppressed = lastExtAlert && (Date.now() - lastExtAlert < this.EXTENSION_ALERT_TTL_MS);
 
-    if (rentalStartDate && pickupDate) {
-      const pDate = new Date(pickupDate);
-      const daysBefore = (rentalStartDate.getTime() - pDate.getTime()) / 86400000;
-      if (daysBefore > 1.5) {
-        this.logger.warn(`Extension needed: ${rental.title} pickup ${pickupDate} is ${daysBefore.toFixed(1)}d before start`);
-        this.telegramService.sendDecisionPrompt({
-          type: 'escalation',
-          rentalId: String(rental.id),
-          listingId: listingId || '',
-          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
-          renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
-          renterLastMessage: triggerMsg?.content || '',
-          contextSummary: `Pickup ${pickupDate} is ${daysBefore.toFixed(0)}d before rental start ${rentalStartDate.toISOString().slice(0, 10)}. Extension needed?`,
-          displayText:
-            `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
-            `\u251c \ud83d\udce6 ${rental.title}\n` +
-            `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info}\n` +
-            `\u251c \ud83d\udcc5 Rental: ${rentalStartDate.toISOString().slice(0, 10)} to ${rentalEndDate?.toISOString().slice(0, 10) || '?'}\n` +
-            `\u2514 \u26a0\ufe0f Pickup: ${pickupDate} (${daysBefore.toFixed(0)} days early)`,
-          holdMessageSent: false,
-          options: [
-            { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover pickup date ${pickupDate}` },
-            { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept early pickup without extension` },
-            { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
-          ],
-        });
+    if (!extAlertSuppressed) {
+      let extAlertFired = false;
+
+      if (rentalStartDate && pickupDate) {
+        const pDate = new Date(pickupDate);
+        const daysBefore = (rentalStartDate.getTime() - pDate.getTime()) / 86400000;
+        if (daysBefore > 1.5) {
+          this.logger.warn(`Extension needed: ${rental.title} pickup ${pickupDate} is ${daysBefore.toFixed(1)}d before start`);
+          this.telegramService.sendDecisionPrompt({
+            type: 'escalation',
+            rentalId: String(rental.id),
+            listingId: listingId || '',
+            account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+            renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
+            renterLastMessage: triggerMsg?.content || '',
+            contextSummary: `Pickup ${pickupDate} is ${daysBefore.toFixed(0)}d before rental start ${rentalStartDate.toISOString().slice(0, 10)}. Extension needed?`,
+            displayText:
+              `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
+              `\u251c \ud83d\udce6 ${rental.title}\n` +
+              `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info}\n` +
+              `\u251c \ud83d\udcc5 Rental: ${rentalStartDate.toISOString().slice(0, 10)} to ${rentalEndDate?.toISOString().slice(0, 10) || '?'}\n` +
+              `\u2514 \u26a0\ufe0f Pickup: ${pickupDate} (${daysBefore.toFixed(0)} days early)`,
+            holdMessageSent: false,
+            options: [
+              { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover pickup date ${pickupDate}` },
+              { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept early pickup without extension` },
+              { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
+            ],
+          });
+          extAlertFired = true;
+        }
       }
-    }
-    if (rentalEndDate && returnDate) {
-      const rDate = new Date(returnDate);
-      const daysAfter = (rDate.getTime() - rentalEndDate.getTime()) / 86400000;
-      if (daysAfter > 0.5) {
-        this.logger.warn(`Extension needed: ${rental.title} return ${returnDate} is ${daysAfter.toFixed(1)}d after end`);
-        this.telegramService.sendDecisionPrompt({
-          type: 'escalation',
-          rentalId: String(rental.id),
-          listingId: listingId || '',
-          account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
-          renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
-          renterLastMessage: triggerMsg?.content || '',
-          contextSummary: `Return ${returnDate} is ${daysAfter.toFixed(0)}d after rental end ${rentalEndDate.toISOString().slice(0, 10)}. Extension needed?`,
-          displayText:
-            `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
-            `\u251c \ud83d\udce6 ${rental.title}\n` +
-            `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info}\n` +
-            `\u251c \ud83d\udcc5 Rental: ${rentalStartDate?.toISOString().slice(0, 10) || '?'} to ${rentalEndDate.toISOString().slice(0, 10)}\n` +
-            `\u2514 \u26a0\ufe0f Return: ${returnDate} (${daysAfter.toFixed(0)} days late)`,
-          holdMessageSent: false,
-          options: [
-            { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover return date ${returnDate}` },
-            { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept late return without extension` },
-            { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
-          ],
-        });
+      if (rentalEndDate && returnDate) {
+        const rDate = new Date(returnDate);
+        const daysAfter = (rDate.getTime() - rentalEndDate.getTime()) / 86400000;
+        if (daysAfter > 0.5) {
+          this.logger.warn(`Extension needed: ${rental.title} return ${returnDate} is ${daysAfter.toFixed(1)}d after end`);
+          this.telegramService.sendDecisionPrompt({
+            type: 'escalation',
+            rentalId: String(rental.id),
+            listingId: listingId || '',
+            account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+            renterName: triggerMsg?.sender || rental.renter_info || 'Unknown',
+            renterLastMessage: triggerMsg?.content || '',
+            contextSummary: `Return ${returnDate} is ${daysAfter.toFixed(0)}d after rental end ${rentalEndDate.toISOString().slice(0, 10)}. Extension needed?`,
+            displayText:
+              `\ud83d\udcc5 *EXTENSION MAY BE NEEDED*\n\n` +
+              `\u251c \ud83d\udce6 ${rental.title}\n` +
+              `\u251c \ud83d\udc64 ${triggerMsg?.sender || rental.renter_info}\n` +
+              `\u251c \ud83d\udcc5 Rental: ${rentalStartDate?.toISOString().slice(0, 10) || '?'} to ${rentalEndDate.toISOString().slice(0, 10)}\n` +
+              `\u2514 \u26a0\ufe0f Return: ${returnDate} (${daysAfter.toFixed(0)} days late)`,
+            holdMessageSent: false,
+            options: [
+              { label: 'Book extension', emoji: '\ud83d\udcc5', intent: 'approve', aiInstruction: `Book extension to cover return date ${returnDate}` },
+              { label: 'Accept as-is', emoji: '\u2705', intent: 'approve', aiInstruction: `Accept late return without extension` },
+              { label: 'Ask renter to adjust', emoji: '\ud83d\udcac', intent: 'custom', aiInstruction: '' },
+            ],
+          });
+          extAlertFired = true;
+        }
       }
+
+      if (extAlertFired) {
+        this.extensionAlerts.set(extAlertKey, Date.now());
+      }
+    } else {
+      this.logger.debug(`[ExtAlertDedup] Suppressed repeat extension alert for ${rental.title} (sent ${Math.round((Date.now() - lastExtAlert!) / 60000)}m ago)`);
     }
 
     // 10. Update follow_up_state
@@ -4913,8 +5146,13 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
     if (messageMatch) {
       let messageText = messageMatch[1].trim();
 
-      // Strip any markdown bold wrappers the AI might add (authority says plain text only)
-      messageText = messageText.replace(/^\*\*(.+?)\*\*$/s, '$1').trim();
+      // Strip any markdown formatting the AI might add (authority says plain text only)
+      messageText = messageText
+        .replace(/\]\]+/g, '')                 // Strip orphaned ]] brackets
+        .replace(/(\*{2,}|_{2,}|#{1,})/g, '') // Strip markdown bold/italic/headers
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Strip markdown links, keep text
+        .replace(/\n{3,}/g, '\n\n')           // Collapse triple+ newlines
+        .trim();
 
       // Guard: reject messages that are clearly internal AI decisions, not customer-facing text
       // Broadened patterns to catch edge cases like "None - escalate to Daniel first."
@@ -4977,6 +5215,10 @@ rentalNotes: include anything the OWNER should know — extras requested, specia
   async autoExtractAndFixTimes() {
     try {
       const now = new Date();
+      const hour = now.getUTCHours();
+      // Quiet hours 2-7 AM UTC — skip Hygglo + AI API calls at night
+      if (hour >= 2 && hour < 7) return;
+
       const next7d = new Date(now.getTime() + 7 * 86400000);
 
       // Find confirmed bookings starting within 7 days or ongoing

@@ -11,6 +11,7 @@ import { DemandModule } from '../demand/demand.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 import { FollowUpModule } from '../follow-up/follow-up.module';
 import { ContentionModule } from '../contention/contention.module';
+import { RenterProfileModule } from '../renter-profile/renter-profile.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ContentionModule } from '../contention/contention.module';
     ConversationStageModule,
     FollowUpModule,
     ContentionModule,
+    RenterProfileModule,
   ],
   providers: [PipelineService],
   exports: [PipelineService],

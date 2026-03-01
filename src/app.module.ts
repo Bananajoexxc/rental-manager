@@ -43,6 +43,7 @@ import { SellRecommenderModule } from './sell-recommender/sell-recommender.modul
 import { PipelineModule } from './pipeline/pipeline.module';
 import { ContentionModule } from './contention/contention.module';
 import { ListingCreatorModule } from './listing-creator/listing-creator.module';
+import { ConversationArchiveModule } from './conversation-archive/conversation-archive.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { ListingCreatorModule } from './listing-creator/listing-creator.module';
     PipelineModule,
     ContentionModule,
     ListingCreatorModule,
+    ConversationArchiveModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -32,21 +32,8 @@ export function getMarketingListingItems(): string[] {
   return marketingListingItems;
 }
 
-// --- Section 1: Identity ---
-
-function buildIdentitySection(account: string): string {
-  if (account === 'leo') {
-    return `You are Leo Adams — an individual gear rental owner.
-VOICE: Use "I" and "my". Casual, warm, slightly chill. Say "mate", "cheers", "sorted", "no worries".
-EXAMPLES: "Yeah mate, I've got the FX3 available — sorted!" / "Cheers for confirming, I'll get everything prepped."
-AUTHORITY: You ARE Leo, the owner. For business decisions (pricing, discounts, special requests) you can't resolve from your rules, just say "let me check on that" and hold — NEVER say "let me check with the owner" or reference anyone else. You are the owner.`;
-  }
-
-  return `You are Daniel from DB Cinema Rentals — a professional rental business.
-VOICE: Use "our" and "the gear". Professional, concise, human. Efficient but not cold.
-EXAMPLES: "The FX3 is available for those dates. Shall I confirm?" / "Thanks for getting back to us. Everything's prepped."
-AUTHORITY: You represent Daniel. Cannot make business decisions on his behalf. NEVER invent policies or requirements not in your rules — escalate to Daniel when unsure.`;
-}
+// Section 1: Identity — now handled by DB 'identity' + 'communication_style' prompt components.
+// buildIdentitySection() removed to eliminate duplication (~150 tokens saved per message).
 
 // --- Section 2: Renter Adaptation ---
 
@@ -124,15 +111,16 @@ function buildFactsSection(facts: FactPack, classification: MessageClassificatio
   // Listing inventory context
   if (facts.listingInventoryContext) parts.push(facts.listingInventoryContext);
 
-  // Pricing
+  // Pricing — disambiguate standalone vs bundle/kit
   if (facts.pricing) {
     for (const p of facts.pricing.itemPrices) {
-      parts.push(`${p.itemName}: £${p.dailyMin}-${p.dailyMax}/day`);
+      parts.push(`${p.itemName} (standalone item): £${p.dailyMin}-${p.dailyMax}/day`);
     }
     if (facts.pricing.bundlePrices) {
       for (const b of facts.pricing.bundlePrices) {
-        parts.push(`Bundle: ${b.itemName}: £${b.dailyMin}-${b.dailyMax}/day`);
+        parts.push(`BUNDLE: ${b.itemName} (complete kit): £${b.dailyMin}-${b.dailyMax}/day`);
       }
+      parts.push('NOTE: Bundle/kit prices are for the COMPLETE kit together. Individual prices are for one item only. Match the price to what the renter is actually booking.');
     }
     parts.push(facts.pricing.multiDayNote);
   }
@@ -160,6 +148,7 @@ function buildFactsSection(facts: FactPack, classification: MessageClassificatio
   if (state.upsellAttempted) stateLines.push('Upselling already attempted — do NOT upsell again');
   if (state.priceQuoted) stateLines.push(`Last quoted: £${state.priceQuoted}`);
   if (state.deliveryDiscussed) stateLines.push('Delivery already discussed');
+  if (state.unavailabilityMentioned) stateLines.push('IMPORTANT: You already told this renter about item unavailability — do NOT repeat the warning. If they bring it up, acknowledge briefly and move forward (suggest alternatives or ask how else you can help).');
   if (stateLines.length > 0) {
     parts.push(`CONVERSATION STATE:\n${stateLines.join('\n')}\nDo NOT re-ask questions above. Do NOT repeat established facts.`);
   }
@@ -234,6 +223,48 @@ function buildSalesDirectiveSection(
   return parts.length > 0 ? parts.join('\n') : '';
 }
 
+// --- Section: Negotiation Strategy ---
+
+function buildNegotiationStrategy(facts: FactPack): string {
+  const state = facts.conversationState;
+  const objections = state.priceObjectionCount || 0;
+  const competitor = state.competitorMentioned || false;
+  if (objections === 0 && !competitor) return '';
+
+  const parts = ['--- NEGOTIATION GUIDANCE ---'];
+
+  if (competitor) {
+    parts.push(
+      'COMPETITOR MENTIONED: Acknowledge, don\'t dismiss. ' +
+      '"I appreciate you sharing that — our prices reflect professional maintenance and support. Let me see what I can do."',
+    );
+  }
+
+  if (objections === 1) {
+    parts.push(
+      'STANCE: HOLD FIRM. First pushback. Emphasize value: professional gear, flexible logistics, insurance coverage. ' +
+      'Mention multi-day savings if relevant. Do NOT offer discounts yet.',
+    );
+  } else if (objections === 2) {
+    parts.push(
+      'STANCE: OFFER ALTERNATIVES. Second pushback. Suggest: (1) longer rental for better daily rate, (2) alternative gear at lower price point.' +
+      (facts.discountContext ? ' A discount IS available — you may surface it now.' : ''),
+    );
+  } else if (objections >= 3) {
+    parts.push(
+      'STANCE: SOFT YIELD. Third+ pushback.' +
+      (facts.discountContext ? ' Surface the available discount now.' : ' Offer to check with Daniel for a special rate.') +
+      ' Never go below cost. If still unsatisfied, gracefully offer them time to compare options.',
+    );
+  }
+
+  if (state.lastPriceOffered) {
+    parts.push(`Last price quoted: £${state.lastPriceOffered}. Don't contradict unless offering a discount.`);
+  }
+
+  return parts.join('\n');
+}
+
 // --- Main Assembly ---
 
 export function assemblePrompt(
@@ -245,8 +276,8 @@ export function assemblePrompt(
   const account = facts.rental?.account || 'dbcinema';
   const businessName = account === 'leo' ? 'Leo Adams' : 'DB Cinema Rentals';
 
-  // SECTION 1: Identity
-  const identitySection = buildIdentitySection(account);
+  // SECTION 1: Identity — now handled by DB 'identity' + 'communication_style' prompt components
+  // buildIdentitySection() removed from here to avoid duplication (~150 tokens saved)
 
   // SECTION 2: Renter adaptation
   const renterSection = buildRenterSection(classification.renterDNA);
@@ -257,18 +288,29 @@ export function assemblePrompt(
   // SECTION 4: Verified facts from FactPack
   const factsSection = buildFactsSection(facts, classification);
 
-  // Behavioral constraints — always present but compact
+  // Behavioral constraints — compact, unique items only (voice/location/timeslots/markdown/Hygglo covered by DB prompt components)
+  // Contract-aware: inject intent-specific constraints pre-generation (prevents violations > corrects them)
+  const intentConstraints: string[] = [];
+  if (classification.intent === 'goodbye') {
+    intentConstraints.push('Keep response under 100 chars. Do NOT ask questions or suggest items.');
+  }
+  if (classification.intent === 'acknowledgment') {
+    intentConstraints.push('Brief confirmation only. No follow-up questions, no upsells, no lengthy explanations.');
+  }
+  if (facts.conversationState?.upsellAttempted || facts.suppressUpsell) {
+    intentConstraints.push('Do NOT suggest additional items or bundles. Answer only what was asked.');
+  }
+  if (classification.hasPricingIntent && facts.pricing) {
+    intentConstraints.push('Only state prices from the FACTS section above. Do NOT invent or estimate prices.');
+  }
   const constraints = [
-    `VOICE: ${account === 'leo' ? 'Use "I" and "my" — you\'re Leo, an individual.' : 'Use "our" and "the gear" — you represent the business.'}`,
-    'NEVER mention "Hygglo" — say "the platform" or "the booking system".',
     'Never prefix response with timestamps.',
     'RETURN CLOSURE: If asked to mark rental returned, explain inspection takes 24-72 hours.',
-    'LOCATION: NEVER ask "where are you based?" — instead weave the collection area into your availability answer naturally. For non-central listings: use an excuse (rented out there, pulled for service, etc.) then offer the central location. For central listings: say it is still available there. E.g. "that item is currently rented out at [listed location] but available for collection near ' + (account === 'leo' ? 'Charing Cross' : 'Trafalgar Square area') + ' — hope that works?" Only give rough area, not exact address, until booking is verified.',
-    'TIME SLOTS: ONLY 10am-12pm and 7-9pm. NEVER accept times outside these (e.g. 4pm, 2pm, 9am). If renter proposes off-hours, say "available slots are 10am-12pm and 7-9pm — which works for you?" EARLY ARRIVALS: If renter wants to come earlier than scheduled or on short notice ("finished early, can I come in 15 mins?") — NEVER accept. Say "let me check I can make that work" and escalate.',
-    'Lead with the answer. Short paragraphs. Plain text, no markdown. No preamble.',
+    'EARLY ARRIVALS: If renter wants to come earlier than scheduled or on short notice — NEVER accept. Say "let me check I can make that work" and escalate.',
     facts.resolvedItems.length > 0 || classification.hasPricingIntent
       ? `INVENTORY: ${getInventoryItemNames().join(', ')}.`
       : '',
+    ...intentConstraints,
   ].filter(Boolean).join('\n');
 
   // KNOWLEDGE FENCE: Numbered facts + explicit boundary
@@ -291,6 +333,9 @@ You have NO other information beyond KNOWN FACTS above.
   // SECTION: Sales directive (promoted stage guidance + momentum + salesAction)
   const salesDirective = buildSalesDirectiveSection(monologue, facts, classification);
 
+  // SECTION: Negotiation strategy (price objection handling)
+  const negotiationStrategy = buildNegotiationStrategy(facts);
+
   // Build additionalContext as a single string
   const contextParts = [
     `--- RENTER ---\n${renterSection}`,
@@ -298,6 +343,9 @@ You have NO other information beyond KNOWN FACTS above.
   ];
   if (salesDirective) {
     contextParts.push(`--- SALES DIRECTIVE ---\n${salesDirective}`);
+  }
+  if (negotiationStrategy) {
+    contextParts.push(negotiationStrategy);
   }
   contextParts.push(
     `--- FACTS ---\n${factsSection}`,
@@ -324,7 +372,7 @@ You have NO other information beyond KNOWN FACTS above.
       rules: facts.rules,
       memories: '', // Facts are now inlined via additionalContext
       conversationHistory: facts.conversationHistory,
-      rentalContext: `ACTIVE ACCOUNT: ${businessName}\n${identitySection}`,
+      rentalContext: `ACTIVE ACCOUNT: ${businessName}`,
       additionalContext,
       maxTokens,
     },

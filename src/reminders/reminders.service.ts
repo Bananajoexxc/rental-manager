@@ -30,6 +30,9 @@ export class RemindersService {
   @Cron('* * * * *')
   async checkReminders() {
     const now = new Date();
+    const hour = now.getUTCHours();
+    // Quiet hours 2-7 AM UTC — no renters active, skip all API calls
+    if (hour >= 2 && hour < 7) return;
 
     try {
       // Check for pickups in next 5 minutes that haven't been reminded
@@ -215,6 +218,9 @@ export class RemindersService {
   async autoAssignMissingTimes() {
     try {
       const now = new Date();
+      const hour = now.getUTCHours();
+      // Quiet hours 2-7 AM UTC — don't send time assignment messages at night
+      if (hour >= 2 && hour < 7) return;
       // Expanded window: bookings starting within next 24h OR currently ongoing
       const next24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 

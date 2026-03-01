@@ -55,14 +55,14 @@ export function buildKnownFacts(facts: FactPack): string[] {
   // Verified listing item
   if (facts.verifiedListingItem) entries.push(facts.verifiedListingItem);
 
-  // Pricing
+  // Pricing — disambiguate standalone vs bundle/kit
   if (facts.pricing) {
     for (const p of facts.pricing.itemPrices) {
-      entries.push(`${p.itemName} price: £${p.dailyMin}-${p.dailyMax}/day`);
+      entries.push(`${p.itemName} standalone price: £${p.dailyMin}-${p.dailyMax}/day`);
     }
     if (facts.pricing.bundlePrices) {
       for (const b of facts.pricing.bundlePrices) {
-        entries.push(`Bundle ${b.itemName}: £${b.dailyMin}-${b.dailyMax}/day`);
+        entries.push(`BUNDLE ${b.itemName} kit price: £${b.dailyMin}-${b.dailyMax}/day`);
       }
     }
   }
@@ -86,8 +86,15 @@ export function buildKnownFacts(facts: FactPack): string[] {
     }
   }
 
-  // Location — account-aware (Leo = Charing Cross, DB = Trafalgar Square)
-  entries.push('Pickup location: Central London (rough area only until booking verified)');
+  // Location — stage-aware (vague pre-booking, exact post-confirmed)
+  const stage = facts.conversationStage || '';
+  const isPostBooking = ['confirmed', 'completed', 'booked'].includes(stage);
+  const acct = facts.rental?.account || 'dbcinema';
+  if (isPostBooking) {
+    entries.push('Pickup location: ' + (acct === 'leo' ? '5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret' : 'Statue of James II, 11 Trafalgar Square, London WC2N 5DN'));
+  } else {
+    entries.push('Pickup location: Central London near ' + (acct === 'leo' ? 'Charing Cross' : 'Trafalgar Square') + ' — exact address sent after booking confirmed');
+  }
 
   // What the agent IS and ISN'T
   entries.push('Agent role: chat-only agent who arranges rentals. Daniel/Leo handles physical handoffs.');
@@ -137,7 +144,7 @@ KNOWN FACTS:
 ${numberedFacts}
 
 RESPONSE TO CHECK:
-"${response.substring(0, 600)}"
+"${response.substring(0, 1200)}"
 
 Rules:
 - Greetings, pleasantries, and opinions don't need grounding
@@ -214,7 +221,8 @@ If everything is grounded: {"ungrounded":[]}`;
       correctedResponse: corrected !== response ? corrected : undefined,
     };
   } catch (err) {
-    // Grounding check is enhancement, not critical — pass through
-    return { grounded: true, ungroundedClaims: [] };
+    // Grounding check failed — report as unverified rather than silently claiming grounded
+    console.warn(`[GROUND] Grounding verification failed: ${err.message}`);
+    return { grounded: false, ungroundedClaims: ['grounding_check_failed'] };
   }
 }

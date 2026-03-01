@@ -211,7 +211,7 @@ export class ContentionService {
     if (!rental) return false;
 
     const holdMsg = "Thanks for your interest! I'm just checking availability for those dates — I'll get back to you shortly.";
-    await this.hyggloService.sendMessage(rental.listing_id, holdMsg);
+    await this.hyggloService.sendMessage(rental.listing_id, holdMsg); // respects READ_ONLY_MODE
 
     await this.prisma.inventory_contention.update({
       where: { id: contentionId },
@@ -287,7 +287,28 @@ export class ContentionService {
     });
 
     const now = new Date();
+    const SILENCE_THRESHOLD_MS = 12 * 60 * 60 * 1000; // 12 hours
+
     for (const c of active) {
+      // Check if favored rental has gone completely silent — auto-release held rentals
+      if ((now.getTime() - c.created_at.getTime()) > SILENCE_THRESHOLD_MS) {
+        const favoredRental = await this.prisma.rental.findUnique({ where: { id: c.favored_rental_id } });
+        if (favoredRental) {
+          const recentFavoredActivity = await this.prisma.conversation.findFirst({
+            where: {
+              chat_id: favoredRental.listing_id,
+              role: 'user',
+              created_at: { gt: new Date(now.getTime() - SILENCE_THRESHOLD_MS) },
+            },
+          });
+          if (!recentFavoredActivity) {
+            this.logger.log(`Contention ${c.id}: favored rental ${c.favored_rental_id} silent for 12h+ — auto-releasing held rentals`);
+            await this.resolveContention(c.id, 'resolved_timeout', `Favored rental silent for 12h+`);
+            continue;
+          }
+        }
+      }
+
       if (c.urgency_count >= 2) continue; // Max 2 urgency follow-ups
 
       const hoursSinceCreated = (now.getTime() - c.created_at.getTime()) / (1000 * 60 * 60);
@@ -314,10 +335,32 @@ export class ContentionService {
       });
       if (recentActivity) continue; // Renter is active, pipeline will inject urgency
 
-      // Send urgency follow-up
-      const urgencyMsg = c.urgency_count === 0
-        ? "Just a heads up — there's been a lot of interest in this gear for those dates. If you'd like to secure it, I'd recommend confirming soon!"
-        : "Quick reminder — the dates you're looking at are in high demand. Let me know if you'd like to lock them in before they're gone!";
+      // Check if follow-up service already sent a message recently (prevent double-tapping)
+      const recentBotMsg = await this.prisma.conversation.findFirst({
+        where: {
+          chat_id: rental.listing_id,
+          role: 'assistant',
+          created_at: { gt: new Date(now.getTime() - 6 * 60 * 60 * 1000) },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+      if (recentBotMsg) continue; // Bot already messaged recently, don't pile on
+
+      // Build item name from rental title (first meaningful segment)
+      const itemName = (rental.title || '').split(/[+|–—]/)[0].replace(/\d+x\s*/i, '').trim().substring(0, 60);
+
+      // Send urgency follow-up — varied templates to avoid formulaic repetition
+      const firstTemplates = [
+        `Just a heads up — I've had another inquiry for the ${itemName} on those dates. Let me know if you'd like to go ahead and I'll hold it for you!`,
+        `Wanted to flag — someone else is looking at the ${itemName} for similar dates. No pressure, just didn't want you to miss out if you're keen!`,
+        `Quick one — there's interest building on the ${itemName} for your dates. Happy to lock it in for you if you'd like to secure it.`,
+      ];
+      const secondTemplates = [
+        `Last check on the ${itemName} — I'll need to free it up soon if I don't hear back. Just send a quick message if you'd still like it!`,
+        `Hey — just need to know if you're still keen on the ${itemName}. I've got someone else waiting so need to sort it today if possible.`,
+      ];
+      const templates = c.urgency_count === 0 ? firstTemplates : secondTemplates;
+      const urgencyMsg = templates[Math.floor(Math.random() * templates.length)];
 
       await this.hyggloService.sendMessage(rental.listing_id, urgencyMsg);
 
@@ -349,7 +392,7 @@ export class ContentionService {
     for (const c of active) {
       if (!c.last_urgency_at) continue;
       const hoursSinceLastUrgency = (now.getTime() - c.last_urgency_at.getTime()) / (1000 * 60 * 60);
-      if (hoursSinceLastUrgency < 6) continue;
+      if (hoursSinceLastUrgency < 4) continue; // was 6h — total max hold: 4+4+4=12h
 
       // Check if favored rental has advanced past REQUEST/APPROVED
       const rental = await this.prisma.rental.findUnique({ where: { id: c.favored_rental_id } });
@@ -360,7 +403,7 @@ export class ContentionService {
       }
 
       // Timeout — favored rental didn't convert
-      await this.resolveContention(c.id, 'resolved_timeout', `2 urgency follow-ups + 6h elapsed, order_step still ${rental?.order_step || 'unknown'}`);
+      await this.resolveContention(c.id, 'resolved_timeout', `2 urgency follow-ups + 4h elapsed, order_step still ${rental?.order_step || 'unknown'}`);
     }
   }
 

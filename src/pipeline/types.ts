@@ -29,6 +29,15 @@ export interface RenterDNA {
   decisionSpeed: 'fast' | 'deliberate';
 }
 
+// Cross-rental renter preferences (persisted on renter_profile)
+export interface RenterPreferences {
+  preferred_pickup_time?: string;      // "morning" | "evening" | "7pm" etc.
+  preferred_items?: string[];           // top 3 by frequency
+  shoot_types?: string[];               // "wedding", "documentary", etc.
+  communication_style?: RenterDNA;      // persisted DNA from last rental
+  price_sensitivity?: 'low' | 'medium' | 'high';
+}
+
 export const DEFAULT_RENTER_DNA: RenterDNA = {
   style: 'casual',
   expertise: 'intermediate',
@@ -52,6 +61,7 @@ export interface MessageClassification {
   isSimpleAck: boolean;
   contextLevel: 'minimal' | 'standard' | 'comprehensive';
   momentum: 'accelerating' | 'steady' | 'decelerating';
+  hasCompetitorMention: boolean;
 }
 
 // Layer 2: Inner Monologue
@@ -118,6 +128,7 @@ export interface FactPack {
   bundleContext?: string;
   accountTemplates?: string;
   stageGuidance?: string;
+  conversationStage?: string;
   renterProfile?: string;
   welcomeBack?: boolean;
   urgency?: string;

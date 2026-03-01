@@ -367,28 +367,29 @@ export class LostRevenueService {
       items.push({ name: rental.title });
     }
 
+    // Batch-fetch all overlapping confirmed bookings for this rental's date range (avoids N+1 per item)
+    const bookedByItem = new Map<string, number>();
+    if (rental.startDate && rental.endDate) {
+      const allOverlapping = await this.prisma.booking.findMany({
+        where: {
+          status: 'confirmed',
+          start_date: { lt: rental.endDate },
+          end_date: { gt: rental.startDate },
+        },
+        select: { item_name: true, quantity: true },
+      });
+      for (const b of allOverlapping) {
+        bookedByItem.set(b.item_name, (bookedByItem.get(b.item_name) || 0) + (b.quantity || 1));
+      }
+    }
+
     const results: ItemAnalysis[] = [];
 
     for (const item of items) {
       const matched = findBestMatch(item.name, inventoryNames);
-      let blocked = false;
-      let bookedQty = 0;
       const maxQty = matched ? (MASTER_INVENTORY[matched] || 1) : 0;
-
-      if (matched && rental.startDate && rental.endDate) {
-        const overlapping = await this.prisma.booking.findMany({
-          where: {
-            item_name: matched,
-            status: { in: ['confirmed', 'pending_review'] },
-            start_date: { lt: rental.endDate },
-            end_date: { gt: rental.startDate },
-          },
-          select: { quantity: true },
-        });
-
-        bookedQty = overlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
-        blocked = bookedQty >= maxQty;
-      }
+      const bookedQty = matched ? (bookedByItem.get(matched) || 0) : 0;
+      const blocked = bookedQty >= maxQty;
 
       results.push({ item: item.name, matched, blocked, bookedQty, maxQty });
     }
@@ -1108,7 +1109,7 @@ export class LostRevenueService {
     return { updated, breakdown };
   }
 
-  @Cron('0 5 * * *')
+  @Cron('0 7 * * *')
   async dailySync() {
     this.logger.log('Starting daily lost revenue sync...');
     const accounts = this.hyggloService.getAccounts();

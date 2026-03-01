@@ -13,6 +13,21 @@ import { CouponService } from '../coupon/coupon.service';
 
 type HyggloAccount = 'dbcinema' | 'leo';
 
+/**
+ * Extract clean item name from rental's parsed_items JSON.
+ * Falls back to title if parsed_items unavailable.
+ * "Sony FX3 + 24-70mm GM" instead of SEO-bloated listing titles.
+ */
+function getCleanItemName(rental: any): string {
+  if (rental?.parsed_items && Array.isArray(rental.parsed_items)) {
+    const items = (rental.parsed_items as any[])
+      .filter((pi: any) => pi.item)
+      .map((pi: any) => pi.qty > 1 ? `${pi.qty}x ${pi.item}` : pi.item);
+    if (items.length > 0) return items.join(' + ');
+  }
+  return rental?.title || 'the rental';
+}
+
 export interface ConversationState {
   confirmedItems?: string[];        // Items renter confirmed interest in
   agreedPickupTime?: string;        // e.g. "Friday 2pm"
@@ -23,12 +38,20 @@ export interface ConversationState {
   upsellItems?: string[];           // What was upsold
   priceQuoted?: number;             // Last price quoted
   deliveryDiscussed?: boolean;
+  unavailabilityMentioned?: boolean; // Whether bot already told renter about item unavailability
   rentalNotes?: string[];           // Noteworthy details: extras requested, special conditions, delivery preferences, anything owner should know
+
+  // Negotiation intelligence
+  priceObjectionCount?: number;       // how many times renter pushed back on price
+  lastPriceOffered?: number;          // last £ amount bot quoted
+  negotiationStance?: 'firm' | 'flexible' | 'yield';
+  competitorMentioned?: boolean;      // renter mentioned seeing it cheaper
 }
 
 @Injectable()
 export class FollowUpService {
   private readonly logger = new Logger(FollowUpService.name);
+  private isCheckingFollowUps = false;
 
   constructor(
     private prisma: PrismaService,
@@ -91,7 +114,28 @@ export class FollowUpService {
       const currentArr = current[field] as string[] | undefined;
       const changesArr = changes[field] as string[] | undefined;
       if (changesArr && currentArr) {
-        (merged as any)[field] = [...new Set([...currentArr, ...changesArr])];
+        if (field === 'rentalNotes') {
+          // Special handling: fuzzy dedup + cap at 8 notes
+          const existing = [...currentArr];
+          const newNotes: string[] = [];
+          for (const note of changesArr) {
+            const noteWords = new Set(note.toLowerCase().split(/\s+/));
+            const dupIdx = existing.findIndex(e => {
+              const eWords = new Set(e.toLowerCase().split(/\s+/));
+              const intersection = [...noteWords].filter(w => eWords.has(w)).length;
+              return intersection / Math.max(noteWords.size, eWords.size) > 0.7;
+            });
+            if (dupIdx >= 0) {
+              existing[dupIdx] = note; // replace with newer wording
+            } else {
+              newNotes.push(note);
+            }
+          }
+          const combined = [...existing, ...newNotes];
+          (merged as any)[field] = combined.slice(-8); // keep last 8
+        } else {
+          (merged as any)[field] = [...new Set([...currentArr, ...changesArr])];
+        }
       }
     }
     await this.prisma.follow_up_state.update({
@@ -106,9 +150,16 @@ export class FollowUpService {
    */
   @Cron('*/2 * * * *')
   async checkFollowUps(): Promise<void> {
+    if (this.isCheckingFollowUps) {
+      this.logger.debug('checkFollowUps: previous check still in progress, skipping');
+      return;
+    }
+    this.isCheckingFollowUps = true;
+    try {
     // Skip quiet hours
     const hour = new Date().getHours();
     if (hour >= 2 && hour < 7) {
+      this.isCheckingFollowUps = false;
       return;
     }
 
@@ -127,7 +178,13 @@ export class FollowUpService {
           conversation_stage: { notIn: ['dead', 'completed'] },
         },
         include: {
-          rental: true,
+          rental: {
+            select: {
+              id: true, title: true, status: true, order_step: true,
+              listing_id: true, renter_info: true, account: true,
+              start_date: true, end_date: true, listing_location: true,
+            },
+          },
         },
       });
 
@@ -150,6 +207,9 @@ export class FollowUpService {
       }
     } catch (error) {
       this.logger.error(`checkFollowUps cron error: ${error.message}`);
+    }
+    } finally {
+      this.isCheckingFollowUps = false;
     }
   }
 
@@ -199,6 +259,34 @@ export class FollowUpService {
     try {
       const holdCheck = await this.contentionService.isHeld(state.rental_id);
       if (holdCheck.held) return;
+    } catch { /* non-critical */ }
+
+    // 1c. Skip follow-up if item is unavailable and renter was already told
+    try {
+      const ss = state.structured_state as any;
+      if (ss?.unavailabilityMentioned) {
+        this.logger.debug(`Skipping follow-up for ${state.rental_id}: item unavailable, already told renter`);
+        return;
+      }
+    } catch { /* non-critical */ }
+
+    // 1d. Skip follow-up if bot's last message ends with a question (we're waiting, not them)
+    try {
+      if (state.last_bot_message_at && state.last_renter_message_at) {
+        const botTime = new Date(state.last_bot_message_at).getTime();
+        const renterTime = new Date(state.last_renter_message_at).getTime();
+        if (botTime > renterTime) {
+          const lastBotMsg = await this.prisma.conversation.findFirst({
+            where: { chat_id: state.rental?.listing_id, role: 'assistant' },
+            orderBy: { created_at: 'desc' },
+            select: { content: true },
+          });
+          if (lastBotMsg?.content?.trim().endsWith('?')) {
+            this.logger.debug(`Skipping follow-up for ${state.rental_id}: bot has a pending question`);
+            return;
+          }
+        }
+      }
     } catch { /* non-critical */ }
 
     // 2. Paused until: if set and future -> skip
@@ -306,6 +394,24 @@ export class FollowUpService {
         } catch {
           this.logger.log(`Follow-ups exhausted for ${state.rental?.title} — no response after ${state.followup_count} attempts`);
         }
+
+        // Detect price-related conversation death — log as lost revenue signal
+        try {
+          const ss = state.structured_state as any;
+          if (ss?.priceObjectionCount >= 1) {
+            await this.prisma.ai_decision.create({
+              data: {
+                rental_id: state.rental_id,
+                decision_type: 'price_objection_lost',
+                input_summary: `Conversation DEAD after ${ss.priceObjectionCount} price objection(s). Stance: ${ss.negotiationStance || 'unknown'}. Competitor: ${ss.competitorMentioned || false}. Last price: £${ss.lastPriceOffered || '?'}`,
+                output_summary: `Lost: ${state.rental?.title || 'Unknown item'}`,
+                confidence: 0.9,
+                action_taken: 'price_objection_lost',
+              },
+            });
+            this.logger.log(`Price objection lost revenue logged for ${state.rental?.title} (${ss.priceObjectionCount} objections)`);
+          }
+        } catch { /* non-critical */ }
       }
     }
   }
@@ -315,7 +421,7 @@ export class FollowUpService {
    */
   async sendFollowUp(state: any, rental: any, reason: string): Promise<void> {
     // Deterministic templates — no AI call needed, saves tokens
-    const itemName = rental?.title || 'the rental';
+    const itemName = getCleanItemName(rental);
     const followupNumber = state.followup_count + 1;
 
     let followUpMessage: string;
@@ -354,10 +460,20 @@ export class FollowUpService {
         followUpMessage = `Just checking in about the ${itemName}! By the way, since you'd be coming from the ${rental.listing_location} area, you'd get a 10% discount on this rental. Let me know if you'd like to go ahead or if you have any questions.`;
         this.logger.log(`Travel discount recovery sent for ${rental?.title} (non-central listing: ${rental.listing_location})`);
       } else {
-        followUpMessage = `Just checking in - let me know if you had any other questions about the ${itemName}! By the way, if getting to the pickup spot is tricky, I can also arrange delivery.`;
+        const checkInTemplates = [
+          `Just checking in - let me know if you had any other questions about the ${itemName}! By the way, if getting to the pickup spot is tricky, I can also arrange delivery.`,
+          `Hey — any thoughts on the ${itemName}? Happy to answer any questions or sort out dates if you're still interested.`,
+          `Wanted to follow up on the ${itemName}. If you need help deciding or have any questions about the setup, just let me know!`,
+        ];
+        followUpMessage = checkInTemplates[Math.floor(Math.random() * checkInTemplates.length)];
       }
     } else {
-      followUpMessage = `Still interested in the ${itemName}? Happy to hold it for you if needed.`;
+      const reEngageTemplates = [
+        `Still interested in the ${itemName}? Happy to hold it for you if needed.`,
+        `Hey — just checking the ${itemName} is still on your radar? No rush, just want to make sure it's available when you need it.`,
+        `Quick check — still thinking about the ${itemName}? Let me know if anything changed or if you want to go ahead.`,
+      ];
+      followUpMessage = reEngageTemplates[Math.floor(Math.random() * reEngageTemplates.length)];
     }
 
     // Send via Hygglo (sendMessage handles READ_ONLY_MODE with per-rental exceptions)
@@ -387,7 +503,7 @@ export class FollowUpService {
    * Fires as follow-up #3, replacing the old generic "no worries" message.
    */
   private async sendSaveAttempt(state: any, rental: any): Promise<void> {
-    const itemName = rental?.title || 'the rental';
+    const itemName = getCleanItemName(rental);
 
     // Build bundle suggestion from extracted items
     let bundleSuggestion = '';
@@ -610,21 +726,18 @@ export class FollowUpService {
           mapsLink = '\nGoogle Maps: https://maps.app.goo.gl/ry8ea4tySBoah7d7A';
         }
 
+        // Merge confirmation + time request into single message
         const infoMessage =
           `Your booking is confirmed! Here are the details:\n` +
           `\nItems: ${rental.title}${dateRange}` +
           `\nPickup address: ${pickupAddress}${mapsLink}` +
           `\nOpening times: 10am–12pm & 7–9pm` +
           `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
-          `\nDelivery available (separate charge) — let us know if needed.`;
+          `\nDelivery available (separate charge) — let us know if needed.` +
+          `\n\nOne last thing — what are your exact pickup and return times? (Please include AM or PM)`;
 
         await this.hyggloService.sendMessage(rental.listing_id, infoMessage);
         await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', infoMessage, { model: 'follow-up' });
-
-        // Send time request as separate message so renter reads and replies to it
-        const timeRequest = `One last thing — what are your exact pickup and return times? (Please include AM or PM)`;
-        await this.hyggloService.sendMessage(rental.listing_id, timeRequest);
-        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', timeRequest, { model: 'follow-up' });
 
         // Mark time request sent so scanner doesn't double-send
         await this.prisma.follow_up_state.update({
@@ -884,14 +997,11 @@ export class FollowUpService {
           `\n\nPickup address: ${pickupAddress}${mapsLink}` +
           `\nOpening times: 10am–12pm & 7–9pm` +
           `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
-          `\nDelivery available (separate charge) — let us know if needed.${discountMention}`;
+          `\nDelivery available (separate charge) — let us know if needed.${discountMention}` +
+          `\n\nWhat are your preferred pickup and return times? (Please include AM or PM)`;
 
         await this.hyggloService.sendMessage(rental.listing_id, infoMessage);
         await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', infoMessage, { model: 'alt-conversion' });
-
-        const timeRequest = `What are your preferred pickup and return times? (Please include AM or PM)`;
-        await this.hyggloService.sendMessage(rental.listing_id, timeRequest);
-        await this.memoryService.storeConversation(`rental:${rental.id}`, 'assistant', timeRequest, { model: 'alt-conversion' });
 
         // Mark time request sent
         await this.prisma.follow_up_state.update({
@@ -1640,7 +1750,7 @@ export class FollowUpService {
    * Send a time-specific follow-up message. Static templates — no AI calls.
    */
   private async sendTimeFollowUp(state: any, rental: any, followupNumber: number): Promise<void> {
-    const itemName = rental?.title || 'the rental';
+    const itemName = getCleanItemName(rental);
 
     // Check which time is actually missing
     let missingTime = 'pickup and return times';

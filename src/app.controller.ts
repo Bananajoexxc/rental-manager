@@ -1,8 +1,29 @@
-import { Controller, Get, Post, Patch, Delete, Body, Query, Param, Res, Header, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Query, Param, Res, Header, Headers, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Prisma } from '@prisma/client';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { exec, spawn } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+
+/** Generate a short ETag from JSON-serializable data */
+function generateETag(data: any): string {
+  const hash = crypto.createHash('md5').update(JSON.stringify(data)).digest('hex').substring(0, 16);
+  return `"${hash}"`;
+}
+
+/** Send response with ETag — returns 304 if client has matching ETag */
+function sendWithETag(res: Response, data: any, ifNoneMatch?: string): void {
+  const etag = generateETag(data);
+  res.setHeader('ETag', etag);
+  if (ifNoneMatch && ifNoneMatch === etag) {
+    res.status(304).end();
+    return;
+  }
+  res.json(data);
+}
 import * as path from 'path';
 import { AppService } from './app.service';
 import { AiService } from './ai/ai.service';
@@ -26,10 +47,12 @@ import { ConversationStageService } from './conversation-tree/conversation-stage
 import { ItemMatcherAiService } from './item-matcher-ai/item-matcher-ai.service';
 import { SellRecommenderService } from './sell-recommender/sell-recommender.service';
 import { ListingCreatorService } from './listing-creator/listing-creator.service';
+import { ConfigManagerService } from './autolearn/config-manager.service';
+import { OnModuleInit } from '@nestjs/common';
 
 @ApiTags('Health')
 @Controller()
-export class AppController {
+export class AppController implements OnModuleInit {
   private readonly logger = new Logger(AppController.name);
 
   constructor(
@@ -53,10 +76,138 @@ export class AppController {
     private readonly sellRecommenderService: SellRecommenderService,
     private readonly taxReportService: TaxReportService,
     private readonly listingCreatorService: ListingCreatorService,
+    private readonly configManager: ConfigManagerService,
   ) {}
 
   // In-memory session store for renter chat testing
   private renterChatSessions = new Map<string, { role: 'user' | 'assistant'; content: string }[]>();
+
+  // Claude Code — terminal-based now (xterm.js + PTY via WebSocket)
+
+  // ---- Cron Claude State ----
+  private cronRunHistory: { task: string; label: string; startedAt: string; completedAt: string; result: string; toolCount: number }[] = [];
+  private cronLastRun: Record<string, number> = {};
+  private cronRunning = false;
+  private cronTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly CLAUDE_CODE_MEMORY_PATH = '/home/ubuntu/rental-manager/.claude-code-memory.md';
+
+  private loadClaudeCodeMemory(): string {
+    try {
+      if (fs.existsSync(this.CLAUDE_CODE_MEMORY_PATH)) {
+        return fs.readFileSync(this.CLAUDE_CODE_MEMORY_PATH, 'utf-8').substring(0, 4000);
+      }
+    } catch (e: any) {
+      this.logger.warn('Failed to load Claude Code memory: ' + e.message);
+    }
+    return '';
+  }
+
+  private async buildClaudeCodeSystemPrompt(): Promise<string> {
+    const cronEnabled = await this.configManager.getBool('cron_claude.enabled');
+    const cronFreq = (await this.configManager.getInt('cron_claude.frequency_minutes')) || 240;
+    const cronTasksStr = (await this.configManager.get('cron_claude.tasks')) || 'message_audit';
+    const cronQuietStart = (await this.configManager.getInt('cron_claude.quiet_hours_start')) ?? 2;
+    const cronQuietEnd = (await this.configManager.getInt('cron_claude.quiet_hours_end')) ?? 7;
+
+    const cronTaskList = Object.entries(this.CRON_TASKS)
+      .map(([key, t]) => `  - ${key}: ${t.label} — ${t.description}`)
+      .join('\n');
+
+    const lastRunInfo = this.cronRunHistory.slice(0, 3)
+      .map(r => `  - ${r.label}: ${r.completedAt} (${r.toolCount} tools)`)
+      .join('\n') || '  (no recent runs)';
+
+    const memory = this.loadClaudeCodeMemory();
+    const memorySection = memory ? `\n## Your Memory\n${memory}` : '';
+
+    return `You are Claude Code, an AI assistant with direct access to the rental-manager server at /home/ubuntu/rental-manager.
+You can execute commands, read/write files, and manage the service.
+
+Stack: NestJS + TypeScript, PostgreSQL/Prisma, Ubuntu 24.04
+Build: npm run build
+Restart: sudo systemctl restart rental-manager
+Logs: journalctl -u rental-manager -n 50 --no-pager
+Dashboard: src/public/dashboard.html
+
+## Your Cron System
+You have your OWN scheduled task system (separate from the bot's NestJS @Cron decorators).
+It is managed via the dashboard gear icon or these API endpoints on localhost:3000:
+
+Config: GET/POST /api/cron-claude/config
+Trigger: POST /api/cron-claude/trigger with { task: "task_key" }
+History: GET /api/cron-claude/runs
+
+Current config:
+- Enabled: ${cronEnabled}
+- Frequency: every ${cronFreq} minutes
+- Active tasks: ${cronTasksStr}
+- Quiet hours: ${cronQuietStart}:00-${cronQuietEnd}:00 UTC
+- Running now: ${this.cronRunning}
+
+Available tasks:
+${cronTaskList}
+
+Recent runs:
+${lastRunInfo}
+
+When asked about "crons" or "scheduled tasks", this is YOUR system — use these endpoints.
+
+## Persistent Memory
+You have a memory file at /home/ubuntu/rental-manager/.claude-code-memory.md
+Write important learnings, preferences, and context there so you remember across sessions.
+
+When asked to make changes:
+1. Explain what you'll do
+2. Execute the necessary tool calls
+3. Report the results concisely
+
+Be efficient. Use tools to verify your work. Keep responses short.${memorySection}`;
+  }
+
+  private readonly CRON_TASKS: Record<string, { label: string; description: string; prompt: string }> = {
+    message_audit: {
+      label: 'Message Audit',
+      description: 'Review last 100 bot messages for communication errors and fix rules if needed',
+      prompt: `Audit the last 100 messages the bot wanted to send to renters. Look for systematic communication errors.
+
+Steps:
+1. Run this SQL via execute_command: cd /home/ubuntu/rental-manager && npx prisma db execute --stdin <<'SQL'
+SELECT id, rental_id, input_summary, output_summary, action_taken, confidence, was_sent, created_at FROM ai_decision WHERE decision_type = 'message' AND was_sent IS NOT NULL ORDER BY created_at DESC LIMIT 100;
+SQL
+2. For each SENT message (was_sent = true), check:
+   - Factual accuracy: does the response match what was asked?
+   - Tone consistency: DB Cinema = professional/efficient, Leo Adams = casual/friendly
+   - Rule compliance: any violations of the bot rules listed above?
+   - Hallucination: any invented facts, prices, or policies?
+   - Communication quality: awkward phrasing, redundancy, missing info?
+3. For BLOCKED messages (was_sent = false): was the block justified?
+4. If you find SYSTEMATIC issues (same error type in 3+ messages):
+   - Identify root cause (rule gap? prompt issue? logic bug?)
+   - Fix by editing the rule in the database or the relevant code file
+   - Explain your reasoning
+5. Summarize: total reviewed, issues by category, fixes applied, recommendations.
+
+IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertain findings for Daniel to review.`,
+    },
+    log_health: {
+      label: 'Log Health Check',
+      description: 'Check recent logs for errors or warnings',
+      prompt: 'Read the last 200 lines of rental-manager logs using: journalctl -u rental-manager -n 200 --no-pager. Identify any ERROR or WARN entries from the last hour. Summarize findings concisely. If there are recurring errors, investigate the root cause by reading the relevant source file.',
+    },
+    build_check: {
+      label: 'Build Verification',
+      description: 'Verify TypeScript compilation succeeds',
+      prompt: 'Run: cd /home/ubuntu/rental-manager && npm run build. If it fails, read the error output, identify the issue, and report what needs fixing. Do NOT attempt to fix code — just report clearly.',
+    },
+  };
+
+  async onModuleInit() {
+    // Start cron tick every 60 seconds
+    this.cronTimer = setInterval(() => this.cronTick().catch(e => {
+      this.logger.error('Cron tick error: ' + e.message);
+    }), 60_000);
+    this.logger.log('Claude Code cron timer started (60s interval)');
+  }
 
   @Get()
   @ApiOperation({
@@ -94,16 +245,18 @@ export class AppController {
       'Returns the health status of the service including uptime, scanner state, and authentication status',
   })
   @ApiResponse({ status: 200, description: 'Health status retrieved successfully' })
-  async getHealth() {
-    return await this.appService.getHealthStatus();
+  async getHealth(@Res() res: Response, @Headers('if-none-match') ifNoneMatch?: string) {
+    const data = await this.appService.getHealthStatus();
+    sendWithETag(res, data, ifNoneMatch);
   }
 
   @Get('scanner/status')
   @ApiTags('Scanner')
   @ApiOperation({ summary: 'Scanner status' })
   @ApiResponse({ status: 200, description: 'Scanner status retrieved successfully' })
-  getScannerStatus() {
-    return this.appService.getScannerStatus();
+  getScannerStatus(@Res() res: Response, @Headers('if-none-match') ifNoneMatch?: string) {
+    const data = this.appService.getScannerStatus();
+    sendWithETag(res, data, ifNoneMatch);
   }
 
   @Get('rentals/stats')
@@ -126,8 +279,9 @@ export class AppController {
   @ApiOperation({ summary: 'Booking statistics with profit data' })
   @ApiQuery({ name: 'account', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Booking stats with today/week profit' })
-  async getBookingStats(@Query('account') account?: string) {
-    return await this.appService.getBookingStats(account || undefined);
+  async getBookingStats(@Res() res: Response, @Query('account') account?: string, @Headers('if-none-match') ifNoneMatch?: string) {
+    const data = await this.appService.getBookingStats(account || undefined);
+    sendWithETag(res, data, ifNoneMatch);
   }
 
   @Get('bookings/by-stage')
@@ -469,12 +623,15 @@ export class AppController {
   @ApiQuery({ name: 'account', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Calendar bookings grouped by rental' })
   async getCalendarBookings(
+    @Res() res: Response,
     @Query('start') start: string,
     @Query('end') end: string,
     @Query('account') account?: string,
+    @Headers('if-none-match') ifNoneMatch?: string,
   ) {
-    if (!start || !end) return [];
-    return await this.appService.getCalendarBookings(start, end, account || undefined);
+    if (!start || !end) { res.json([]); return; }
+    const data = await this.appService.getCalendarBookings(start, end, account || undefined);
+    sendWithETag(res, data, ifNoneMatch);
   }
 
   // --- Activity feed ---
@@ -1495,6 +1652,24 @@ export class AppController {
     return await this.lostRevenueService.getUnmatchedDemand(period || '6m', account || undefined);
   }
 
+  @Get('lost-revenue/combined')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Combined lost revenue — denied, timeout, items, unmatched in one call' })
+  @ApiQuery({ name: 'period', required: false, description: 'week, month, 3m, 6m, 12m, all' })
+  @ApiQuery({ name: 'account', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Combined lost revenue data (4 queries in parallel)' })
+  async getCombinedLostRevenue(@Query('period') period?: string, @Query('account') account?: string) {
+    const p = period || '3m';
+    const a = account || undefined;
+    const [denied, timeout, items, unmatched] = await Promise.all([
+      this.lostRevenueService.getDeniedRevenueSummary(p, a),
+      this.lostRevenueService.getTimeoutSummary(p, a),
+      this.lostRevenueService.getBlockedItemsBreakdown(p, a),
+      this.lostRevenueService.getUnmatchedDemand(p === '3m' ? '6m' : p, a),
+    ]);
+    return { denied, timeout, items, unmatched };
+  }
+
   @Get('revenue/potential')
   @ApiTags('Revenue')
   @ApiOperation({ summary: 'Investment scorecard with confidence scoring for all items' })
@@ -1868,6 +2043,380 @@ export class AppController {
     } catch {
       return { error: 'Not found' };
     }
+  }
+
+  // ---- Claude Code: Server Operations Chat ----
+
+  private readonly PROJECT_DIR = '/home/ubuntu/rental-manager';
+
+  private validatePath(filePath: string): string {
+    const resolved = path.resolve(this.PROJECT_DIR, filePath);
+    if (!resolved.startsWith(this.PROJECT_DIR + '/') && resolved !== this.PROJECT_DIR) {
+      throw new Error('Path outside project directory: ' + filePath);
+    }
+    return resolved;
+  }
+
+  private validateCommand(cmd: string): boolean {
+    // Split on shell operators to check each sub-command
+    const parts = cmd.split(/\s*(?:&&|\|\||;|\|)\s*/);
+    const allowedPrefixes = ['npm', 'npx', 'git', 'cat', 'head', 'tail', 'ls', 'find', 'grep', 'rg', 'wc', 'diff', 'node', 'tsc', 'echo', 'pwd', 'mkdir', 'touch', 'cp'];
+    const allowedSudo = ['sudo systemctl restart rental-manager', 'sudo systemctl status rental-manager', 'sudo systemctl is-active rental-manager'];
+    const allowedJournal = 'journalctl -u rental-manager';
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      // Block dangerous patterns
+      if (/rm\s+(-[a-z]*r|-[a-z]*f)\s/i.test(trimmed)) return false;
+      if (/\.\.\//g.test(trimmed) && trimmed.includes('/')) return false;
+
+      // Check sudo whitelist
+      if (trimmed.startsWith('sudo ')) {
+        if (!allowedSudo.some(s => trimmed.startsWith(s))) return false;
+        continue;
+      }
+      // Check journalctl
+      if (trimmed.startsWith('journalctl')) {
+        if (!trimmed.startsWith(allowedJournal)) return false;
+        continue;
+      }
+      // Check allowed prefixes
+      const firstWord = trimmed.split(/\s/)[0];
+      if (!allowedPrefixes.includes(firstWord)) return false;
+    }
+    return true;
+  }
+
+  private async executeToolCall(toolName: string, input: any): Promise<string> {
+    try {
+      if (toolName === 'execute_command') {
+        const cmd = input.command as string;
+        if (!this.validateCommand(cmd)) {
+          return JSON.stringify({ error: 'Command not allowed: ' + cmd });
+        }
+        try {
+          const { stdout, stderr } = await execAsync(cmd, {
+            cwd: this.PROJECT_DIR,
+            timeout: 30000,
+            maxBuffer: 1024 * 1024,
+          });
+          const out = (stdout || '').substring(0, 4000);
+          const err = (stderr || '').substring(0, 1000);
+          return out + (err ? '\nSTDERR: ' + err : '');
+        } catch (e: any) {
+          return `Exit code ${e.code || 1}\n${(e.stdout || '').substring(0, 2000)}\n${(e.stderr || '').substring(0, 2000)}`;
+        }
+      }
+
+      if (toolName === 'read_file') {
+        const filePath = this.validatePath(input.path);
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const offset = input.offset || 0;
+        const limit = input.limit || 200;
+        const lines = content.split('\n');
+        return lines.slice(offset, offset + limit).map((l, i) => `${offset + i + 1}: ${l}`).join('\n').substring(0, 8000);
+      }
+
+      if (toolName === 'write_file') {
+        const filePath = this.validatePath(input.path);
+        if (filePath.includes('node_modules/') || filePath.endsWith('.env') || filePath.includes('prisma/migrations/')) {
+          return JSON.stringify({ error: 'Cannot write to protected path: ' + input.path });
+        }
+        fs.writeFileSync(filePath, input.content, 'utf-8');
+        return JSON.stringify({ success: true, bytesWritten: Buffer.byteLength(input.content) });
+      }
+
+      if (toolName === 'list_directory') {
+        const dirPath = this.validatePath(input.path || '.');
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        return entries.map(e => (e.isDirectory() ? 'd ' : 'f ') + e.name).join('\n').substring(0, 4000);
+      }
+
+      return JSON.stringify({ error: 'Unknown tool: ' + toolName });
+    } catch (e: any) {
+      return JSON.stringify({ error: e.message });
+    }
+  }
+
+  private async sendClaudeCodeTelegramNotification(
+    task: string, result: string, toolCalls: { tool: string; input: any; output: string }[],
+  ): Promise<void> {
+    // Strip Markdown special chars from dynamic content for safe Telegram Markdown
+    const esc = (s: string) => s.replace(/[_*`\[\]]/g, '');
+
+    const toolSummary = toolCalls.slice(0, 8).map(tc => {
+      const label = tc.tool === 'execute_command' ? tc.input.command :
+                    tc.tool === 'read_file' ? tc.input.path :
+                    tc.tool === 'write_file' ? tc.input.path :
+                    tc.tool === 'list_directory' ? (tc.input.path || '.') :
+                    JSON.stringify(tc.input);
+      return `  • ${tc.tool}: ${esc((label || '').substring(0, 60))}`;
+    }).join('\n');
+
+    const text = [
+      '🤖 *Claude Code completed*',
+      '',
+      `_Task:_ ${esc(task.substring(0, 100))}`,
+      `_Tools:_ ${toolCalls.length} call${toolCalls.length !== 1 ? 's' : ''}`,
+      toolSummary,
+      '',
+      `_Result:_ ${esc((result || '').substring(0, 200))}`,
+    ].join('\n');
+
+    await this.telegramService.sendProactiveMessage(text, 'Markdown');
+  }
+
+  // ---- Cron Claude: Tick + Runner ----
+
+  private async cronTick(): Promise<void> {
+    if (this.cronRunning) return;
+
+    const enabled = await this.configManager.getBool('cron_claude.enabled');
+    if (!enabled) return;
+
+    // Quiet hours check
+    const quietStart = await this.configManager.getInt('cron_claude.quiet_hours_start') ?? 2;
+    const quietEnd = await this.configManager.getInt('cron_claude.quiet_hours_end') ?? 7;
+    const hour = new Date().getUTCHours();
+    if (quietStart <= quietEnd ? (hour >= quietStart && hour < quietEnd) : (hour >= quietStart || hour < quietEnd)) return;
+
+    const frequencyMs = ((await this.configManager.getInt('cron_claude.frequency_minutes')) ?? 240) * 60_000;
+    const tasksStr = (await this.configManager.get('cron_claude.tasks')) || 'message_audit';
+    const enabledTasks = tasksStr.split(',').map(t => t.trim()).filter(t => this.CRON_TASKS[t]);
+
+    for (const taskKey of enabledTasks) {
+      const lastRun = this.cronLastRun[taskKey] || 0;
+      if (Date.now() - lastRun >= frequencyMs) {
+        this.runCronTask(taskKey).catch(e => {
+          this.logger.error(`Cron task ${taskKey} failed: ${e.message}`);
+        });
+        return; // Only 1 task per tick
+      }
+    }
+  }
+
+  private async runCronTask(taskKey: string): Promise<{ result: string; toolCount: number }> {
+    const task = this.CRON_TASKS[taskKey];
+    if (!task) throw new Error(`Unknown cron task: ${taskKey}`);
+
+    this.cronRunning = true;
+    this.cronLastRun[taskKey] = Date.now();
+    const startedAt = new Date();
+    this.logger.log(`Cron task starting: ${task.label}`);
+
+    try {
+      // Build rules-aware system prompt
+      const compactRules = await this.rulesService.getCompactRules();
+      const systemPrompt = `You are Claude Code (Autonomous), running a scheduled maintenance task on the rental-manager bot at /home/ubuntu/rental-manager/.
+You have FULL write access to the project directory.
+
+## Your Mission
+${task.prompt}
+
+## Bot Rules (MANDATORY)
+${compactRules}
+
+## Understanding Rules
+Before modifying ANY rule:
+1. Understand WHY it exists — what problem does it prevent?
+2. Verify the issue is systematic (3+ occurrences), not a one-off
+3. Ensure your fix IMPROVES communication quality
+4. Prefer targeted, elegant solutions. Avoid regex hacks or fuzzy matching.
+
+## Constraints
+- Changes must make the bot BETTER at communicating with renters
+- Never remove safety rules (escalation, verification, credential protection)
+- If unsure, REPORT instead of fixing — add to your summary
+- Stack: NestJS + TypeScript, PostgreSQL/Prisma, Ubuntu 24.04
+- Build: npm run build | Restart: sudo systemctl restart rental-manager
+
+## Working Style
+- Be token-efficient. Read only what you need.
+- Verify changes compile before finishing.
+- End with a clear summary.`;
+
+      // Write prompt to temp file
+      const tmpPath = `/tmp/cron-prompt-${Date.now()}.txt`;
+      fs.writeFileSync(tmpPath, systemPrompt);
+
+      const args = [
+        '-p', task.prompt,
+        '--output-format', 'json',
+        '--max-turns', '15',
+        '--model', 'sonnet',
+        '--system-prompt-file', tmpPath,
+        '--allowedTools', 'Bash,Read,Edit,Write,Grep,Glob',
+        '--no-session-persistence',
+        '--settings', JSON.stringify({ hooks: {}, permissions: { allow: ['Bash(*)', 'Read', 'Write', 'Edit', 'Grep', 'Glob'] } }),
+      ];
+
+      const result = await new Promise<{ result: string; numTurns: number }>((resolve, reject) => {
+        const cronCleanEnv: Record<string, string> = {
+          HOME: '/home/ubuntu',
+          PATH: process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          USER: 'ubuntu',
+          LANG: process.env.LANG || 'C.UTF-8',
+        };
+        const child = spawn('/usr/bin/claude', args, {
+          cwd: '/home/ubuntu/rental-manager',
+          env: cronCleanEnv,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+        child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+        const timeout = setTimeout(() => {
+          child.kill('SIGTERM');
+          reject(new Error('Cron CLI timed out after 5 minutes'));
+        }, 300_000);
+
+        child.on('close', (code) => {
+          clearTimeout(timeout);
+          try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+          try {
+            const parsed = JSON.parse(stdout);
+            resolve({ result: parsed.result || '', numTurns: parsed.num_turns || 0 });
+          } catch {
+            if (code !== 0) reject(new Error(`CLI exited ${code}: ${stderr.substring(0, 300)}`));
+            else resolve({ result: stdout.substring(0, 500), numTurns: 0 });
+          }
+        });
+
+        child.on('error', (err) => {
+          clearTimeout(timeout);
+          try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+          reject(err);
+        });
+      });
+
+      const completedAt = new Date();
+      const runEntry = {
+        task: taskKey,
+        label: task.label,
+        startedAt: startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        result: result.result.substring(0, 500),
+        toolCount: result.numTurns,
+      };
+
+      this.cronRunHistory.unshift(runEntry);
+      if (this.cronRunHistory.length > 20) this.cronRunHistory = this.cronRunHistory.slice(0, 20);
+
+      this.logger.log(`Cron task completed: ${task.label} (${result.numTurns} turns, ${Math.round((completedAt.getTime() - startedAt.getTime()) / 1000)}s)`);
+
+      // Telegram notification
+      this.sendCronTelegramNotification(task.label, result.result, []).catch(e => {
+        this.logger.warn('Cron Telegram notification failed: ' + e.message);
+      });
+
+      return { result: result.result, toolCount: result.numTurns };
+    } catch (e: any) {
+      this.logger.error(`Cron task ${task.label} error: ${e.message}`);
+      const runEntry = {
+        task: taskKey,
+        label: task.label,
+        startedAt: startedAt.toISOString(),
+        completedAt: new Date().toISOString(),
+        result: `ERROR: ${e.message}`,
+        toolCount: 0,
+      };
+      this.cronRunHistory.unshift(runEntry);
+      if (this.cronRunHistory.length > 20) this.cronRunHistory = this.cronRunHistory.slice(0, 20);
+      throw e;
+    } finally {
+      this.cronRunning = false;
+    }
+  }
+
+  private async sendCronTelegramNotification(
+    taskLabel: string, result: string, toolCalls: { tool: string; input: any; output: string }[],
+  ): Promise<void> {
+    const esc = (s: string) => s.replace(/[_*`\[\]]/g, '');
+    const toolSummary = toolCalls.slice(0, 5).map(tc => {
+      const label = tc.tool === 'execute_command' ? tc.input.command :
+                    tc.tool === 'read_file' ? tc.input.path :
+                    tc.tool === 'write_file' ? tc.input.path :
+                    tc.tool === 'list_directory' ? (tc.input.path || '.') :
+                    JSON.stringify(tc.input);
+      return `  • ${tc.tool}: ${esc((label || '').substring(0, 50))}`;
+    }).join('\n');
+
+    const text = [
+      `🔄 *Cron: ${esc(taskLabel)}*`,
+      '',
+      `_Tools:_ ${toolCalls.length} call${toolCalls.length !== 1 ? 's' : ''}`,
+      toolSummary,
+      '',
+      `_Result:_ ${esc((result || '').substring(0, 300))}`,
+    ].join('\n');
+
+    await this.telegramService.sendProactiveMessage(text, 'Markdown');
+  }
+
+  // ---- Cron Claude: API Endpoints ----
+
+  @Get('api/cron-claude/config')
+  @ApiTags('Cron Claude')
+  @ApiOperation({ summary: 'Get cron Claude configuration' })
+  async getCronConfig() {
+    const enabled = await this.configManager.getBool('cron_claude.enabled');
+    const frequencyMinutes = (await this.configManager.getInt('cron_claude.frequency_minutes')) ?? 240;
+    const tasksStr = (await this.configManager.get('cron_claude.tasks')) || 'message_audit';
+    const quietStart = (await this.configManager.getInt('cron_claude.quiet_hours_start')) ?? 2;
+    const quietEnd = (await this.configManager.getInt('cron_claude.quiet_hours_end')) ?? 7;
+
+    return {
+      enabled,
+      frequencyMinutes,
+      tasks: tasksStr.split(',').map(t => t.trim()).filter(Boolean),
+      quietStart,
+      quietEnd,
+      availableTasks: Object.entries(this.CRON_TASKS).map(([key, t]) => ({
+        key,
+        label: t.label,
+        description: t.description,
+      })),
+    };
+  }
+
+  @Post('api/cron-claude/config')
+  @ApiTags('Cron Claude')
+  @ApiOperation({ summary: 'Update cron Claude configuration' })
+  async setCronConfig(@Body() body: { enabled?: boolean; frequencyMinutes?: number; tasks?: string[]; quietStart?: number; quietEnd?: number }) {
+    if (body.enabled !== undefined) await this.configManager.set('cron_claude.enabled', String(body.enabled));
+    if (body.frequencyMinutes) await this.configManager.set('cron_claude.frequency_minutes', String(body.frequencyMinutes));
+    if (body.tasks) await this.configManager.set('cron_claude.tasks', body.tasks.join(','));
+    if (body.quietStart !== undefined) await this.configManager.set('cron_claude.quiet_hours_start', String(body.quietStart));
+    if (body.quietEnd !== undefined) await this.configManager.set('cron_claude.quiet_hours_end', String(body.quietEnd));
+    return { ok: true };
+  }
+
+  @Get('api/cron-claude/runs')
+  @ApiTags('Cron Claude')
+  @ApiOperation({ summary: 'Get cron Claude run history' })
+  getCronRuns() {
+    return this.cronRunHistory;
+  }
+
+  @Post('api/cron-claude/trigger')
+  @ApiTags('Cron Claude')
+  @ApiOperation({ summary: 'Manually trigger a cron task' })
+  async triggerCronTask(@Body() body: { task: string }) {
+    const taskKey = body.task;
+    if (!this.CRON_TASKS[taskKey]) return { error: 'Unknown task: ' + taskKey };
+    if (this.cronRunning) return { error: 'A cron task is already running' };
+
+    // Run in background, return immediately
+    this.runCronTask(taskKey).catch(e => {
+      this.logger.error(`Manual cron trigger failed: ${e.message}`);
+    });
+
+    return { ok: true, message: `Task "${this.CRON_TASKS[taskKey].label}" started. Check runs endpoint for results.` };
   }
 
   @Get('dashboard')

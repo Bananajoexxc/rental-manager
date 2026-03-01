@@ -231,7 +231,9 @@ CRITICAL: This booking is CONFIRMED. All items listed under "BOOKED ITEMS FOR TH
 NEXT STEP: Get exact pickup/return times if not yet confirmed.
 ARRIVAL RULE: When the renter says they've arrived / they're here / they're at the pickup point — ALWAYS reply that you'll be there in about 5 minutes (e.g. "Perfect, be with you in about 5 mins!" or "On my way, 5 minutes!"). NEVER say you are already there or at the location. Daniel needs time to get to the meeting point.
 EARLY/UNSCHEDULED ARRIVAL: If the renter wants to come EARLIER than scheduled, on short notice, or at a different time than agreed (e.g. "finished early, can I come in 15 mins?", "can we do it now instead?") — NEVER just accept. Say "let me just check I can make that work — give me a moment" and escalate to Daniel. Only confirm after Daniel approves. This applies to ANY unscheduled time change, not just off-hours.
-Be helpful and responsive — this is where repeat business is built.`,
+Be helpful and responsive — this is where repeat business is built.
+MEETUP QUESTIONS: If the renter asks how to recognize you, what you look like, where you are, or how to find you — respond helpfully: "I'll message you when I'm at the meeting point so we can find each other easily!" or "Heading there now — will drop you a message when I arrive!" Do NOT dismiss these as off-topic. They are legitimate pickup logistics.
+SHORTHAND: During pickup/return, renters use shorthand. "Be 5" or "will be 5" = 5 minutes away. "Here" or "outside" = arrived at meeting point. "Running late" = delayed. Interpret these naturally, never ask what they mean.`,
         },
       ],
       [
@@ -326,17 +328,20 @@ Don't reference the silence or sound disappointed.`,
         state.currentStage = dbStage;
 
         // Override with rental status — persist to DB so dashboard funnel stays in sync
-        if ((rental.status === 'ongoing' || rental.status === 'upcoming') &&
-            dbStage !== ConversationStage.CONFIRMED) {
-          state.currentStage = ConversationStage.CONFIRMED;
-          await this.persistStage(rentalId, ConversationStage.CONFIRMED);
-          this.logger.log(`Stage ${dbStage} → CONFIRMED (rental status: ${rental.status}) for ${rentalId} [getConversationState sync]`);
-        } else if (rental.end_date && new Date(rental.end_date) < new Date() &&
+        // COMPLETED check first: past end_date takes priority over ongoing status (prevents flip-flop)
+        if (rental.end_date && new Date(rental.end_date) < new Date() &&
                    ['completed', 'ongoing'].includes(rental.status) &&
                    dbStage !== ConversationStage.COMPLETED) {
           state.currentStage = ConversationStage.COMPLETED;
           await this.persistStage(rentalId, ConversationStage.COMPLETED);
           this.logger.log(`Stage ${dbStage} → COMPLETED (rental finished) for ${rentalId} [getConversationState sync]`);
+        } else if ((rental.status === 'ongoing' || rental.status === 'upcoming') &&
+            dbStage !== ConversationStage.CONFIRMED &&
+            dbStage !== ConversationStage.COMPLETED) {
+          // Only force CONFIRMED if rental hasn't ended yet (COMPLETED check above takes priority)
+          state.currentStage = ConversationStage.CONFIRMED;
+          await this.persistStage(rentalId, ConversationStage.CONFIRMED);
+          this.logger.log(`Stage ${dbStage} → CONFIRMED (rental status: ${rental.status}) for ${rentalId} [getConversationState sync]`);
         } else if (['cancelled', 'obsolete'].includes(rental.status) &&
                    dbStage !== ConversationStage.DEAD) {
           state.currentStage = ConversationStage.DEAD;

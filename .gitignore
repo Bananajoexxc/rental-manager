@@ -40,3 +40,6 @@ coverage
 .cache
 .temp
 tmp
+
+# Claude Code memory
+.claude-code-memory.md
