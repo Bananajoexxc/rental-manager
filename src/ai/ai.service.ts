@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { PromptManagerService } from '../prompts/prompt-manager.service';
+import { GeminiAiService } from './gemini-ai.service';
 
 export interface AiResponse {
   content: string;
@@ -47,15 +48,21 @@ export class AiService {
   private modelLightweight: string;
 
   private aiEnabled: boolean;
+  private readonly provider: 'claude' | 'gemini';
 
   constructor(
     private configService: ConfigService,
     private promptManager: PromptManagerService,
+    @Optional() @Inject(forwardRef(() => GeminiAiService)) private geminiAiService?: GeminiAiService,
   ) {
     this.aiEnabled = this.configService.get<string>('AI_ENABLED') !== 'false';
+    this.provider = (this.configService.get<string>('AI_PROVIDER') || 'claude') as 'claude' | 'gemini';
+
     const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
     if (!this.aiEnabled) {
-      this.logger.warn('AI_ENABLED=false — all Claude API calls disabled (testing mode)');
+      this.logger.warn('AI_ENABLED=false — all AI calls disabled (testing mode)');
+    } else if (this.provider === 'gemini') {
+      this.logger.log('🟢 AI_PROVIDER=gemini — routing all AI calls through Gemini 2.5 Flash');
     } else if (!apiKey || apiKey === 'your_anthropic_api_key_here') {
       this.logger.warn('ANTHROPIC_API_KEY not configured — AI features disabled');
     }
@@ -237,6 +244,9 @@ export class AiService {
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.processRoutine(userMessage, context);
+    }
     return this.callClaude(userMessage, context, this.modelRoutine);
   }
 
@@ -244,16 +254,23 @@ export class AiService {
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.processComplex(userMessage, context);
+    }
     return this.callClaude(userMessage, context, this.modelComplex);
   }
 
   /**
    * Adaptive routing: defaults to Haiku, auto-escalates to Sonnet for edge cases.
+   * When AI_PROVIDER=gemini, delegates to GeminiAiService (single model, no tier split).
    */
   async processAdaptive(
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.processAdaptive(userMessage, context);
+    }
     const model = this.shouldEscalateToComplex(userMessage, context)
       ? this.modelComplex
       : this.modelRoutine;
@@ -348,6 +365,9 @@ export class AiService {
     extractedItems: string[],
     rentalDates: { start?: Date; end?: Date },
   ): Promise<{ listingItem: string; renterIntent: string; status: string; warnings: string[] }> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.preflightReasoning(renterMessage, rentalTitle, rentalStatus, extractedItems, rentalDates);
+    }
     if (!this.aiEnabled) {
       return {
         listingItem: extractedItems[0] || rentalTitle,
@@ -389,34 +409,43 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
 
   /**
    * Lightweight extraction/classification — uses Claude 3 Haiku (4x cheaper).
-   * For structured data extraction, intent classification, summaries — NOT renter-facing.
+   * When AI_PROVIDER=gemini, delegates to GeminiAiService.
    */
   async processExtraction(
     userMessage: string,
     context: Omit<AiContext, 'rules' | 'memories'> = {},
   ): Promise<AiResponse> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.processExtraction(userMessage, context);
+    }
     return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true }, this.modelLightweight);
   }
 
   /**
-   * Sonnet-grade extraction — for tasks where Haiku lacks nuance (e.g. time negotiation context).
-   * Strips rules/memories like processExtraction, but uses Sonnet with generous token budget.
+   * Sonnet-grade extraction — for tasks where Haiku lacks nuance.
+   * When AI_PROVIDER=gemini, delegates to GeminiAiService.
    */
   async processExtractionComplex(
     userMessage: string,
     context: Omit<AiContext, 'rules' | 'memories'> = {},
   ): Promise<AiResponse> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.processExtractionComplex(userMessage, context);
+    }
     return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true, maxTokens: 1024 }, this.modelComplex);
   }
 
   /**
-   * Lightweight internal analysis — uses Claude 3 Haiku for non-renter-facing tasks.
-   * Market reports, memory classification, internal summaries.
+   * Lightweight internal analysis.
+   * When AI_PROVIDER=gemini, delegates to GeminiAiService.
    */
   async processLightweight(
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
+    if (this.provider === 'gemini' && this.geminiAiService) {
+      return this.geminiAiService.processLightweight(userMessage, context);
+    }
     return this.callClaude(userMessage, context, this.modelLightweight);
   }
 
