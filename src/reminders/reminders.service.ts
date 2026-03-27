@@ -6,16 +6,28 @@ import { CalendarService } from '../calendar/calendar.service';
 import { MemoryService } from '../memory/memory.service';
 import { RevenueService } from '../revenue/revenue.service';
 import { HyggloService } from '../hygglo/hygglo.service';
+import { getPickupLocation } from '../utils/pickup-locations';
 
 @Injectable()
 export class RemindersService {
   private readonly logger = new Logger(RemindersService.name);
 
-  private readonly arrivalReminderText =
-    'When you arrive at Trafalgar Square, wait by the Statue of James II next to the Sainsburys Wing entrance ' +
-    'of the National Gallery & text arrived in this chat - well be right with you. PLEASE DONT GO IN ANYWHERE. ' +
-    'Location: https://share.google/G28UkWpFMDB2BDVWi ' +
-    'If someone else picks up, forward this - they need the booking number or screenshot of this chat.';
+  private getArrivalReminderText(account: string): string {
+    const location = getPickupLocation(account);
+    if ((account || '').toLowerCase() === 'leo') {
+      return (
+        `When you arrive at ${location.shortName}, look for the Pret and wait outside — ` +
+        'text arrived in this chat and we\'ll be right with you. PLEASE DON\'T GO IN ANYWHERE. ' +
+        'If someone else picks up, forward this - they need the booking number or screenshot of this chat.'
+      );
+    }
+    return (
+      `When you arrive at ${location.shortName}, wait by the Statue of James II next to the Sainsburys Wing entrance ` +
+      'of the National Gallery & text arrived in this chat - well be right with you. PLEASE DONT GO IN ANYWHERE. ' +
+      `Location: ${location.mapsLink} ` +
+      'If someone else picks up, forward this - they need the booking number or screenshot of this chat.'
+    );
+  }
 
   constructor(
     private prisma: PrismaService,
@@ -41,6 +53,11 @@ export class RemindersService {
       // await this.checkLateReturns(now);
       // Send arrival confirmations to renters via Hygglo chat
       await this.checkArrivalConfirmations(now);
+      // 1-hour pre-pickup/return reminders to renters with location + instructions
+      await this.checkPrePickupReminders(now);
+      await this.checkPreReturnReminders(now);
+      // Mid-rental check-in: "everything working okay?"
+      await this.checkMidRentalCheckins(now);
     } catch (error) {
       this.logger.error(`Reminder check error: ${error.message}`);
     }
@@ -176,7 +193,7 @@ export class RemindersService {
   }
 
   /**
-   * Build daily revenue message — only bookings starting today count.
+   * Build daily revenue message — only rentals starting today, one line per rental.
    */
   private async buildDailyRevenueMessage(): Promise<string> {
     const todayStart = new Date();
@@ -184,24 +201,30 @@ export class RemindersService {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    const todayBookings = await this.prisma.booking.findMany({
+    // Fetch via rentals starting today — one row per rental, not per item
+    const todayRentals = await this.prisma.rental.findMany({
       where: {
-        status: 'confirmed',
+        status: { in: ['upcoming', 'ongoing', 'completed'] },
         start_date: { gte: todayStart, lte: todayEnd },
       },
-      orderBy: { start_date: 'asc' },
+      select: { id: true, title: true, renter_info: true, rental_price: true, account: true },
+      orderBy: { rental_price: 'desc' },
     });
 
-    const todayRevenue = todayBookings.reduce((sum, b) => sum + (b.revenue || 0), 0);
-    const todayProfit = todayBookings.reduce((sum, b) => sum + (b.net_profit || 0), 0);
+    const todayRevenue = todayRentals.reduce((sum, r) => sum + (r.rental_price || 0), 0);
 
     const lines: string[] = [];
-    for (const b of todayBookings) {
-      lines.push(`  ${b.item_name} — ${b.renter_name}: £${b.revenue || 0}`);
+    for (const r of todayRentals) {
+      const cleanTitle = (r.title || 'gear').split(/\s*[|–—]\s*/)[0]
+        .replace(/\s*\((?:like|similar to|comparable to|replaces|vs|or)\s[^)]+\)/gi, '')
+        .trim();
+      const account = r.account === 'leo' ? 'Leo' : 'DB Cinema';
+      const renter = (r.renter_info || 'Unknown').split(' ').slice(0, 2).join(' ');
+      lines.push(`  ${renter} — ${cleanTitle}: £${Math.round(r.rental_price || 0)} (${account})`);
     }
 
-    let msg = `*Today's Revenue (${todayBookings.length} bookings):*\n`;
-    msg += `  £${Math.round(todayRevenue * 100) / 100} revenue, £${Math.round(todayProfit * 100) / 100} profit\n`;
+    let msg = `*Today's Revenue (${todayRentals.length} rental${todayRentals.length !== 1 ? 's' : ''}):*\n`;
+    msg += `  £${Math.round(todayRevenue)} total\n`;
     if (lines.length > 0) {
       msg += `\n${lines.join('\n')}`;
     }
@@ -300,6 +323,9 @@ export class RemindersService {
       const bestPickup = this.findMostPopularTime(pickupClusters) || '10:00';
       const bestReturn = this.findMostPopularTime(returnClusters) || '19:00';
 
+      // Track which rental_ids have already sent notifications (one rental can have multiple bookings)
+      const notifiedRentalIds = new Set<string>();
+
       for (const booking of bookingsNoTimes) {
         if (!booking.rental_id || !eligibleRentalIds.has(booking.rental_id)) continue;
 
@@ -323,7 +349,7 @@ export class RemindersService {
           );
         }
 
-        // Update booking
+        // Update booking (each booking gets its own times)
         const updateData: any = {};
         if (assignPickup) updateData.pickup_time = pickupTime;
         if (assignReturn) updateData.return_time = returnTime;
@@ -335,31 +361,36 @@ export class RemindersService {
 
         this.logger.log(`Auto-assigned times for ${booking.item_name} (${booking.renter_name}): pickup=${pickupTime}, return=${returnTime}`);
 
-        // Notify Daniel
-        await this.telegramService.sendProactiveMessage(
-          `⏰ *Auto-Assigned Times*\n\n` +
-          `├ 📦 ${booking.item_name}\n` +
-          `├ 👤 ${booking.renter_name}\n` +
-          `├ 📅 ${booking.start_date.toISOString().split('T')[0]}\n` +
-          `├ ⏰ Pickup: ${pickupTime}\n` +
-          `├ ⏰ Return: ${returnTime}\n` +
-          `└ Renter will be notified`,
-        );
+        // Send notifications only once per rental (not once per booking item)
+        if (!notifiedRentalIds.has(booking.rental_id)) {
+          notifiedRentalIds.add(booking.rental_id);
 
-        // Notify renter via Hygglo
-        if (booking.rental?.listing_id) {
-          try {
-            const assignedParts: string[] = [];
-            if (assignPickup) assignedParts.push(`pickup at ${pickupTime}`);
-            if (assignReturn) assignedParts.push(`return at ${returnTime}`);
-            const assignedText = assignedParts.join(' and ');
-            const autoAssignMsg = `Just a heads up — since we hadn't heard back on times after a few reminders, I've gone ahead and assigned ${assignedText} for your rental starting tomorrow. If those times don't work for you, just let me know and we can adjust!`;
-            await this.hyggloService.sendMessage(booking.rental.listing_id, autoAssignMsg);
-            if (booking.rental_id) {
-              await this.memoryService.storeConversation(`rental:${booking.rental_id}`, 'assistant', autoAssignMsg, { model: 'auto-assign' });
+          // Notify Daniel
+          await this.telegramService.sendProactiveMessage(
+            `⏰ *Auto-Assigned Times*\n\n` +
+            `├ 📦 ${booking.item_name}\n` +
+            `├ 👤 ${booking.renter_name}\n` +
+            `├ 📅 ${booking.start_date.toISOString().split('T')[0]}\n` +
+            `├ ⏰ Pickup: ${pickupTime}\n` +
+            `├ ⏰ Return: ${returnTime}\n` +
+            `└ Renter will be notified`,
+          );
+
+          // Notify renter via Hygglo
+          if (booking.rental?.listing_id) {
+            try {
+              const assignedParts: string[] = [];
+              if (assignPickup) assignedParts.push(`pickup at ${pickupTime}`);
+              if (assignReturn) assignedParts.push(`return at ${returnTime}`);
+              const assignedText = assignedParts.join(' and ');
+              const autoAssignMsg = `Just a heads up — since we hadn't heard back on times after a few reminders, I've gone ahead and assigned ${assignedText} for your rental starting tomorrow. If those times don't work for you, just let me know and we can adjust!`;
+              await this.hyggloService.sendMessage(booking.rental.listing_id, autoAssignMsg);
+              if (booking.rental_id) {
+                await this.memoryService.storeConversation(`rental:${booking.rental_id}`, 'assistant', autoAssignMsg, { model: 'auto-assign' });
+              }
+            } catch (sendErr) {
+              this.logger.warn(`Failed to notify renter about auto-assigned times: ${sendErr.message}`);
             }
-          } catch (sendErr) {
-            this.logger.warn(`Failed to notify renter about auto-assigned times: ${sendErr.message}`);
           }
         }
       }
@@ -386,11 +417,6 @@ export class RemindersService {
   // ══════════════════════════════════════════════
   // ARRIVAL CONFIRMATION SYSTEM
   // ══════════════════════════════════════════════
-
-  private readonly pickupArrivalMessage1 =
-    'Hey! Just checking — have you arrived at the pickup point? ' +
-    'Text "arrived" in this chat when you\'re here and we\'ll be right with you.\n\n' +
-    this.arrivalReminderText;
 
   private readonly pickupArrivalMessage2 =
     'Just following up — are you on your way for pickup? ' +
@@ -452,11 +478,11 @@ export class RemindersService {
 
           // First message: 5 min after pickup time
           if (minSincePickup >= 5 && !booking.pickup_arrival_sent_at) {
-            await this.sendArrivalCheck(listingId, booking.id, 'pickup', 1);
+            await this.sendArrivalCheck(listingId, booking.id, 'pickup', 1, booking.account);
           }
           // Second message: 15 min after pickup time (10 min after first)
           else if (minSincePickup >= 15 && booking.pickup_arrival_sent_at && !booking.pickup_arrival_followup_sent) {
-            await this.sendArrivalCheck(listingId, booking.id, 'pickup', 2);
+            await this.sendArrivalCheck(listingId, booking.id, 'pickup', 2, booking.account);
           }
         }
 
@@ -470,11 +496,11 @@ export class RemindersService {
 
           // First message: 5 min after return time
           if (minSinceReturn >= 5 && !booking.return_arrival_sent_at) {
-            await this.sendArrivalCheck(listingId, booking.id, 'return', 1);
+            await this.sendArrivalCheck(listingId, booking.id, 'return', 1, booking.account);
           }
           // Second message: 15 min after return time (10 min after first)
           else if (minSinceReturn >= 15 && booking.return_arrival_sent_at && !booking.return_arrival_followup_sent) {
-            await this.sendArrivalCheck(listingId, booking.id, 'return', 2);
+            await this.sendArrivalCheck(listingId, booking.id, 'return', 2, booking.account);
           }
         }
       } catch (err) {
@@ -491,9 +517,15 @@ export class RemindersService {
     bookingId: string,
     phase: 'pickup' | 'return',
     messageNum: 1 | 2,
+    account?: string,
   ) {
+    const pickupMsg1 =
+      'Hey! Just checking — have you arrived at the pickup point? ' +
+      'Text "arrived" in this chat when you\'re here and we\'ll be right with you.\n\n' +
+      this.getArrivalReminderText(account || 'dbcinema');
+
     const messages = {
-      pickup: { 1: this.pickupArrivalMessage1, 2: this.pickupArrivalMessage2 },
+      pickup: { 1: pickupMsg1, 2: this.pickupArrivalMessage2 },
       return: { 1: this.returnArrivalMessage1, 2: this.returnArrivalMessage2 },
     };
 
@@ -545,6 +577,221 @@ export class RemindersService {
     const dt = new Date(date);
     dt.setHours(hours, minutes, 0, 0);
     return dt;
+  }
+
+  // ══════════════════════════════════════════════
+  // 1-HOUR PRE-PICKUP/RETURN REMINDERS
+  // ══════════════════════════════════════════════
+
+  private async checkPrePickupReminders(now: Date) {
+    // Look at today and tomorrow to catch bookings near midnight
+    const windowStart = new Date(now);
+    windowStart.setHours(0, 0, 0, 0);
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + 1);
+    windowEnd.setHours(23, 59, 59, 999);
+
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        pickup_pre_reminded: false,
+        pickup_time: { not: null },
+        OR: [
+          { pickup_date: { gte: windowStart, lte: windowEnd } },
+          { start_date: { gte: windowStart, lte: windowEnd } },
+        ],
+      },
+      include: { rental: true },
+    });
+
+    for (const booking of bookings) {
+      if (!booking.pickup_time) continue;
+      const pickupDate = booking.pickup_date || booking.start_date;
+      const pickupDateTime = this.buildDateTime(pickupDate, booking.pickup_time);
+      if (!pickupDateTime) continue;
+
+      const minsUntilPickup = (pickupDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+      // Send when 50-70 minutes before pickup (cron runs every minute, catches the window)
+      if (minsUntilPickup >= 50 && minsUntilPickup <= 70) {
+        const listingId = booking.rental?.listing_id;
+        if (!listingId) continue;
+
+        const location = getPickupLocation(booking.account);
+        const mapsLine = location.mapsLink ? `\nGoogle Maps: ${location.mapsLink}` : '';
+
+        const message =
+          `Hey! Just a reminder — your pickup is confirmed for ${booking.pickup_time} today.\n\n` +
+          `📍 Pickup location: ${location.address}${mapsLine}\n\n` +
+          `Please text "arrived" in this chat when you get there and we'll be right with you.\n` +
+          `If you think you won't make it on time, just let us know as early as you can so we can adjust!`;
+
+        try {
+          await this.hyggloService.sendMessage(listingId, message);
+          this.logger.log(`Pre-pickup reminder sent for ${booking.renter_name} (booking ${booking.id})`);
+
+          // Store in conversation history
+          if (booking.rental_id) {
+            await this.memoryService.storeConversation(
+              `rental:${booking.rental_id}`, 'assistant', message, { model: 'pre-pickup-reminder' },
+            );
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to send pre-pickup reminder: ${err.message}`);
+        }
+
+        // Mark as reminded (even if send failed, to prevent retry spam)
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: { pickup_pre_reminded: true },
+        });
+      }
+    }
+  }
+
+  private async checkPreReturnReminders(now: Date) {
+    const windowStart = new Date(now);
+    windowStart.setHours(0, 0, 0, 0);
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + 1);
+    windowEnd.setHours(23, 59, 59, 999);
+
+    const bookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        return_pre_reminded: false,
+        return_time: { not: null },
+        OR: [
+          { return_date: { gte: windowStart, lte: windowEnd } },
+          { end_date: { gte: windowStart, lte: windowEnd } },
+        ],
+      },
+      include: { rental: true },
+    });
+
+    for (const booking of bookings) {
+      if (!booking.return_time) continue;
+      const returnDate = booking.return_date || booking.end_date;
+      const returnDateTime = this.buildDateTime(returnDate, booking.return_time);
+      if (!returnDateTime) continue;
+
+      const minsUntilReturn = (returnDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+      if (minsUntilReturn >= 50 && minsUntilReturn <= 70) {
+        const listingId = booking.rental?.listing_id;
+        if (!listingId) continue;
+
+        const location = getPickupLocation(booking.account);
+        const mapsLine = location.mapsLink ? `\nGoogle Maps: ${location.mapsLink}` : '';
+
+        const message =
+          `Hey! Just a reminder — your return is scheduled for ${booking.return_time} today.\n\n` +
+          `📍 Return location: ${location.address}${mapsLine}\n\n` +
+          `Before heading over, please make sure:\n` +
+          `• Lens caps and body caps are back on all lenses and camera bodies\n` +
+          `• All batteries and SD cards are back in the camera/gear\n` +
+          `• Everything is packed securely in the divided sections of the bag/case\n\n` +
+          `Missing items or signs of negligence may result in late fees while we locate items, or charges for damage. We appreciate you taking a moment to double-check!\n\n` +
+          `If you think you won't make it on time, just let us know as early as you can so we can adjust.`;
+
+        try {
+          await this.hyggloService.sendMessage(listingId, message);
+          this.logger.log(`Pre-return reminder sent for ${booking.renter_name} (booking ${booking.id})`);
+
+          if (booking.rental_id) {
+            await this.memoryService.storeConversation(
+              `rental:${booking.rental_id}`, 'assistant', message, { model: 'pre-return-reminder' },
+            );
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to send pre-return reminder: ${err.message}`);
+        }
+
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: { return_pre_reminded: true },
+        });
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════
+  // MID-RENTAL CHECK-IN
+  // ══════════════════════════════════════════════
+
+  private async checkMidRentalCheckins(now: Date) {
+    const hour = now.getUTCHours();
+    // Only send check-ins during reasonable hours (9am–8pm UTC)
+    if (hour < 9 || hour >= 20) return;
+
+    // Find confirmed bookings that are currently active (started, not yet ended)
+    // and haven't had their mid-rental check-in sent yet
+    const activeBookings = await this.prisma.booking.findMany({
+      where: {
+        status: 'confirmed',
+        midpoint_checkin_sent: false,
+        pickup_arrival_confirmed: true, // They actually have the gear
+        start_date: { lte: now },
+        end_date: { gte: now },
+      },
+      include: { rental: true },
+    });
+
+    if (activeBookings.length === 0) return;
+
+    // Group bookings by rental (send one check-in message per renter, not per item)
+    const rentalGroups = new Map<string, typeof activeBookings>();
+    for (const b of activeBookings) {
+      if (!b.rental?.listing_id || !b.rental_id) continue;
+      const key = b.rental_id;
+      if (!rentalGroups.has(key)) rentalGroups.set(key, []);
+      rentalGroups.get(key)!.push(b);
+    }
+
+    for (const [rentalId, bookings] of rentalGroups) {
+      const booking = bookings[0];
+      const rental = booking.rental;
+      if (!rental) continue;
+
+      // Calculate midpoint between pickup and return
+      const pickupDate = booking.pickup_date || booking.start_date;
+      const returnDate = booking.return_date || booking.end_date;
+      const pickupTime = booking.pickup_time || '10:00';
+      const returnTime = booking.return_time || '19:00';
+
+      const pickupDT = this.buildDateTime(pickupDate, pickupTime);
+      const returnDT = this.buildDateTime(returnDate, returnTime);
+      if (!pickupDT || !returnDT) continue;
+
+      const midpointMs = pickupDT.getTime() + (returnDT.getTime() - pickupDT.getTime()) / 2;
+      const midpoint = new Date(midpointMs);
+
+      // Send when we're within 30 minutes of the midpoint
+      const minsFromMidpoint = Math.abs((now.getTime() - midpoint.getTime()) / (1000 * 60));
+      if (minsFromMidpoint > 30) continue;
+
+      const message =
+        `Hey! Just checking in — hope everything's going well with the gear! ` +
+        `If anything's not working as expected or you need any help at all, just let me know.`;
+
+      try {
+        await this.hyggloService.sendMessage(rental.listing_id, message);
+        this.logger.log(`Mid-rental check-in sent for ${booking.renter_name} (rental ${rentalId})`);
+
+        await this.memoryService.storeConversation(
+          `rental:${rentalId}`, 'assistant', message, { model: 'mid-rental-checkin' },
+        );
+      } catch (err) {
+        this.logger.warn(`Failed to send mid-rental check-in: ${err.message}`);
+      }
+
+      // Mark ALL bookings for this rental as checked in
+      const bookingIds = bookings.map(b => b.id);
+      await this.prisma.booking.updateMany({
+        where: { id: { in: bookingIds } },
+        data: { midpoint_checkin_sent: true },
+      });
+    }
   }
 
   /**
@@ -640,8 +887,8 @@ export class RemindersService {
 
     // Fallback times: work backward from evening for pickup, forward from morning for return
     const fallbacks = type === 'pickup'
-      ? ['10:00', '11:00', '12:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00']
-      : ['19:00', '18:00', '17:00', '16:00', '15:00', '14:00', '12:00', '11:00', '10:00'];
+      ? ['10:00', '11:00', '12:00', '19:00', '20:00', '21:00']
+      : ['19:00', '20:00', '21:00', '12:00', '11:00', '10:00'];
 
     for (const fallback of fallbacks) {
       if (fallback === preferredTime) continue;

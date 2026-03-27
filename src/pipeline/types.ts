@@ -82,6 +82,7 @@ export interface ItemPricing {
   dailyMin: number;
   dailyMax: number;
   renterPays?: number;
+  source?: 'database' | 'catalog';
 }
 
 export interface ItemAvailability {
@@ -89,6 +90,8 @@ export interface ItemAvailability {
   available: boolean;
   booked: number;
   maxQuantity: number;
+  availableFrom?: string;    // e.g. "12:00" — frees up after same-day return + 1hr buffer
+  unavailableAfter?: string; // e.g. "19:00" — next renter picks up, must return before
 }
 
 export interface FactPack {
@@ -145,7 +148,7 @@ export interface FactPack {
 
 // Layer 5: Verification result
 export interface VerificationIssue {
-  type: 'PRICE_MISMATCH' | 'ITEM_MISMATCH' | 'AVAILABILITY_LIE' | 'UPSELL_VIOLATION' | 'REPETITION';
+  type: 'PRICE_MISMATCH' | 'ITEM_MISMATCH' | 'AVAILABILITY_LIE' | 'UNVERIFIED_UNAVAILABILITY' | 'UPSELL_VIOLATION' | 'REPETITION';
   detail: string;
 }
 
@@ -166,6 +169,7 @@ export interface PipelineInput {
 
   // Simulation mode has no rental record
   isSimulation: boolean;
+  simulationRentalContext?: string;
 
   // Optional overrides
   imageUrls?: string[];

@@ -318,10 +318,44 @@ function determineContextLevel(message: string): 'minimal' | 'standard' | 'compr
 
 function extractMentionedItems(message: string): string[] {
   const inventoryNames = getInventoryItemNames();
-  const words = message.split(/[\s,.\-!?;:()]+/).filter(w => w.length > 2);
   const items: string[] = [];
+  const messageLower = message.toLowerCase();
 
+  // 1. Direct substring: check if full inventory name appears in message
+  for (const itemName of inventoryNames) {
+    if (messageLower.includes(itemName.toLowerCase())) {
+      if (!items.includes(itemName)) items.push(itemName);
+    }
+  }
+
+  // 2. Significant-token matching: if enough distinctive parts of an item name
+  //    appear in the message, consider it mentioned (mirrors telegram.service approach)
+  for (const itemName of inventoryNames) {
+    if (items.includes(itemName)) continue;
+    const itemParts = itemName.toLowerCase().split(/[\s\-]+/).filter(p => p.length > 2);
+    if (itemParts.length === 0) continue;
+    const matchCount = itemParts.filter(part => messageLower.includes(part)).length;
+    if (matchCount >= Math.min(2, itemParts.length)) {
+      items.push(itemName);
+    }
+  }
+
+  // 3. N-gram matching: try 2-4 word combos through findBestMatch
+  //    This catches things like "28-70mm lens" → "Sony 28-70mm"
+  const words = message.split(/[\s,.\-!?;:()]+/).filter(w => w.length > 1);
+  for (let n = Math.min(4, words.length); n >= 2; n--) {
+    for (let i = 0; i <= words.length - n; i++) {
+      const ngram = words.slice(i, i + n).join(' ');
+      const match = findBestMatch(ngram, inventoryNames);
+      if (match && !items.includes(match)) {
+        items.push(match);
+      }
+    }
+  }
+
+  // 4. Single-word fallback: catches model numbers like "FX3", "A7V", "RS3"
   for (const word of words) {
+    if (word.length < 3) continue;
     const match = findBestMatch(word, inventoryNames);
     if (match && !items.includes(match)) {
       items.push(match);

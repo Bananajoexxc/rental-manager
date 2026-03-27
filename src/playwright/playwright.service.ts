@@ -411,6 +411,101 @@ export class PlaywrightService implements OnModuleDestroy {
   }
 
   /**
+   * Decline a pending rental request on Hygglo.
+   * Used to close secondary listings when a renter sent multiple requests for the same booking.
+   * Gated by READ_ONLY_MODE and PLAYWRIGHT_ENABLED.
+   */
+  async declineRental(orderId: string, account: HyggloAccount): Promise<{
+    success: boolean;
+    error?: string;
+  }> {
+    if (!this.isEnabled) {
+      return { success: false, error: 'Playwright is disabled' };
+    }
+    if (this.isReadOnly) {
+      this.logger.warn(`BLOCKED [READ_ONLY_MODE] declineRental for order ${orderId}`);
+      return { success: false, error: 'Read-only mode is active' };
+    }
+
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        const loggedIn = await this.ensureLoggedIn(account);
+        if (!loggedIn) {
+          return { success: false, error: 'Failed to log in' };
+        }
+
+        const context = await this.getContext(account);
+        const page = await context.newPage();
+
+        try {
+          await page.goto(`${this.baseUrl}/my/orders/${orderId}`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+
+          await page.waitForTimeout(2000);
+
+          const declineSelectors = [
+            'button:has-text("Decline")',
+            'button:has-text("Reject")',
+            'button:has-text("Deny")',
+            '[data-testid="decline-button"]',
+            '.decline-button',
+            'button.decline',
+          ];
+
+          let declineButton: any = null;
+          for (const selector of declineSelectors) {
+            declineButton = await page.$(selector);
+            if (declineButton) break;
+          }
+
+          if (!declineButton) {
+            this.logger.warn(`No decline button found for order ${orderId} on attempt ${attempt}`);
+            return { success: false, error: 'Decline button not found on page' };
+          }
+
+          await declineButton.click();
+          await page.waitForTimeout(1000);
+
+          // Confirm dialog if present
+          const confirmSelectors = [
+            'button:has-text("Confirm")',
+            'button:has-text("Yes")',
+            'button:has-text("OK")',
+            '[data-testid="confirm-button"]',
+          ];
+
+          for (const selector of confirmSelectors) {
+            const confirmButton = await page.$(selector);
+            if (confirmButton) {
+              await confirmButton.click();
+              await page.waitForTimeout(2000);
+              break;
+            }
+          }
+
+          await this.saveState(account, context);
+          this.logger.log(`Successfully declined rental ${orderId} for ${account}`);
+          return { success: true };
+        } finally {
+          await page.close();
+        }
+      } catch (error) {
+        this.logger.warn(`declineRental attempt ${attempt}/${this.MAX_RETRIES} failed for ${orderId}: ${error.message}`);
+        if (attempt < this.MAX_RETRIES) {
+          const backoffMs = 1000 * Math.pow(2, attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        } else {
+          return { success: false, error: `All ${this.MAX_RETRIES} attempts failed: ${error.message}` };
+        }
+      }
+    }
+
+    return { success: false, error: 'Exhausted all retry attempts' };
+  }
+
+  /**
    * Apply a discount to a rental order by modifying the earnings/price on the Hygglo order page.
    * Must be called BEFORE acceptRental(). Gated by READ_ONLY_MODE and PLAYWRIGHT_ENABLED.
    */
@@ -1239,71 +1334,302 @@ export class PlaywrightService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Auto-detect Hygglo category path from listing title keywords.
+   * Returns 2- or 3-level path depending on whether the category is a leaf node.
+   */
+  private detectCategoryPath(title: string): string[] {
+
+    // Cinema cameras (specific models)
+    if (/sony a7|canon r5|canon r6|bmpcc|blackmagic|fx3(?!0)|fx30|cinema camera/i.test(title)) {
+      return ["Film & Photography", "Cameras", "Digital Cinema Cameras"];
+    }
+    // Lenses
+    if (/lens|lenses|anamorphic/i.test(title)) {
+      return ["Film & Photography", "Camera lenses", "Mirrorless Lenses"];
+    }
+    // Drones
+    if (/dji mavic|dji mini|drone/i.test(title)) {
+      return ["Electronics", "Drone", "DJI Mavic"];
+    }
+    // Speakers / PA (check before monitor since partybox could match)
+    if (/jbl|partybox|speaker|\bpa\b/i.test(title)) {
+      return ["Film & Photography", "Streaming"];
+    }
+    // Gimbals & tripods & rigs
+    if (/dji rs|gimbal|tripod|smallrig|sirui/i.test(title)) {
+      return ["Film & Photography", "Stand & Rigs"];
+    }
+    // Microphones & audio
+    if (/dji mic|microphone|\bmic\b|wireless mic|\brode\b/i.test(title)) {
+      return ["Film & Photography", "Streaming"];
+    }
+    // Lighting
+    if (/light|lighting|aputure|led panel|nanlite/i.test(title)) {
+      return ["Film & Photography", "Flash and lights"];
+    }
+    // Monitors
+    if (/monitor|atomos|ninja/i.test(title)) {
+      return ["Film & Photography", "Monitor"];
+    }
+    // Memory cards
+    if (/sd card|memory card|cfexpress/i.test(title)) {
+      return ["Film & Photography", "Memory Card"];
+    }
+    // Batteries & power
+    if (/battery|v-mount|\bpower\b/i.test(title)) {
+      return ["Film & Photography", "Camera Battery"];
+    }
+    // Camera bags
+    if (/camera bag|\bcase\b/i.test(title)) {
+      return ["Film & Photography", "Camera Bag"];
+    }
+    // Streaming
+    if (/streamer|streaming|capture card/i.test(title)) {
+      return ["Film & Photography", "Streaming"];
+    }
+    // Generic cameras (DSLR fallback)
+    if (/camera|dslr/i.test(title)) {
+      return ["Film & Photography", "Cameras", "DSLR Cameras"];
+    }
+    // Default fallback
+    return ["Film & Photography", "Camera Package Deals"];
+  }
+
   // ────────────── MARKETING LISTING UPLOAD ──────────────
 
   /**
-   * Create a new listing on Hygglo from a marketing listing.
-   * Gated behind MARKETING_UPLOAD_ENABLED=true env var.
-   * Safety: READ_ONLY_MODE blocks all uploads.
-   *
-   * Flow:
-   * 1. Login to appropriate account (DB Cinema or Leo)
-   * 2. Navigate to create listing page
-   * 3. Upload composed image
-   * 4. Fill in: title, description, category, daily price
-   * 5. Set estimated value
-   * 6. Submit listing
+   * Upload a marketing listing to Hygglo via the web form.
+   * Steps: category, title, description, image, price, location, valuation.
+   * Pauses before submission for human review unless autoPublish=true.
    */
   async createMarketingListing(data: {
     account: HyggloAccount;
     title: string;
     description: string;
     dailyPrice: number;
+    price3days?: number;
+    price7days?: number;
     estimatedValue: number;
     imagePath: string;
-  }): Promise<{ success: boolean; hyggloListingId?: string; error?: string }> {
-    // Safety gates
+    categoryPath?: string[];
+    autoPublish?: boolean;
+  }): Promise<{ success: boolean; hyggloListingUrl?: string; screenshotPath?: string; error?: string }> {
+    // MARKETING_UPLOAD_ENABLED is the gate (READ_ONLY_MODE bypassed for marketing)
     if (process.env.MARKETING_UPLOAD_ENABLED !== 'true') {
-      return { success: false, error: 'MARKETING_UPLOAD_ENABLED is not true. Set env var to enable uploads.' };
-    }
-    if (this.isReadOnly) {
-      return { success: false, error: 'READ_ONLY_MODE is active. Cannot upload listings.' };
+      return { success: false, error: 'MARKETING_UPLOAD_ENABLED is not true.' };
     }
     if (!this.isEnabled) {
       return { success: false, error: 'PLAYWRIGHT_ENABLED is not true.' };
     }
 
-    this.logger.log(`Marketing listing upload requested: "${data.title}" → ${data.account}`);
+    const fs = require('fs');
+    const categoryPath = data.categoryPath || this.detectCategoryPath(data.title);
+
+    this.logger.log(`[upload] Starting: "${data.title.substring(0, 50)}" -> ${data.account}`);
 
     try {
       const context = await this.getContext(data.account);
       const page = await context.newPage();
+      page.setDefaultTimeout(20000);
 
       try {
-        // Navigate to create listing page
-        await page.goto(`${this.baseUrl}/new-listing`, {
+        await page.goto(`${this.baseUrl}/uk/new-item`, {
           waitUntil: 'networkidle',
-          timeout: 30000,
+          timeout: 60000,
+        });
+        await page.waitForTimeout(3000);
+        this.logger.log('[upload] Form loaded');
+
+        // Step 1: Category (multi-level via React onClick handlers)
+        this.logger.log('[upload] Category path: ' + categoryPath.join(' > '));
+        await page.click('#category', { force: true });
+        await page.waitForTimeout(1500);
+
+        for (const catLevel of categoryPath) {
+          let clicked = await page.evaluate((targetText: string) => {
+            const allDivs = Array.from(document.querySelectorAll('div'));
+            for (const div of allDivs) {
+              const propsKey = Object.keys(div).find((k: string) => k.startsWith('__reactProps'));
+              if (!propsKey) continue;
+              if (!(div as any)[propsKey].onClick) continue;
+              const rect = div.getBoundingClientRect();
+              if (rect.width < 100 || rect.y < 200 || rect.y > 900) continue;
+              if (div.textContent?.trim() === targetText) {
+                (div as HTMLElement).click();
+                return targetText;
+              }
+            }
+            return null;
+          }, catLevel);
+
+          // If not found in viewport, scroll modal down and retry
+          if (!clicked) {
+            clicked = await page.evaluate((targetText: string) => {
+              // Find and scroll the modal/dialog container
+              const allDivs = Array.from(document.querySelectorAll('div'));
+              for (const div of allDivs) {
+                const propsKey = Object.keys(div).find((k: string) => k.startsWith('__reactProps'));
+                if (!propsKey) continue;
+                if (!(div as any)[propsKey].onClick) continue;
+                // Try scrolling into view and clicking
+                div.scrollIntoView({ behavior: 'instant', block: 'center' });
+                if (div.textContent?.trim() === targetText) {
+                  (div as HTMLElement).click();
+                  return targetText;
+                }
+              }
+              return null;
+            }, catLevel);
+          }
+
+          if (clicked) {
+            this.logger.log('[upload] Category level: ' + clicked);
+          } else {
+            this.logger.warn('[upload] Category not found: ' + catLevel);
+          }
+          await page.waitForTimeout(1500);
+        }
+
+        // Step 2: Title & Description
+        await page.fill('#name', data.title);
+        await page.fill('#description', data.description);
+        this.logger.log('[upload] Title + description filled');
+
+        // Step 3: Image via native file chooser
+        if (data.imagePath && fs.existsSync(data.imagePath)) {
+          await page.evaluate(() => {
+            const h = Array.from(document.querySelectorAll("h3")).find((el: any) => el.textContent?.includes("Pictures"));
+            if (h) h.scrollIntoView({ behavior: "instant", block: "center" });
+          });
+          await page.waitForTimeout(500);
+
+          try {
+            const [fileChooser] = await Promise.all([
+              page.waitForEvent("filechooser", { timeout: 5000 }),
+              page.click(".is_GridItem", { force: true }),
+            ]);
+            await fileChooser.setFiles(data.imagePath);
+            this.logger.log("[upload] Image uploaded via file chooser");
+            await page.waitForTimeout(3000);
+          } catch (imgErr: any) {
+            this.logger.warn("[upload] Image upload failed: " + imgErr.message);
+          }
+        }
+
+        // Step 4: Price (use evaluate to fill since page.fill can timeout on scroll)
+        await page.evaluate((prices: { d1: string; d3?: string; d7?: string }) => {
+          const setVal = (id: string, val: string) => {
+            const el = document.querySelector(id) as HTMLInputElement;
+            if (!el) return;
+            el.scrollIntoView({ behavior: 'instant', block: 'center' });
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            if (nativeInputValueSetter) nativeInputValueSetter.call(el, val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          };
+          setVal('#price1day', prices.d1);
+          if (prices.d3) setVal('#price3days', prices.d3);
+          if (prices.d7) setVal('#price7days', prices.d7);
+        }, {
+          d1: String(data.dailyPrice),
+          d3: data.price3days ? String(data.price3days) : undefined,
+          d7: data.price7days ? String(data.price7days) : undefined,
+        });
+        this.logger.log(`[upload] Price: ${data.dailyPrice}/day`);
+        await page.waitForTimeout(500);
+
+        // Step 5: Location (select ALL location toggle buttons)
+        await page.evaluate(() => {
+          const h = Array.from(document.querySelectorAll('h3')).find((el: any) => el.textContent?.includes('handed over'));
+          if (h) h.scrollIntoView({ behavior: 'instant', block: 'center' });
+        });
+        await page.waitForTimeout(500);
+        const locationsSelected = await page.evaluate(() => {
+          const h = Array.from(document.querySelectorAll('h3')).find((el: any) => el.textContent?.includes('handed over'));
+          if (!h) return 0;
+          // Find the location section container
+          let section = h.parentElement;
+          for (let i = 0; i < 5; i++) {
+            if (!section) break;
+            section = section.parentElement;
+          }
+          if (!section) return 0;
+          // Location toggles are small role="button" elements with no/short text
+          // Skip "Add a location", "Flexible", etc.
+          const btns = Array.from(section.querySelectorAll('button[role="button"]'));
+          let count = 0;
+          for (const btn of btns) {
+            const text = btn.textContent?.trim() || '';
+            if (text.length > 3) continue;
+            const rect = btn.getBoundingClientRect();
+            if (rect.width > 200 || rect.height > 60) continue;
+            (btn as HTMLElement).click();
+            count++;
+          }
+          return count;
+        });
+        this.logger.log('[upload] Location toggles clicked: ' + locationsSelected);
+        await page.waitForTimeout(500);
+
+        // Step 6: Cancellation = Flexible
+        await page.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const flex = btns.find((b: any) => b.textContent?.trim() === 'Flexible');
+          if (flex) (flex as HTMLElement).click();
         });
 
-        // Screenshot before
-        const screenshotBefore = `/tmp/marketing-upload-${Date.now()}-before.png`;
-        await page.screenshot({ path: screenshotBefore, fullPage: true });
-        this.logger.log(`Pre-upload screenshot: ${screenshotBefore}`);
+        // Step 7: Valuation
+        await page.evaluate((val: string) => {
+          const el = document.querySelector('#valuation') as HTMLInputElement;
+          if (!el) return;
+          el.scrollIntoView({ behavior: 'instant', block: 'center' });
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (setter) setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }, String(data.estimatedValue));
 
-        // TODO: Fill in form fields when Hygglo's create listing flow is mapped
-        // This requires mapping the exact form selectors on Hygglo's create listing page.
-        // For now, return a placeholder indicating the method is ready but needs form mapping.
+        // Step 8: Review screenshot (capture multiple sections for verification)
+        const ts = Date.now();
+        // Scroll to top and take screenshot
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.waitForTimeout(1000);
+        const screenshotPath = `/tmp/hygglo-upload-review-${ts}.png`;
+        await page.screenshot({ path: screenshotPath, fullPage: false });
 
-        return {
-          success: false,
-          error: 'Upload form mapping not yet complete. Screenshot saved at: ' + screenshotBefore,
-        };
+        this.logger.log(`[upload] Screenshot: ${screenshotPath}`);
+
+        // Step 9: Publish or pause
+        if (data.autoPublish) {
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const pub = btns.find((b: any) => b.textContent?.includes('Publish'));
+            if (pub) pub.scrollIntoView({ behavior: 'instant', block: 'center' });
+          });
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const pub = btns.find((b: any) => b.textContent?.includes('Publish'));
+            if (pub) (pub as HTMLElement).click();
+          });
+          await page.waitForTimeout(5000);
+          const finalUrl = page.url();
+          const postShot = `/tmp/hygglo-upload-published-${ts}.png`;
+          await page.screenshot({ path: postShot, fullPage: true });
+          await this.saveState(data.account, context);
+          this.logger.log(`[upload] Published: ${finalUrl}`);
+          return { success: true, hyggloListingUrl: finalUrl, screenshotPath: postShot };
+        }
+
+        await this.saveState(data.account, context);
+        this.logger.log('[upload] Form filled, awaiting review');
+        return { success: true, screenshotPath, error: 'REVIEW_REQUIRED: Form filled but not published.' };
       } finally {
         await page.close();
       }
-    } catch (error) {
-      this.logger.error(`Marketing listing upload failed: ${error.message}`);
+    } catch (error: any) {
+      this.logger.error(`[upload] Failed: ${error.message}`);
       return { success: false, error: error.message };
     }
   }

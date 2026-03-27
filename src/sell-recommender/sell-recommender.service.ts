@@ -4,7 +4,7 @@ import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { RevenueService } from '../revenue/revenue.service';
 import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
-import { MASTER_INVENTORY, ACCESSORY_ITEMS, isAccessoryItem, findBestMatch } from '../utils/item-matcher';
+import { MASTER_INVENTORY, isAccessoryItem, findBestMatch } from '../utils/item-matcher';
 import { getOneDayPrice, PRICING_CATALOG } from '../data/pricing-catalog';
 import { getOwnedItemCost } from '../data/acquisition-costs';
 import { BUNDLE_DEFINITIONS } from '../data/bundle-suggestions';

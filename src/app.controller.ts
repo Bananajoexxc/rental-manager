@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Query, Param, Res, Header, Headers, Logger } from '@nestjs/common';
+import { Body, Controller, Req, Res, Get, Post, Patch, Delete, Query, Param, Header, Headers, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Prisma } from '@prisma/client';
@@ -36,9 +36,12 @@ import { TelegramService } from './telegram/telegram.service';
 import { RevenueService } from './revenue/revenue.service';
 import { TaxReportService } from './revenue/tax-report.service';
 import { TitleParserService } from './revenue/title-parser.service';
+import { ItemResolverService } from './item-resolver/item-resolver.service';
 import { HyggloService } from './hygglo/hygglo.service';
-import { ACCESSORY_ITEMS, isAccessoryItem } from './utils/item-matcher';
-import { PRICING_CATALOG } from './data/pricing-catalog';
+import { ACCESSORY_ITEMS, isAccessoryItem, MASTER_INVENTORY } from './utils/item-matcher';
+import { PRICING_CATALOG, getItemPrice } from './data/pricing-catalog';
+import { checkCompatibilityConflicts, detectMissingEssentials, formatCompatibilityForAI } from './data/item-compatibility';
+import { ToolHandlers } from './ai/ai.service';
 import { LostRevenueService } from './lost-revenue/lost-revenue.service';
 import { AutonomousService } from './autonomous/autonomous.service';
 import { CompetitorIntelService } from './competitor-intel/competitor-intel.service';
@@ -47,6 +50,7 @@ import { ConversationStageService } from './conversation-tree/conversation-stage
 import { ItemMatcherAiService } from './item-matcher-ai/item-matcher-ai.service';
 import { SellRecommenderService } from './sell-recommender/sell-recommender.service';
 import { ListingCreatorService } from './listing-creator/listing-creator.service';
+import { PlaywrightService } from './playwright/playwright.service';
 import { ConfigManagerService } from './autolearn/config-manager.service';
 import { OnModuleInit } from '@nestjs/common';
 
@@ -77,6 +81,8 @@ export class AppController implements OnModuleInit {
     private readonly taxReportService: TaxReportService,
     private readonly listingCreatorService: ListingCreatorService,
     private readonly configManager: ConfigManagerService,
+    private readonly itemResolverService: ItemResolverService,
+    private readonly playwrightService: PlaywrightService,
   ) {}
 
   // In-memory session store for renter chat testing
@@ -649,11 +655,10 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
 
   // --- Chat endpoints ---
 
-  @Post('api/chat')
+  @Post('chat')
   @ApiTags('Chat')
   @ApiOperation({
-    summary: 'Dashboard chat',
-    description: 'Send a message through the AI pipeline with full context (rules, memories, rental context, calendar, blacklist)',
+    summary: 'Dashboard chat — intelligent assistant with full business context and tools',
   })
   @ApiResponse({ status: 200, description: 'AI response' })
   async chatMessage(@Body() body: { message: string }) {
@@ -664,21 +669,16 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
 
     try {
       const chatId = 'dashboard';
-
-      // Store user message
       await this.memoryService.storeConversation(chatId, 'user', userMessage);
 
-      // Extract meaningful keywords
       const dashKeywords = userMessage
         .split(/[\s,.\-!?;:()]+/)
         .filter((w: string) => w.length > 2)
         .slice(0, 10);
 
-      // Detect pricing intent
       const pricingTerms = /\b(price|pricing|cost|how much|rate|rates|quote|charge|fee|fees|per day|daily|weekly|budget|listing)\b/i;
       const hasPricingIntent = pricingTerms.test(userMessage);
 
-      // Gather full context (same pipeline as Telegram)
       const [rules, history, generalMemories, blacklist, schedule] = await Promise.all([
         this.rulesService.getFormattedRules(),
         this.memoryService.getConversationHistory(chatId, 10),
@@ -687,13 +687,10 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
         this.calendarService.getFormattedSchedule(new Date()),
       ]);
 
-      // Add pricing data when relevant
       let memories = generalMemories;
       if (hasPricingIntent) {
         const pricingMem = await this.memoryService.getPricingMemories();
-        if (pricingMem) {
-          memories = [generalMemories, pricingMem].filter(Boolean).join('\n');
-        }
+        if (pricingMem) memories = [generalMemories, pricingMem].filter(Boolean).join('\n');
       }
 
       const recentRentals = await this.prisma.rental.findMany({
@@ -705,118 +702,331 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
         ? recentRentals.map((r) => `- ${r.title} (${r.status}, ${r.account || 'unknown'}) renter: ${r.renter_info || 'N/A'}`).join('\n')
         : 'No recent rentals.';
 
+      // === ENHANCED SYSTEM PROMPT ===
       const additionalParts: string[] = [
-        'You are chatting with Daniel through the web dashboard. ',
-        'Help him manage the business, answer questions, and provide insights. ',
-        'Store relevant information using <memory> tags when appropriate.',
+        `You are the Dashboard AI Assistant for a camera rental business on Hygglo.`,
+        ` You are chatting with the business operator (Leo or Daniel) through the web dashboard.`,
+        ` You have FULL access to business data via tools. Use them proactively.`,
+        `\n\n--- YOUR CAPABILITIES ---`,
+        `\n1. EQUIPMENT ORACLE: Answer ANY question about compatibility, pricing, accessories, specs. Use check_compatibility and lookup_pricing tools.`,
+        `\n2. DASHBOARD CONTEXT: You can pull live stats (today's earnings, active rentals, revenue) using get_dashboard_stats.`,
+        `\n3. BOOKING ADVISOR: For pending rentals, use get_pending_rentals to check details, then advise accept/decline with reasoning.`,
+        `\n4. CONVERSATION OVERRIDE: Use read_conversation to read any rental chat. Use send_correction to send a fix message if the bot said something wrong. ALWAYS show the message to the user and ask for confirmation before sending.`,
+        `\n5. DAILY BRIEFING: When asked to "brief me" or for a status update, use get_daily_briefing.`,
+        `\n6. BUSINESS INTELLIGENCE: When asked about what to buy, demand patterns, denied rentals, time gaps, substitutions, marketing item demand, or investment decisions, use getBusinessIntelligence. This gives you purchase recommendations, revenue analysis, and demand signals.`,
+        `\n6. RULE/MEMORY EDITOR: Use search_rules and search_memories to find entries, then update_rule or update_memory to fix them. ALWAYS show what you will change and ask for confirmation before updating. NOTE: Only scheduling/timing rules can be edited (pickup times, return windows, opening hours). General rules are locked.`,
+        `\n\n--- IMPORTANT RULES ---`,
+        `\n- For send_correction and update_rule/update_memory: ALWAYS preview the change and ask "Should I go ahead?" before executing.`,
+        `\n- Be concise and direct. Use bullet points for lists.`,
+        `\n- Leo is less experienced with cameras — explain compatibility and technical details clearly.`,
+        `\n- When you don't know something, use the tools to look it up rather than guessing.`,
       ];
 
-      if (schedule) {
-        additionalParts.push(`\n\nTODAY'S SCHEDULE:\n${schedule}`);
-      }
-      if (blacklist) {
-        additionalParts.push(`\n\n${blacklist}`);
-      }
+      if (schedule) additionalParts.push(`\n\nTODAY'S SCHEDULE:\n${schedule}`);
+      if (blacklist) additionalParts.push(`\n\n${blacklist}`);
 
-      // Always include upcoming bookings for availability awareness
       try {
         const upcomingBookings = await this.calendarService.getAllUpcomingBookings(14);
         if (upcomingBookings) {
           additionalParts.push(`\n\n${upcomingBookings}`);
-          additionalParts.push('\nIMPORTANT: When answering availability questions, use the UPCOMING BOOKINGS data above to check if items are already booked. Do not guess — only state availability based on this data and the inventory rules.');
+          additionalParts.push('\nIMPORTANT: When answering availability questions, ALWAYS use the check_availability tool — it counts all confirmed AND pending bookings accurately, and automatically suggests compatible alternatives when an item is unavailable. Use the UPCOMING BOOKINGS data above for context on who has what, but rely on the tool for the actual yes/no availability answer.');
         }
-      } catch { /* availability lookup optional */ }
+      } catch { /* optional */ }
 
-      // Revenue intelligence: lost revenue, ROI scores, item pricing, unmatched demand
       try {
         const revenueIntelligence = await this.lostRevenueService.buildAIContext();
-        if (revenueIntelligence) {
-          additionalParts.push(`\n\nREVENUE INTELLIGENCE:\n${revenueIntelligence}`);
-          additionalParts.push('\nUse this data to recommend inventory purchases and advise on business strategy. Confidence: high=strong demand, medium=decent, low=weak.');
-        }
-      } catch { /* revenue intelligence optional */ }
+        if (revenueIntelligence) additionalParts.push(`\n\nREVENUE INTELLIGENCE:\n${revenueIntelligence}`);
+      } catch { /* optional */ }
 
-      // Actual revenue/earnings data — complete per-item lifetime earnings (completed bookings only)
+      // Advanced Business Intelligence context
+      try {
+        const biContext = await this.lostRevenueService.buildBIContext();
+        if (biContext) additionalParts.push(`\n\nBUSINESS INTELLIGENCE (for purchase/investment decisions):\n${biContext}`);
+      } catch { /* optional */ }
+
       try {
         const [revSummary, allItemEarnings] = await Promise.all([
           this.revenueService.getFormattedRevenue('month'),
           this.revenueService.getAllItemEarnings(),
         ]);
-        if (revSummary) {
-          additionalParts.push(`\n\nCURRENT REVENUE:\n${revSummary}`);
-        }
+        if (revSummary) additionalParts.push(`\n\nCURRENT REVENUE:\n${revSummary}`);
         if (allItemEarnings.currentItems.length > 0) {
           const lines = allItemEarnings.currentItems.map(i =>
             `- ${i.item}: £${i.totalRevenue} (${i.rentalCount} rentals${i.lastRented ? ', last: ' + i.lastRented : ''})`
           );
-          additionalParts.push(`\n\nITEM EARNINGS (all time, completed rentals only):\n${lines.join('\n')}`);
+          additionalParts.push(`\n\nITEM EARNINGS (all time):\n${lines.join('\n')}`);
         }
-        if (allItemEarnings.retiredItems.length > 0) {
-          const retiredLines = allItemEarnings.retiredItems.map(i =>
-            `- ${i.item}: £${i.totalRevenue} (${i.rentalCount} rentals, ${i.firstRented} to ${i.lastRented})`
-          );
-          additionalParts.push(`\n\nRETIRED/SOLD ITEMS (no longer in inventory, historical earnings):\n${retiredLines.join('\n')}`);
-        }
-      } catch { /* revenue data optional */ }
+      } catch { /* optional */ }
 
-      // Monthly income distribution by account (DB Cinema, Leo, Daniel, Vertus, Damage Claims)
       try {
         const lifetime = await this.revenueService.getLifetimeRevenue();
         if (lifetime.months.length > 0) {
-          const lines = lifetime.months
-            .filter(m => m.revenue > 0)
-            .map(m => {
-              const parts = [`${m.month}: £${Math.round(m.revenue)} total`];
-              if (m.dbcinemaRevenue) parts.push(`DB Cinema £${Math.round(m.dbcinemaRevenue)}`);
-              if (m.leoRevenue) parts.push(`Leo £${Math.round(m.leoRevenue)}`);
-              if (m.danielRevenue) parts.push(`Daniel £${Math.round(m.danielRevenue)}`);
-              if (m.vertusRevenue) parts.push(`Vertus £${Math.round(m.vertusRevenue)}`);
-              if (m.damageRevenue) parts.push(`Damage Claims £${Math.round(m.damageRevenue)}`);
-              if (m.aiAttribution) parts.push(`AI Boost £${Math.round(m.aiAttribution)}`);
-              return `- ${parts.join(' | ')}`;
-            });
-          const summary = [
-            `Total lifetime revenue: £${Math.round(lifetime.totalRevenue)}`,
-            `Avg monthly (mature): £${lifetime.avgMonthly}`,
-            lifetime.strongestMonth ? `Best month: ${lifetime.strongestMonth.month} £${Math.round(lifetime.strongestMonth.revenue)}` : '',
-            lifetime.weakestMonth ? `Weakest month: ${lifetime.weakestMonth.month} £${Math.round(lifetime.weakestMonth.revenue)}` : '',
-          ].filter(Boolean).join(' | ');
-          additionalParts.push(`\n\nMONTHLY INCOME DISTRIBUTION BY ACCOUNT:\n${summary}\n\nAccounts: DB Cinema (primary, active), Leo Adams (active since Aug 2025), Daniel (retired), Vertus (retired). Damage Claims = insurance payouts.\n${lines.join('\n')}`);
+          const lines = lifetime.months.filter(m => m.revenue > 0).map(m => {
+            const parts = [`${m.month}: £${Math.round(m.revenue)} total`];
+            if (m.dbcinemaRevenue) parts.push(`DB Cinema £${Math.round(m.dbcinemaRevenue)}`);
+            if (m.leoRevenue) parts.push(`Leo £${Math.round(m.leoRevenue)}`);
+            if (m.aiAttribution) parts.push(`AI Boost £${Math.round(m.aiAttribution)}`);
+            return `- ${parts.join(' | ')}`;
+          });
+          additionalParts.push(`\n\nMONTHLY INCOME:\nTotal lifetime: £${Math.round(lifetime.totalRevenue)}\n${lines.slice(-6).join('\n')}`);
         }
-      } catch { /* lifetime revenue optional */ }
+      } catch { /* optional */ }
 
-      // Bundle pricing reference (bundles are distinct listings with different prices from individual items)
       try {
         const bundleLines: string[] = [];
         for (const entry of PRICING_CATALOG) {
           if (entry.is_bundle && entry.bundle_items) {
-            bundleLines.push(`- ${entry.item_name}: £${entry.daily_price_min}-${entry.daily_price_max}/day (contains: ${entry.bundle_items.join(', ')})`);
+            bundleLines.push(`- ${entry.item_name}: £${entry.daily_price_max}/day (contains: ${entry.bundle_items.join(', ')})`);
           }
         }
-        if (bundleLines.length > 0) {
-          additionalParts.push(`\n\nBUNDLE PRICING (listed bundle rates, different from individual item prices):\n${bundleLines.join('\n')}`);
-        }
-      } catch { /* bundle pricing optional */ }
+        if (bundleLines.length > 0) additionalParts.push(`\n\nBUNDLE PRICING:\n${bundleLines.join('\n')}`);
+      } catch { /* optional */ }
 
-      // Top bundle/set revenue (actual rental performance of item combinations)
-      try {
-        const topBundles = await this.revenueService.getTopBundles(15);
-        if (topBundles.length > 0) {
-          const bundleRevLines = topBundles.map((b: any) =>
-            `- ${b.bundle_label}: £${b.cumulative_revenue} (${b.cumulative_rentals} rentals, ${b.first_rental?.toISOString().split('T')[0] || '?'} to ${b.last_rental?.toISOString().split('T')[0] || '?'})`
-          );
-          additionalParts.push(`\n\nTOP BUNDLE/SET REVENUE (actual completed rental performance):\n${bundleRevLines.join('\n')}`);
-        }
-      } catch { /* bundle revenue optional */ }
-
-      // Competitor intelligence: competitor catalog, pricing, reviews, market gaps
       try {
         const competitorIntelligence = await this.competitorIntelService.buildAIContext();
-        if (competitorIntelligence) {
-          additionalParts.push(`\n\nCOMPETITOR INTELLIGENCE:\n${competitorIntelligence}`);
-          additionalParts.push('\nUse this competitor data for strategic advice only. Compare competitor pricing to our pricing, identify gaps in our inventory, and suggest business moves. This is INTERNAL data — never share competitor details with renters.');
-        }
-      } catch { /* competitor intelligence optional */ }
+        if (competitorIntelligence) additionalParts.push(`\n\nCOMPETITOR INTELLIGENCE:\n${competitorIntelligence}`);
+      } catch { /* optional */ }
+
+      // === TOOL HANDLERS ===
+      const toolHandlers: ToolHandlers = {
+        checkAvailability: async (itemName, startDate, endDate) => {
+          const result = await this.calendarService.checkAvailability(itemName, new Date(startDate), new Date(endDate));
+          const breakdown = result.pendingBooked > 0
+            ? ` (${result.confirmedBooked} confirmed + ${result.pendingBooked} pending review)`
+            : '';
+          const timeHint = !result.available
+            ? [result.availableFrom ? `available from ${result.availableFrom}` : '', result.unavailableAfter ? `must return by ${result.unavailableAfter}` : ''].filter(Boolean).join(', ')
+            : '';
+
+          if (result.available) {
+            return `${result.matchedItem || itemName} is AVAILABLE (${result.booked}/${result.maxQuantity} booked${breakdown})`;
+          }
+
+          // Item unavailable — proactively find compatible alternatives (same brand/mount)
+          let altText = '';
+          if (result.matchedItem) {
+            const alts = await this.calendarService.findAvailableAlternatives(
+              result.matchedItem, new Date(startDate), new Date(endDate),
+            );
+            if (alts.length > 0) {
+              altText = `\nAvailable compatible alternatives: ${alts.map(a => `${a.name} (${a.available}/${a.maxQuantity} free)`).join(', ')}`;
+            } else {
+              altText = '\nNo compatible alternatives available for these dates.';
+            }
+          }
+          return `${result.matchedItem || itemName} is NOT available (${result.booked}/${result.maxQuantity} booked${breakdown})${timeHint ? ` — ${timeHint}` : ''}${altText}`;
+        },
+        lookupPricing: async (itemName, days) => {
+          const entry = getItemPrice(itemName);
+          if (!entry) return `Pricing not found for "${itemName}". Check the exact item name.`;
+          const dailyRate = entry.daily_price_max;
+          let total = dailyRate * days;
+          if (days >= 7) total = dailyRate * 5;
+          else if (days === 3) total = dailyRate * 2.5;
+          return `${entry.item_name}: £${dailyRate}/day, ${days} day(s): ~£${Math.round(total)} renter pays, ~£${Math.round(total * 0.64)} owner earnings`;
+        },
+        checkCompatibility: async (items) => {
+          const conflicts = checkCompatibilityConflicts(items);
+          const missing = detectMissingEssentials(items);
+          const parts: string[] = [];
+          if (conflicts.conflicts.length > 0) {
+            parts.push('CONFLICTS: ' + conflicts.conflicts.map(c => c.reason).join('; '));
+          } else {
+            parts.push('No compatibility conflicts detected.');
+          }
+          if (missing.missing.length > 0) {
+            parts.push('MISSING ESSENTIALS: ' + missing.missing.map(m => `${m.camera} needs ${m.category}: ${m.suggestions.join(', ')}`).join('; '));
+          }
+          const compatInfo = formatCompatibilityForAI(items);
+          if (compatInfo) parts.push(compatInfo);
+          return parts.join('\n');
+        },
+        getRentalDetails: async (rentalId) => {
+          const r = await this.prisma.rental.findUnique({ where: { id: rentalId }, include: { bookings: true } });
+          if (!r) return 'Rental not found';
+          const bookingInfo = r.bookings?.map(b => `Booking ${b.id.substring(0,8)}: ${b.status}, ${b.start_date?.toLocaleDateString('en-GB') || 'TBC'}-${b.end_date?.toLocaleDateString('en-GB') || 'TBC'}`).join('; ') || 'No bookings';
+          return `Title: ${r.title}\nStatus: ${r.status}\nOrder step: ${r.order_step}\nAccount: ${r.account}\nRenter: ${r.renter_info || 'Unknown'}\nPrice: £${r.rental_price || 0}\nDates: ${r.start_date?.toLocaleDateString('en-GB') || 'TBC'} to ${r.end_date?.toLocaleDateString('en-GB') || 'TBC'}\nBookings: ${bookingInfo}`;
+        },
+        // --- NEW TOOLS ---
+        readConversation: async (search) => {
+          // Find rental by ID or search term
+          let rental = await this.prisma.rental.findUnique({ where: { id: search } }) as any;
+          if (!rental) {
+            const rentals = await this.prisma.rental.findMany({
+              where: {
+                OR: [
+                  { title: { contains: search, mode: 'insensitive' } },
+                  { renter_info: { contains: search, mode: 'insensitive' } },
+                ],
+              },
+              orderBy: { created_at: 'desc' },
+              take: 1,
+            });
+            rental = (rentals[0] || null) as any;
+          }
+          if (!rental) return `No rental found matching "${search}". Try a different search term.`;
+          try {
+            const messages = await this.hyggloService.readMessages(rental.hygglo_order_id || rental.id, (rental.account || 'dbcinema') as 'dbcinema' | 'leo');
+            if (!messages || messages.length === 0) return `Found rental "${rental.title}" (${rental.status}) but no messages yet.`;
+            const transcript = messages.map(m => `[${m.timestamp?.substring(0, 16) || '?'}] ${m.sender}: ${m.content}`).join('\n');
+            return `CONVERSATION for "${rental.title}" (${rental.status}, ${rental.account}, renter: ${rental.renter_info || 'Unknown'}, ID: ${rental.id}):\n\n${transcript}`;
+          } catch (err: any) {
+            return `Found rental "${rental.title}" but could not read messages: ${err.message}`;
+          }
+        },
+        sendCorrectionMessage: async (rentalId, message) => {
+          const rental = await this.prisma.rental.findUnique({ where: { id: rentalId } });
+          if (!rental) return `Rental ${rentalId} not found.`;
+          try {
+            const sent = await this.hyggloService.sendMessage(rentalId, message);
+            return sent
+              ? `Message sent to ${rental.renter_info || 'renter'} on "${rental.title}": "${message}"`
+              : `BLOCKED: Message was not sent. This may be due to READ_ONLY_MODE or account restrictions.`;
+          } catch (err: any) {
+            return `Failed to send message: ${err.message}`;
+          }
+        },
+        searchRules: async (query) => {
+          const allRules = await this.prisma.rule.findMany({
+            where: {
+              is_active: true,
+              OR: [
+                { name: { contains: query, mode: 'insensitive' } },
+                { content: { contains: query, mode: 'insensitive' } },
+              ],
+            },
+            orderBy: { priority: 'desc' },
+            take: 10,
+          });
+          if (allRules.length === 0) return `No active rules matching "${query}".`;
+          return allRules.map(r => `[${r.id.substring(0,8)}] p${r.priority} [${r.category}] "${r.name}": ${(r.content || '').substring(0, 200)}...`).join('\n\n');
+        },
+        searchMemories: async (query) => {
+          const mems = await this.prisma.memory.findMany({
+            where: {
+              content: { contains: query, mode: 'insensitive' },
+            },
+            take: 10,
+          });
+          if (mems.length === 0) return `No memories matching "${query}".`;
+          return mems.map(m => `[${m.id.substring(0,8)}] type="${m.memory_type}" subject="${m.subject}": ${(m.content || '').substring(0, 300)}...`).join('\n\n');
+        },
+        updateRule: async (ruleId, field, value) => {
+          const rule = await this.prisma.rule.findFirst({ where: { id: { startsWith: ruleId } } });
+          if (!rule) return `Rule ${ruleId} not found.`;
+
+          // GATE: Only scheduling/timing rules editable from dashboard chat
+          const allowedCats = ['scheduling', 'booking'];
+          const timingRe = /(time|hour|pickup|return|slot|schedul|morning|evening|window|opening|delivery.time|lead.time)/i;
+          if (!allowedCats.includes(rule.category) && !timingRe.test(rule.name)) {
+            return `BLOCKED: "${rule.name}" is a ${rule.category} rule. Only scheduling/timing rules can be edited here. Contact Daniel for other changes.`;
+          }
+
+          const updateData: any = {};
+          if (field === 'content') updateData.content = value;
+          else if (field === 'priority') updateData.priority = parseInt(value, 10);
+          else if (field === 'active') updateData.is_active = value === 'true';
+          else return `Invalid field "${field}". Use content, priority, or active.`;
+          await this.prisma.rule.update({ where: { id: rule.id }, data: updateData });
+          return `Updated rule "${rule.name}" (${rule.id.substring(0,8)}): ${field} = ${value}`;
+        },
+        updateMemory: async (memoryId, newContent) => {
+          const mem = await this.prisma.memory.findFirst({ where: { id: { startsWith: memoryId } } });
+          if (!mem) return `Memory ${memoryId} not found.`;
+          await this.prisma.memory.update({ where: { id: mem.id }, data: { content: newContent } });
+          return `Updated memory ${mem.id.substring(0,8)} (${mem.memory_type}). New content saved.`;
+        },
+        getDashboardStats: async () => {
+          const stats = await this.appService.getBookingStats();
+          const projection = await this.revenueService.getMonthlyProjection();
+          const parts: string[] = [];
+          parts.push(`TODAY: £${Math.round(stats.todayEarnings || 0)} earnings, ${stats.todayRentalCount || 0} rental(s)`);
+          parts.push(`ACTIVE: ${stats.activeRentals || 0} total (${stats.ongoingRentals || 0} ongoing, ${stats.upcomingRentals || 0} upcoming, ${stats.pendingRentals || 0} pending)`);
+          parts.push(`THIS WEEK: £${Math.round(stats.weekEarnings || 0)}`);
+          if (projection) {
+            parts.push(`THIS MONTH: £${Math.round(projection.currentMonthEarnings || 0)} confirmed, projected £${Math.round(projection.projectedMonthEarnings || 0)}`);
+          }
+          if (stats.pendingDetails?.length > 0) {
+            parts.push(`\nPENDING DECISIONS:`);
+            for (const p of stats.pendingDetails) {
+              parts.push(`  - ${p.items?.join(', ') || 'items'} (${p.renter}) £${p.earnings}`);
+            }
+          }
+          return parts.join('\n');
+        },
+        getBusinessIntelligence: async () => {
+          const bi = await this.lostRevenueService.buildBIContext();
+          return bi || 'No BI data available yet.';
+        },
+        getDailyBriefing: async () => {
+          const stats = await this.appService.getBookingStats();
+          const projection = await this.revenueService.getMonthlyProjection();
+          const todaySchedule = await this.calendarService.getFormattedSchedule(new Date());
+          const upcomingBookings = await this.calendarService.getAllUpcomingBookings(3);
+          const activity = this.telegramService.getRecentActivity(10);
+
+          const parts: string[] = [];
+          parts.push(`=== DAILY BRIEFING (${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}) ===`);
+
+          // Revenue
+          parts.push(`\nREVENUE:`);
+          parts.push(`  Today: £${Math.round(stats.todayEarnings || 0)} (${stats.todayRentalCount || 0} rentals)`);
+          parts.push(`  This week: £${Math.round(stats.weekEarnings || 0)}`);
+          if (projection) parts.push(`  This month: £${Math.round(projection.currentMonthEarnings || 0)} confirmed`);
+
+          // Active rentals
+          parts.push(`\nACTIVE RENTALS: ${stats.activeRentals || 0}`);
+          if (stats.ongoingDetails?.length > 0) {
+            parts.push('  Ongoing:');
+            for (const r of stats.ongoingDetails) parts.push(`    - ${(r as any).items?.join(', ') || 'items'} (${r.renter}) £${r.earnings}`);
+          }
+          if (stats.upcomingDetails?.length > 0) {
+            parts.push('  Upcoming:');
+            for (const r of stats.upcomingDetails) parts.push(`    - ${(r as any).items?.join(', ') || 'items'} (${r.renter})`);
+          }
+
+          // Pending decisions
+          if (stats.pendingDetails?.length > 0) {
+            parts.push(`\nPENDING DECISIONS (${stats.pendingRentals}):`);
+            for (const p of stats.pendingDetails) {
+              parts.push(`  - ${p.items?.join(', ') || 'items'} (${p.renter}) £${p.earnings} — needs accept/decline`);
+            }
+          }
+
+          // Schedule
+          if (todaySchedule) parts.push(`\nTODAY'S SCHEDULE:\n${todaySchedule}`);
+          if (upcomingBookings) parts.push(`\nNEXT 3 DAYS:\n${upcomingBookings}`);
+
+          // Recent activity
+          if (activity.length > 0) {
+            parts.push(`\nRECENT ACTIVITY:`);
+            for (const a of activity.slice(0, 5)) {
+              parts.push(`  - ${a.summary} (${a.rentalTitle || ''}) ${a.timestamp?.substring(11, 16) || ''}`);
+            }
+          }
+
+          return parts.join('\n');
+        },
+        getPendingRentals: async () => {
+          const pending = await this.prisma.rental.findMany({
+            where: {
+              order_step: { in: ['VERIFIED', 'BOOKED_AFTER_VERIFIED'] },
+              status: { notIn: ['cancelled', 'completed', 'obsolete', 'consolidated'] },
+            },
+            include: { bookings: { where: { status: { not: 'cancelled' } } } },
+            orderBy: { created_at: 'desc' },
+          });
+          if (pending.length === 0) return 'No pending rental requests.';
+          const lines: string[] = [];
+          for (const r of pending) {
+            const bookingDates = r.bookings.map(b =>
+              `${b.start_date?.toLocaleDateString('en-GB') || '?'}-${b.end_date?.toLocaleDateString('en-GB') || '?'}`
+            ).join(', ');
+            lines.push(`ID: ${r.id}\nTitle: ${r.title}\nRenter: ${r.renter_info || 'Unknown'}\nAccount: ${r.account}\nPrice: £${r.rental_price || 0}\nDates: ${bookingDates || 'TBC'}\nOrder step: ${r.order_step}`);
+          }
+          return `PENDING RENTALS (${pending.length}):\n\n` + lines.join('\n---\n');
+        },
+      };
 
       const response = await this.aiService.processComplex(userMessage, {
         rules,
@@ -824,23 +1034,21 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
         conversationHistory: history,
         rentalContext,
         additionalContext: additionalParts.join(''),
+        toolHandlers,
+        maxTokens: 4096,
       });
 
-      // Store assistant response
       await this.memoryService.storeConversation(chatId, 'assistant', response.content);
-
-      // Process any memories
       if (response.memories.length > 0) {
         await this.memoryService.processAiMemories(response.memories);
       }
-
       return { reply: response.content, model: response.model };
     } catch (error) {
       return { error: `Chat error: ${error.message}` };
     }
   }
 
-  @Post('api/renter-chat')
+  @Post('renter-chat')
   @ApiTags('Testing')
   @ApiOperation({ summary: 'Test renter-facing conversation engine' })
   async renterChatMessage(@Body() body: { message: string; account?: string; sessionId?: string }) {
@@ -868,7 +1076,7 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
     }
   }
 
-  @Post('api/renter-chat/reset')
+  @Post('renter-chat/reset')
   @ApiTags('Testing')
   @ApiOperation({ summary: 'Reset renter chat session' })
   async resetRenterChat(@Body() body: { sessionId?: string }) {
@@ -1020,7 +1228,8 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
                   let parsedUpdate: any = {};
                   if (!existingRental.parsed_items) {
                     try {
-                      parsedUpdate.parsed_items = await this.titleParserService.parseTitleWithAI(rental.title) as any;
+                      const resolved = await this.itemResolverService.resolveItems(rental.listingId, rental.title);
+                      parsedUpdate.parsed_items = resolved.map(r => ({ item: r.item, qty: r.qty })) as any;
                     } catch { /* non-critical */ }
                   }
                   await this.prisma.rental.update({
@@ -1038,10 +1247,11 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
               continue;
             }
 
-            // Parse items from title using AI
+            // Parse items using resolver cascade
             let parsedItems: any = null;
             try {
-              parsedItems = await this.titleParserService.parseTitleWithAI(rental.title);
+              const resolved = await this.itemResolverService.resolveItems(rental.listingId, rental.title);
+              parsedItems = resolved.map(r => ({ item: r.item, qty: r.qty }));
             } catch { /* non-critical */ }
 
             // CREATE new rental + bookings
@@ -1329,15 +1539,16 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
         title: { not: '' },
         status: { in: ['completed', 'ongoing', 'upcoming'] },
       },
-      select: { id: true, title: true },
+      select: { id: true, title: true, listing_id: true },
     });
 
     this.logger.log(`Backfill: ${unparsedRentals.length} rentals need item parsing`);
 
     for (const rental of unparsedRentals) {
       try {
-        const parsed = await this.titleParserService.parseTitleWithAI(rental.title);
-        if (parsed) {
+        const resolved = await this.itemResolverService.resolveItems(rental.listing_id, rental.title);
+        const parsed = resolved.map(r => ({ item: r.item, qty: r.qty }));
+        if (parsed.length > 0) {
           await this.prisma.rental.update({
             where: { id: rental.id },
             data: { parsed_items: parsed as any },
@@ -1661,13 +1872,42 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
   async getCombinedLostRevenue(@Query('period') period?: string, @Query('account') account?: string) {
     const p = period || '3m';
     const a = account || undefined;
-    const [denied, timeout, items, unmatched] = await Promise.all([
+    const [denied, timeout, items, unmatched, missed] = await Promise.all([
       this.lostRevenueService.getDeniedRevenueSummary(p, a),
       this.lostRevenueService.getTimeoutSummary(p, a),
       this.lostRevenueService.getBlockedItemsBreakdown(p, a),
       this.lostRevenueService.getUnmatchedDemand(p === '3m' ? '6m' : p, a),
+      this.lostRevenueService.getMissedRevenueSummary(p, a),
     ]);
-    return { denied, timeout, items, unmatched };
+    return { denied, timeout, items, unmatched, missed };
+  }
+
+  @Get('lost-revenue/monthly-breakdown')
+  @ApiTags('Lost Revenue')
+  @ApiOperation({ summary: 'Monthly breakdown of denied and missed revenue' })
+  async getMonthlyBreakdown(@Query('months') months?: string) {
+    const monthCount = parseInt(months || '6') || 6;
+    const results: any[] = [];
+    for (let i = 0; i < monthCount; i++) {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+      const monthLabel = start.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+      const [denied, missed, cancelled, timeout] = await Promise.all([
+        this.prisma.lost_revenue_record.aggregate({ where: { denial_type: 'owner_denied', start_date: { gte: start, lt: end } }, _sum: { lost_revenue: true }, _count: true }),
+        this.prisma.lost_revenue_record.aggregate({ where: { denial_type: 'unmatched', start_date: { gte: start, lt: end } }, _sum: { lost_revenue: true }, _count: true }),
+        this.prisma.lost_revenue_record.aggregate({ where: { denial_type: 'renter_cancelled', start_date: { gte: start, lt: end } }, _sum: { lost_revenue: true }, _count: true }),
+        this.prisma.lost_revenue_record.aggregate({ where: { denial_type: 'timeout', start_date: { gte: start, lt: end } }, _sum: { lost_revenue: true }, _count: true }),
+      ]);
+      results.push({
+        month: monthLabel, monthKey: start.toISOString().substring(0, 7),
+        denied: { count: denied._count, revenue: Math.round(denied._sum.lost_revenue || 0) },
+        missed: { count: missed._count, revenue: Math.round(missed._sum.lost_revenue || 0) },
+        cancelled: { count: cancelled._count, revenue: Math.round(cancelled._sum.lost_revenue || 0) },
+        timeout: { count: timeout._count, revenue: Math.round(timeout._sum.lost_revenue || 0) },
+      });
+    }
+    return results.reverse();
   }
 
   @Get('revenue/potential')
@@ -1686,6 +1926,86 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
   @ApiResponse({ status: 200, description: 'Items with all units currently out and return dates' })
   async getCurrentlyUnavailable() {
     return await this.lostRevenueService.getCurrentlyUnavailable();
+  }
+
+  @Get('inventory/items')
+  @ApiOperation({ summary: 'Get inventory items grouped by category for UI dropdowns' })
+  getInventoryItemsList() {
+    const categories = [
+      { name: 'Anamorphic Lenses', prefix: 'Anamorphic' },
+      { name: 'Sony Lenses', items: ['Sony GM 24-70mm f2.8','Sony GM 16-35mm f2.8','Sony GM 70-200mm f2.8','Sony GM 90mm f2.8','Sony 28-70mm','Sony 11mm f2.8 fisheye'] },
+      { name: 'Canon Lenses', prefix: 'Canon' },
+      { name: 'Camera Bodies', items: ['Sony FX3','Sony A7 III','Sony A7 V','Sony A7 II','Fujifilm X100 VI','BMPCC 6K Pro','BMPCC 6K Full Frame'] },
+      { name: 'Lights & Modifiers', items: ['Softbox 85cm','LED light panels RGB','Nanlite Forza 300','Nanlite Pavotube 30x II','Nanlite 500B','Ambitful RGB light tubes 2x set','5-in-1 reflector panel','Camera flash'] },
+      { name: 'Support & Gimbals', items: ['C-stand','Small rig tripod','Sirui tripod','DJI RS3 Pro gimbal','Motorized slider','Tilta Nucleus Nano 2 follow focus','Tilta shoulder rig','Monopod arm support'] },
+      { name: 'Monitors & Transmitters', items: ['Atomos Ninja V','Hollyland Mars 4K transmitter','Hollyland Pyro S transmitter','Hollyland 7-inch monitor'] },
+      { name: 'Audio', items: ['Rode Video Mic Go','Rode Wireless Mic Pro set','Rode Video Mic Pro Plus','Audio boom mic Sennheiser','DJI Wireless Mics','DJI Mic 2 wireless','JBL wireless microphones'] },
+      { name: 'Drones & Action Cameras', items: ['DJI Mavic 3 Pro','DJI Mini 4 Pro','DJI Osmo Action Pro 5','GoPro 12 Hero'] },
+      { name: 'DJ & Speakers', items: ['DJ RX3 Pioneer controller','JBL Club 120 speaker'] },
+      { name: 'Smoke & Effects', items: ['Smoke machine fogger','Smoke Ninja Pro hazer','Smoke Ninja'] },
+      { name: 'Power & Batteries', items: ['V-mount 95mAh','V-mount 150mAh','Sony NP-FZ100 batteries 2x sets','DJI gimbal battery','Anker Power Station F2000'] },
+      { name: 'Filters & Accessories', items: ['ND filter','Cinebloom filter mist','256GB card','CF Express Type A card','Suction cups','PL to Sony E mount','PL to EF mount','PL to RF mount','PL to L mount'] },
+    ];
+    const allItems = Object.keys(MASTER_INVENTORY);
+    return {
+      categories: categories.map(cat => {
+        if (cat.items) return { name: cat.name, items: cat.items.filter(i => allItems.includes(i)) };
+        if (cat.prefix) return { name: cat.name, items: allItems.filter(i => i.startsWith(cat.prefix)) };
+        return cat;
+      }),
+    };
+  }
+
+  @Get('analytics/business-intelligence')
+  @ApiTags('Analytics')
+  @ApiOperation({ summary: 'Advanced business intelligence — denied analysis, time gaps, substitutions, marketing demand, purchase recommendations' })
+  async getBusinessIntelligence(@Query('period') period?: string) {
+    try {
+      const [
+        denied,
+        missed,
+        timeGap,
+        substitutions,
+        marketingDemand,
+        purchaseRecs,
+        potential,
+      ] = await Promise.all([
+        this.lostRevenueService.getDeniedRevenueSummary(period || '6m'),
+        this.lostRevenueService.getMissedRevenueSummary(period || '6m'),
+        this.lostRevenueService.getTimeGapAnalysis(),
+        this.lostRevenueService.getSubstitutionAnalysis(period || '6m'),
+        this.lostRevenueService.getMarketingOnlyDemand(period || '6m'),
+        this.lostRevenueService.getPurchaseRecommendations(),
+        this.lostRevenueService.getRevenuePotential(period || '6m'),
+      ]);
+
+      return {
+        denied: {
+          totalRevenue: denied.totalDeniedRevenue,
+          count: denied.deniedCount,
+          topItems: denied.topDeniedItems?.slice(0, 10) || [],
+        },
+        missed: {
+          totalRevenue: missed.totalMissedRevenue,
+          count: missed.missedCount,
+          topItems: missed.topMissedItems?.slice(0, 10) || [],
+        },
+        timeGap,
+        substitutions: {
+          pairs: substitutions.substitutions,
+          topRequestedNotOwned: substitutions.topRequestedNotOwned,
+          totalSubstitutedRevenue: substitutions.totalSubstitutedRevenue,
+        },
+        marketingDemand: {
+          items: marketingDemand.items,
+          totalPotentialRevenue: marketingDemand.totalPotentialRevenue,
+        },
+        purchaseRecommendations: purchaseRecs,
+        investmentScorecard: potential.slice(0, 20),
+      };
+    } catch (error) {
+      return { error: `BI analysis failed: ${error.message}` };
+    }
   }
 
   // --- Competitor Intelligence endpoints ---
@@ -2032,6 +2352,109 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
     return { reset: count };
   }
 
+
+
+
+  // ── Port to Leo ──
+
+  @Get('port-to-leo/gaps')
+  @ApiTags('Port to Leo')
+  @ApiOperation({ summary: 'Get DB Cinema listings missing from Leo with images' })
+  async getPortGaps() {
+    const result = await this.listingCreatorService.getPortableGaps();
+    return result;
+  }
+
+  @Post('port-to-leo/execute')
+  @ApiTags('Port to Leo')
+  @ApiOperation({ summary: 'Port a single DB Cinema listing to Leo' })
+  async executePort(@Body() body: { slug: string; title: string; image?: string; price?: number }) {
+    const result = await this.listingCreatorService.portSingleListing(body);
+    return result;
+  }
+  @Post('port-to-leo/upload')
+  @ApiTags('Port to Leo')
+  @ApiOperation({ summary: 'Upload a ported listing to Hygglo via Playwright' })
+  async uploadPortedListing(@Body() body: {
+    listingId: string;
+    autoPublish?: boolean;
+    title?: string;
+    description?: string;
+    categoryPath?: string[];
+    dailyPrice?: number;
+    price3days?: number;
+    price7days?: number;
+    estimatedValue?: number;
+  }) {
+    // Get the marketing listing from DB
+    const listing = await this.prisma.marketing_listing.findUnique({
+      where: { id: body.listingId },
+    });
+    if (!listing) return { success: false, error: 'Listing not found' };
+    if (!listing.composed_image) return { success: false, error: 'No composed image for this listing' };
+
+    // Use body overrides if provided, fall back to DB values
+    const uploadTitle = body.title || listing.title;
+    const uploadDesc = body.description || listing.description || '';
+    const uploadDailyPrice = body.dailyPrice ?? (listing.price_1day ? Number(listing.price_1day) : 25);
+    const uploadEstValue = body.estimatedValue ?? (listing.price_1day ? Number(listing.price_1day) * 10 : 250);
+
+    // Update the DB listing with edited values
+    await this.prisma.marketing_listing.update({
+      where: { id: body.listingId },
+      data: {
+        title: uploadTitle,
+        description: uploadDesc,
+        price_1day: uploadDailyPrice,
+        price_3day: body.price3days ?? undefined,
+        price_7day: body.price7days ?? undefined,
+        estimated_value: uploadEstValue,
+      },
+    });
+
+    const result = await this.playwrightService.createMarketingListing({
+      account: (listing.account || 'leo') as any,
+      title: uploadTitle,
+      description: uploadDesc,
+      dailyPrice: uploadDailyPrice,
+      price3days: body.price3days,
+      price7days: body.price7days,
+      estimatedValue: uploadEstValue,
+      imagePath: listing.composed_image,
+      categoryPath: body.categoryPath,
+      autoPublish: body.autoPublish || false,
+    });
+
+    // Update listing status
+    if (result.success) {
+      await this.prisma.marketing_listing.update({
+        where: { id: body.listingId },
+        data: {
+          upload_status: result.error?.includes('REVIEW_REQUIRED') ? 'review' : 'uploaded',
+          hygglo_listing_id: result.hyggloListingUrl || null,
+        },
+      });
+    }
+
+    return result;
+  }
+
+
+  @Get("port-to-leo/screenshot")
+  @ApiTags("Port to Leo")
+  async getUploadScreenshot(@Query("path") filePath: string, @Res() res: any) {
+    const fs = require("fs");
+    if (!filePath || !filePath.startsWith("/tmp/hygglo-")) {
+      return res.status(400).json({ error: "Invalid path" });
+    }
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Screenshot not found" });
+    }
+    res.type("image/png");
+    res.send(fs.readFileSync(filePath));
+  }
+
+
   @Delete('marketing-listings/:id')
   @ApiTags('Marketing Listings')
   @ApiOperation({ summary: 'Delete a marketing listing' })
@@ -2358,9 +2781,94 @@ Before modifying ANY rule:
     await this.telegramService.sendProactiveMessage(text, 'Markdown');
   }
 
+  // ---- Claw Quality Audit: API Endpoint ----
+
+  @Get('audit/packet')
+  @ApiTags('Audit')
+  @ApiOperation({ summary: 'Get audit packet for Claw quality auditor' })
+  async getAuditPacket(@Query('hours') hoursParam?: string) {
+    const hours = Math.min(Math.max(parseInt(hoursParam || '12', 10) || 12, 1), 72);
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const [decisions, bookings, contentions, validationFailures] = await Promise.all([
+      // Recent AI decisions with rental context
+      this.prisma.ai_decision.findMany({
+        where: { created_at: { gte: since }, decision_type: { in: ['message', 'analyze', 'escalate'] } },
+        orderBy: { created_at: 'desc' },
+        take: 100,
+        include: { rental: { select: { id: true, title: true, status: true, start_date: true, end_date: true, account: true, order_step: true, renter_info: true } } },
+      }),
+      // Active + recent bookings
+      this.prisma.booking.findMany({
+        where: { status: 'confirmed', end_date: { gte: sevenDaysAgo } },
+        orderBy: { start_date: 'desc' },
+        select: { id: true, item_name: true, quantity: true, start_date: true, end_date: true, return_date: true, renter_name: true, status: true, account: true, rental_id: true },
+      }),
+      // Active contentions
+      this.prisma.inventory_contention.findMany({
+        where: { status: 'active' },
+        orderBy: { created_at: 'desc' },
+      }),
+      // Recent validation failures
+      this.prisma.validation_log.findMany({
+        where: { created_at: { gte: since } },
+        orderBy: { created_at: 'desc' },
+        take: 50,
+      }),
+    ]);
+
+    // Truncation helper for compact output (keeps packet under 40KB for LLM context)
+    const trunc = (s: string | null, max: number) => s ? s.substring(0, max) : '';
+
+    return {
+      generated_at: new Date().toISOString(),
+      window_hours: hours,
+      decisions: decisions.map(d => ({
+        id: d.id.substring(0, 8),
+        type: d.decision_type,
+        input: trunc(d.input_summary, 200),
+        out: trunc(d.output_summary, 400),
+        action: trunc(d.action_taken, 150),
+        confidence: d.confidence,
+        sent: d.was_sent,
+        rental: d.rental ? {
+          title: trunc(d.rental.title, 80),
+          status: d.rental.status,
+          start: d.rental.start_date,
+          end: d.rental.end_date,
+          account: d.rental.account,
+          renter: d.rental.renter_info,
+        } : null,
+      })),
+      inventory: MASTER_INVENTORY,
+      bookings: bookings.map(b => ({
+        item: b.item_name,
+        qty: b.quantity,
+        start: b.start_date,
+        end: b.end_date,
+        renter: b.renter_name,
+        account: b.account,
+      })),
+      pricing: PRICING_CATALOG.map(p => ({
+        item: p.item_name,
+        min: p.daily_price_min,
+        max: p.daily_price_max,
+      })),
+      contentions: contentions.map(c => ({
+        item: c.item_name,
+        start: c.date_start,
+        end: c.date_end,
+        status: c.status,
+        favored: c.favored_rental_id,
+      })),
+      validation_failure_count: validationFailures.length,
+    };
+  }
+
   // ---- Cron Claude: API Endpoints ----
 
-  @Get('api/cron-claude/config')
+  @Get('cron-claude/config')
   @ApiTags('Cron Claude')
   @ApiOperation({ summary: 'Get cron Claude configuration' })
   async getCronConfig() {
@@ -2384,7 +2892,7 @@ Before modifying ANY rule:
     };
   }
 
-  @Post('api/cron-claude/config')
+  @Post('cron-claude/config')
   @ApiTags('Cron Claude')
   @ApiOperation({ summary: 'Update cron Claude configuration' })
   async setCronConfig(@Body() body: { enabled?: boolean; frequencyMinutes?: number; tasks?: string[]; quietStart?: number; quietEnd?: number }) {
@@ -2396,14 +2904,14 @@ Before modifying ANY rule:
     return { ok: true };
   }
 
-  @Get('api/cron-claude/runs')
+  @Get('cron-claude/runs')
   @ApiTags('Cron Claude')
   @ApiOperation({ summary: 'Get cron Claude run history' })
   getCronRuns() {
     return this.cronRunHistory;
   }
 
-  @Post('api/cron-claude/trigger')
+  @Post('cron-claude/trigger')
   @ApiTags('Cron Claude')
   @ApiOperation({ summary: 'Manually trigger a cron task' })
   async triggerCronTask(@Body() body: { task: string }) {
@@ -2419,9 +2927,22 @@ Before modifying ANY rule:
     return { ok: true, message: `Task "${this.CRON_TASKS[taskKey].label}" started. Check runs endpoint for results.` };
   }
 
+  @Get('listing-images/*')
+  async serveListingImage(@Req() req: any, @Res() res: any) {
+    const subPath = req.params[0];
+    const filePath = require('path').join(process.cwd(), 'listing-creator-images', subPath);
+    try {
+      if (require('fs').existsSync(filePath)) {
+        return res.sendFile(filePath);
+      }
+    } catch {}
+    return res.status(404).json({ error: 'Image not found' });
+  }
+
   @Get('dashboard')
   @ApiExcludeEndpoint()
   @Header('Content-Type', 'text/html')
+  @Header('Cache-Control', 'no-cache, no-store, must-revalidate')
   getDashboard(@Res() res: Response) {
     const htmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
     const html = fs.readFileSync(htmlPath, 'utf-8');
@@ -2431,10 +2952,29 @@ Before modifying ANY rule:
   @Get('dashboard/mobile')
   @ApiExcludeEndpoint()
   @Header('Content-Type', 'text/html')
+  @Header('Cache-Control', 'no-cache, no-store, must-revalidate')
   getMobileDashboard(@Res() res: Response) {
     const htmlPath = path.join(__dirname, '..', 'public', 'dashboard-mobile.html');
     const html = fs.readFileSync(htmlPath, 'utf-8');
     res.send(html);
+  }
+
+
+  @Get("resolve/test")
+  async resolveTest(@Query("listing_id") listingId: string, @Query("title") title?: string) {
+    if (!listingId) return { error: "listing_id required" };
+    const rental = await this.prisma.rental.findFirst({
+      where: { listing_id: listingId },
+      select: { title: true, listing_id: true },
+    });
+    const resolveTitle = title || rental?.title || "Unknown";
+    const items = await this.itemResolverService.resolveItems(listingId, resolveTitle);
+    return { listingId, title: resolveTitle, items };
+  }
+
+  @Post("resolve/backfill")
+  async resolveBackfill() {
+    return this.itemResolverService.backfillAll();
   }
 
 }

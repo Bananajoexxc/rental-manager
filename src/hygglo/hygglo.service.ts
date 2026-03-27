@@ -86,6 +86,8 @@ export class HyggloService implements OnModuleInit {
   private lastMessageCheckTime = new Map<string, number>();
   private recentlySentMessages = new Map<string, number>(); // content hash → timestamp, to avoid re-processing our own sent messages
   private readonly SENT_MESSAGE_TTL_MS = 10 * 60 * 1000; // 10 minute window
+  private ownerTakeoverActive = new Map<string, number>(); // listingId → timestamp of last manual owner message
+  private readonly OWNER_TAKEOVER_TTL_MS = 30 * 60 * 1000; // suppress bot for 30 min after manual owner reply
   private authInFlight = new Map<HyggloAccount, Promise<boolean>>();
 
   constructor(private loggingService: LoggingService) {
@@ -360,6 +362,16 @@ export class HyggloService implements OnModuleInit {
   }
 
   /**
+   * Seed lastMessageCheckTime from an external source (e.g. DB) after a restart.
+   * Only seeds if no existing entry — never overwrites a live entry.
+   */
+  public seedLastCheckTime(listingId: string, timestamp: number): void {
+    if (!this.lastMessageCheckTime.has(listingId)) {
+      this.lastMessageCheckTime.set(listingId, timestamp);
+    }
+  }
+
+  /**
    * Remove entries from lastMessageCheckTime older than 24 hours to prevent unbounded growth.
    */
   private pruneLastMessageCheckTimes() {
@@ -513,6 +525,40 @@ export class HyggloService implements OnModuleInit {
       this.logger.debug(`getOrderDetailPublic(${orderId}) failed: ${error.message}`);
       return null;
     }
+  }
+
+
+  /**
+   * Fetch a renter's review history from a completed order's customerStats.
+   * Returns all reviews (ordered most-recent-first) with author names.
+   */
+  async fetchCustomerReviews(
+    orderId: string,
+    accountName: HyggloAccount,
+  ): Promise<{
+    totalReviews: number;
+    averageRating: number;
+    reviews: { relativeLabel: string; rating: number; text: string | null; authorName: string }[];
+  } | null> {
+    const detail = await this.getOrderDetailPublic(orderId, accountName);
+    if (!detail) return null;
+
+    const stats = detail.customerStats;
+    if (!stats || !stats.reviews) {
+      this.logger.debug(`No customerStats.reviews in order ${orderId}`);
+      return null;
+    }
+
+    return {
+      totalReviews: stats.totalReviews ?? stats.reviews.length ?? 0,
+      averageRating: stats.averageRating ?? 0,
+      reviews: (stats.reviews || []).map((r: any) => ({
+        relativeLabel: r.relativeLabel || '',
+        rating: r.rating ?? 0,
+        text: r.text || null,
+        authorName: (r.author?.shortName || '').trim(),
+      })),
+    };
   }
 
   private mapOrdersToRentalListings(orders: any[], status: 'ongoing' | 'upcoming' | 'pending', account: HyggloAccount): RentalListing[] {
@@ -1290,6 +1336,18 @@ export class HyggloService implements OnModuleInit {
             const msgTime = new Date(msg.timestamp).getTime();
             const isNew = !isNaN(msgTime) && msgTime > lastCheckTime;
 
+            // OWNER TAKEOVER DETECTION: If Daniel manually replies on Hygglo (not via the bot),
+            // suppress auto-replies for this rental to avoid double-responding
+            if (isNew && msg.sender === 'Owner') {
+              const sentKey = `${rental.listingId}:${msg.content}`;
+              const sentAt = this.recentlySentMessages.get(sentKey);
+              if (!sentAt || Date.now() - sentAt >= this.SENT_MESSAGE_TTL_MS) {
+                // This is a MANUAL owner message (not sent by the bot)
+                this.ownerTakeoverActive.set(rental.listingId, Date.now());
+                this.logger.log(`⚠️ OWNER TAKEOVER detected on ${rental.listingId} — suppressing auto-replies for 30 minutes`);
+              }
+            }
+
             // Only process messages from the renter, not from ourselves (Owner)
             // Also skip messages whose content matches something we recently sent
             // (prevents re-processing bot responses picked up from another account perspective)
@@ -1324,6 +1382,29 @@ export class HyggloService implements OnModuleInit {
     }
 
     return allNewMessages;
+  }
+
+
+  /**
+   * Check if an owner takeover is active for a rental listing.
+   * Returns true if Daniel manually replied on Hygglo within the TTL window.
+   */
+  isOwnerTakeoverActive(listingId: string): boolean {
+    const takeoverAt = this.ownerTakeoverActive.get(listingId);
+    if (!takeoverAt) return false;
+    if (Date.now() - takeoverAt > this.OWNER_TAKEOVER_TTL_MS) {
+      this.ownerTakeoverActive.delete(listingId);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Clear owner takeover for a rental (when Daniel explicitly tells the bot to resume).
+   */
+  clearOwnerTakeover(listingId: string): void {
+    this.ownerTakeoverActive.delete(listingId);
+    this.logger.log(`Owner takeover cleared for ${listingId} — bot auto-replies resumed`);
   }
 
   // --- Completed/Obsolete Rental Scanning ---

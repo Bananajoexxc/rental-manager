@@ -57,6 +57,7 @@ export const DELIVERY_SPECS: DeliverySpec[] = [
   // ── S (score 2) - Motorcycle OK ──
   { item_name: 'Sony FX3', weight_kg: 0.7, packed_length_cm: 25, packed_width_cm: 18, packed_height_cm: 15, size_score: 2, is_heavy_large: false, courier_note: 'Camera body in padded case', category: 'camera' },
   { item_name: 'Sony A7 III', weight_kg: 0.7, packed_length_cm: 25, packed_width_cm: 18, packed_height_cm: 15, size_score: 2, is_heavy_large: false, courier_note: 'Camera body in padded case', category: 'camera' },
+  { item_name: 'Sony A7 V', weight_kg: 0.7, packed_length_cm: 25, packed_width_cm: 18, packed_height_cm: 15, size_score: 2, is_heavy_large: false, courier_note: 'Camera body in padded case', category: 'camera' },
   { item_name: 'Sony A7 II', weight_kg: 0.6, packed_length_cm: 24, packed_width_cm: 17, packed_height_cm: 14, size_score: 2, is_heavy_large: false, courier_note: 'Camera body in padded case', category: 'camera' },
   { item_name: 'Fujifilm X100 VI', weight_kg: 0.5, packed_length_cm: 20, packed_width_cm: 15, packed_height_cm: 12, size_score: 2, is_heavy_large: false, courier_note: 'Compact camera in padded case', category: 'camera' },
   { item_name: 'BMPCC 6K Pro', weight_kg: 0.9, packed_length_cm: 28, packed_width_cm: 20, packed_height_cm: 16, size_score: 2, is_heavy_large: false, courier_note: 'Camera body in padded case', category: 'camera' },

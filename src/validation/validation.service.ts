@@ -100,17 +100,24 @@ export class ValidationService {
     }
 
     // API key patterns (common formats)
+    // Only flag strings that look like real API keys (40+ chars, not URLs or base64 content)
     const apiKeyPatterns = [
-      /\b[A-Za-z0-9_-]{32,}\b/, // Generic long alphanumeric strings
+      /(?<![\w:\/])\b[A-Za-z0-9_-]{40,}\b(?![\w\/])/,  // Generic long strings, 40+ chars, not in URLs or paths
       /sk-[A-Za-z0-9]{20,}/, // OpenAI/Anthropic style
       /ANTHROPIC_API_KEY/, // Environment variable names
       /API[_-]?KEY/i,
     ];
 
-    for (const pattern of apiKeyPatterns) {
-      if (pattern.test(text)) {
-        violations.push(`Potential API key pattern detected`);
-        break;
+    // Skip generic API key check if text contains URLs or base64-heavy content
+    const hasLongUrls = /https?:\/\/\S{40,}/.test(text);
+    const isBase64Heavy = (text.match(/[A-Za-z0-9+\/]{40,}={0,2}/g) || []).length > 2;
+
+    if (!hasLongUrls && !isBase64Heavy) {
+      for (const pattern of apiKeyPatterns) {
+        if (pattern.test(text)) {
+          violations.push(`Potential API key pattern detected`);
+          break;
+        }
       }
     }
 
@@ -164,6 +171,26 @@ export class ValidationService {
         severity: 'low',
         blocked: false,
       };
+    }
+
+    // If rental is in a stage where the renter already knows the address, skip check.
+    // DELIVERED = gear handed over, RETURNED = gear back, REVIEWED = post-return.
+    // Status 'ongoing' or 'completed' also means renter has/had the gear.
+    const rental = context.context?.rental;
+    if (rental) {
+      const postPickupSteps = ['DELIVERED', 'RETURNED', 'REVIEWED'];
+      const postPickupStatuses = ['ongoing', 'completed'];
+      if (
+        (rental.order_step && postPickupSteps.includes(rental.order_step)) ||
+        (rental.status && postPickupStatuses.includes(rental.status))
+      ) {
+        return {
+          passed: true,
+          violations: [],
+          severity: 'low',
+          blocked: false,
+        };
+      }
     }
 
     // CRITICAL: Actual pickup addresses that must NEVER be disclosed before booking confirmed
@@ -294,15 +321,7 @@ export class ValidationService {
       }
     }
 
-    // Check for common pricing errors mentioned in the plan
-    if (/Sony\s+GM\s+24-70/.test(text) || /24-70mm/.test(text)) {
-      const lensPrice = extractedPrices.find(p => p.low >= 50 && p.high >= 50);
-      if (lensPrice) {
-        violations.push(
-          `Sony 24-70mm lens pricing error: quoted £${lensPrice.low}-${lensPrice.high} but individual lens is ~£14-20/day (may be confusing with FX3+lens bundle)`,
-        );
-      }
-    }
+    // 24-70mm pricing check removed: was triggering false positives on multi-day quotes
 
     return {
       passed: violations.length === 0,

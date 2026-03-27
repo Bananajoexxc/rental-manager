@@ -1,13 +1,22 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { HyggloService } from '../hygglo/hygglo.service';
+
+type HyggloAccount = 'dbcinema' | 'leo';
+
+/** Our account display names on Hygglo (used to match review authors). */
+const OUR_ACCOUNT_NAMES = ['db cinema rentals', 'leo adams'];
 import * as crypto from 'crypto';
 
 @Injectable()
 export class CouponService implements OnModuleInit {
   private readonly logger = new Logger(CouponService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Inject(forwardRef(() => HyggloService)) private hyggloService: HyggloService,
+  ) {}
 
   async onModuleInit() {
     await this.seedDefaults();
@@ -27,6 +36,22 @@ export class CouponService implements OnModuleInit {
         },
       });
       this.logger.log('Seeded default coupon: db15off (15% off)');
+    }
+
+    // Seed DBCINEMA30 - loyalty client discount (permanent)
+    const loyaltyExisting = await this.prisma.coupon_code.findUnique({
+      where: { code: 'dbcinema30' },
+    });
+    if (!loyaltyExisting) {
+      await this.prisma.coupon_code.create({
+        data: {
+          code: 'dbcinema30',
+          discount_percent: 30,
+          description: 'Loyalty client discount - 30% off for 5-star renters with 7+ reviews who rent exclusively with us',
+          active: true,
+        },
+      });
+      this.logger.log('Seeded loyalty coupon: DBCINEMA30 (30% off)');
     }
   }
 
@@ -51,6 +76,10 @@ export class CouponService implements OnModuleInit {
       return { valid: false };
     }
 
+    if (coupon.expires_at && coupon.expires_at < new Date()) {
+      return { valid: false };
+    }
+
     return {
       valid: true,
       discount_percent: coupon.discount_percent,
@@ -60,7 +89,10 @@ export class CouponService implements OnModuleInit {
 
   async buildAICouponContext(): Promise<string> {
     const coupons = await this.prisma.coupon_code.findMany({
-      where: { active: true },
+      where: {
+        active: true,
+        OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
+      },
     });
 
     if (coupons.length === 0) return '';
@@ -73,10 +105,83 @@ export class CouponService implements OnModuleInit {
       'ACTIVE DISCOUNT CODES:',
       ...lines,
       'If a renter mentions one of these codes, confirm the discount and apply it to their booking.',
+      '',
+      'SPECIAL - DBCINEMA30 LOYALTY CODE:',
+      'This code requires real-time validation before confirming. The system validates automatically',
+      'and injects the result into context. Follow the DBCINEMA30 VALIDATED or DBCINEMA30 INVALID',
+      'instruction. If no validation result appears, do NOT confirm the discount - ask the renter',
+      'to try again or say you need to verify their eligibility.',
+      'The 30% discount applies AFTER minimum earnings are met (DB Cinema: \u00a320, Leo: \u00a325).',
+      'Cannot be stacked with other discounts.',
     ].join('\n');
   }
 
-  // === Loyalty Voucher System ===
+  // === Loyalty Client Discount (DBCINEMA30) ===
+
+  /**
+   * Check if a renter qualifies for DBCINEMA30 after a return.
+   * Eligibility: 7+ total reviews AND 5.0 average rating on Hygglo.
+   */
+  async checkLoyaltyEligibility(
+    orderId: string,
+    account: HyggloAccount,
+  ): Promise<{ eligible: boolean; totalReviews?: number; averageRating?: number }> {
+    try {
+      const stats = await this.hyggloService.fetchCustomerReviews(orderId, account);
+      if (!stats) return { eligible: false };
+
+      const eligible = stats.totalReviews >= 7 && stats.averageRating === 5;
+      return { eligible, totalReviews: stats.totalReviews, averageRating: stats.averageRating };
+    } catch (err) {
+      this.logger.warn('Loyalty eligibility check failed for order ' + orderId + ': ' + err.message);
+      return { eligible: false };
+    }
+  }
+
+  /**
+   * Validate DBCINEMA30 for a renter. Checks:
+   * 1. 7+ reviews with 5.0 average
+   * 2. Most recent review is from one of our accounts (DB Cinema Rentals or Leo Adams)
+   *
+   * Must be revalidated every time - a competitor rental in between invalidates it.
+   */
+  async validateLoyaltyCode(
+    orderId: string,
+    account: HyggloAccount,
+  ): Promise<{ valid: boolean; reason?: string }> {
+    try {
+      const stats = await this.hyggloService.fetchCustomerReviews(orderId, account);
+      if (!stats) return { valid: false, reason: 'Could not fetch review data from Hygglo' };
+
+      if (stats.totalReviews < 7) {
+        return { valid: false, reason: 'Only ' + stats.totalReviews + ' reviews (need 7+)' };
+      }
+      if (stats.averageRating < 5) {
+        return { valid: false, reason: 'Average rating ' + stats.averageRating + ' (need 5.0)' };
+      }
+      if (!stats.reviews || stats.reviews.length === 0) {
+        return { valid: false, reason: 'No review details available' };
+      }
+
+      // Most recent review must be from one of our accounts
+      const mostRecent = stats.reviews[0];
+      const authorLower = mostRecent.authorName.toLowerCase();
+
+      if (!OUR_ACCOUNT_NAMES.some(name => authorLower.includes(name))) {
+        return {
+          valid: false,
+          reason: 'Most recent review from "' + mostRecent.authorName + '" - not our account. Renter used another company since last rental with us.',
+        };
+      }
+
+      return { valid: true };
+    } catch (err) {
+      this.logger.warn('DBCINEMA30 validation failed for order ' + orderId + ': ' + err.message);
+      return { valid: false, reason: 'Validation error' };
+    }
+  }
+
+  // === Loyalty Voucher System (THANKYOU-* decay codes) ===
 
   generateVoucherCode(): string {
     return 'THANKYOU-' + crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -195,6 +300,15 @@ export class CouponService implements OnModuleInit {
 
     if (result.count > 0) {
       this.logger.log(`Expired ${result.count} loyalty voucher(s) older than 20 days`);
+    }
+
+    // Also deactivate expired coupon codes
+    const couponResult = await this.prisma.coupon_code.updateMany({
+      where: { expires_at: { lt: new Date() }, active: true },
+      data: { active: false },
+    });
+    if (couponResult.count > 0) {
+      this.logger.log(`Deactivated ${couponResult.count} expired coupon code(s)`);
     }
   }
 }

@@ -1,0 +1,190 @@
+{
+  "cookies": [
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4xAQQAHl3qmRvqT/N4AwHTj4XxPF5Mo9/LJkUeeeA06gF/8jk=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v1/account",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_GRECAPTCHA",
+      "value": "09AKhCRwjLMhuK5mEqviHd9isCSLCWqQQkmRmht4PcrvrWcwKiQ2-HBVWDDEyS_C-3pIu9NgKXZn2BPxLmfvfnDuc",
+      "domain": "www.google.com",
+      "path": "/recaptcha",
+      "expires": 1788372390.458202,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4yAQQAQjaim0n/4eVVcNZ3oCnd54GGwE+a7biVw8AzNCR59m4=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v4",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4xAQQAHl3qmRvqT/N4AwHTj4XxPF5Mo9/LJkUeeeA06gF/8jk=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v2",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4xAQQAHl3qmRvqT/N4AwHTj4XxPF5Mo9/LJkUeeeA06gF/8jk=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v1",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.1637309513.1772820377",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1807649832.218295,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gcl_au",
+      "value": "1.1.1649017301.1772820377",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1780596377,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "intercom-id-mcsnl4c5",
+      "value": "0d42a50c-8136-467c-ac30-fae373aa745b",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1796150380,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "intercom-device-id-mcsnl4c5",
+      "value": "58751fa0-9ec1-4d33-b113-6e34a773cfc6",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1796419833,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "dslang",
+      "value": "US-EN",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "site",
+      "value": "USA",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "geo",
+      "value": "DE",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "ctx",
+      "value": "{\"selectedDates\":null,\"appearance\":\"light\",\"location\":{\"position\":{\"latitude\":51.4964,\"longitude\":-0.1224},\"name\":\"United%20Kingdom\",\"isCurrentPosition\":false,\"isUserSelectedLocation\":false,\"country\":\"GB\"},\"clientInfo\":{\"versionString\":\"Hygglo-web\"},\"coreBaseUrl\":\"https%3A%2F%2Fapi.hygglo.com%2F\",\"showDebugMenu\":false,\"sessionId\":\"b48c72dc-259f-4ad2-bb96-c25475f7c13c\",\"refreshToken\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoxMzYwMDMyNSwiaWF0IjoxNzcyODIwMzk3LCJleHAiOjE3NzI4MjIxOTcsInN1YiI6Im5nSHlnZ2xvQXBwIn0.K2tmSHBwKS4pED8W9kwZI_3Bh106gFoLmecdBU1G1zU\",\"language\":\"en\",\"viewMarketCountry\":\"GB\"}",
+      "domain": "hygglo.com",
+      "path": "/",
+      "expires": 1804625832,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "intercom-session-mcsnl4c5",
+      "value": "VUlrLzlld01VdUJSaGxZLzNBSHNJd0tQaWRKSHFaVDMzQzYwQ2FUdVFCNzRLSld1UXB0eGxmcXJjUTcwWkYrSlZPUVBOMXlBamFZc3F2Wno2aCtNaDl2OUI0WkwzLzVpWjF1bWlsVkMvVDJYZzBXMFJKeXg4azFxdmQ4RVBMQm83V2RPQjdhN2Z0aVdydmtTR3lISnBZb3RtZHp6aWpocXlZejBtbzA1YVB3NGs1T1BTb0t1NzBrU3BVUXFyUW9VQVAza1U0bTJQK2dNWUhSaDhjSWxUZz09LS1oZ3o4WXU2dGRGZ3VveHhsUjNJam5BPT0=--3df8157c9c2c9e27797c4c521532ea674b1d1ca2",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1773694633,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_C3860FG1TN",
+      "value": "GS2.1.s1773088947$o3$g1$t1773089840$j52$l0$h0",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1807649840.452569,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://hygglo.com",
+      "localStorage": [
+        {
+          "name": "last-used-login-method",
+          "value": "\"email\""
+        },
+        {
+          "name": "_gcl_ls",
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"creationTimeMs\":1772820376947},\"expires\":1780596376947}}"
+        },
+        {
+          "name": "fatllama_welcome_modal_shown",
+          "value": "true"
+        },
+        {
+          "name": "intercom.intercom-state-mcsnl4c5",
+          "value": "{\"app\":{\"openConfig\":{\"unifiedStyling\":true,\"openTo\":\"home\",\"spaces\":[{\"type\":\"home\",\"label\":\"Home\",\"navigationLabel\":\"Home\",\"badge\":null},{\"type\":\"messages\",\"label\":\"Messages\",\"navigationLabel\":\"Messages\",\"badge\":{\"badgeType\":\"unread\",\"label\":1}},{\"type\":\"tickets\",\"label\":\"Tickets\",\"navigationLabel\":\"Tickets\",\"badge\":null},{\"type\":\"help\",\"label\":\"Help\",\"navigationLabel\":\"Help\",\"badge\":null}],\"userHasReceivedChecklists\":false,\"userHasLiveNewsfeed\":false,\"userHasTickets\":false},\"selfServeSuggestionsMatch\":false,\"name\":\"Hygglo\",\"features\":{\"anonymousInboundMessages\":true,\"googleAnalytics\":false,\"hubspotInstalled\":false,\"inboundMessages\":true,\"marketoEnrichmentInstalled\":false,\"googleAnalytics4Integration\":true},\"helpCenterSiteUrl\":\"https://help.hygglo.info\",\"inboundConversationsDisabled\":false,\"isDeveloperWorkspace\":false,\"customGoogleAnalyticsTrackerId\":null},\"launcher\":{\"isLauncherEnabled\":true},\"launcherDiscoveryMode\":{\"hasDiscoveredLauncher\":true},\"launcherSettings\":{\"alignment\":\"right\",\"color\":\"#833085\",\"colorDark\":\"#6ecf7e\",\"hasRequiredFeatures\":true,\"horizontalPadding\":20,\"instantBootEnabled\":true,\"launcherLogoUrl\":null,\"launcherLogoDarkUrl\":null,\"secondaryColor\":\"#ffffff\",\"secondaryColorDark\":\"#ffffff\",\"showLauncher\":true,\"themeMode\":\"light\",\"updatedAt\":1773065124,\"verticalPadding\":20,\"isLoading\":false,\"colorLight\":\"#833085\",\"secondaryColorLight\":\"#ffffff\",\"launcherLogoLightUrl\":null},\"user\":{\"role\":\"user\",\"locale\":\"en\",\"hasConversations\":true},\"message\":{},\"conversations\":{\"byId\":{\"215471142885469\":{\"fetchState\":\"partial\",\"dismissed\":true,\"read\":false}}},\"openOnBoot\":{\"type\":null,\"metadata\":{},\"lastOpenAtTimestamp\":1773089837358},\"operator\":{\"lastComposerEvent\":0},\"router\":{\"isInitialized\":true,\"navigationQueue\":[],\"action\":\"POP\",\"location\":{\"pathname\":\"/home\",\"search\":\"\",\"hash\":\"\",\"state\":null,\"key\":\"default\"}}}"
+        }
+      ]
+    },
+    {
+      "origin": "https://www.google.com",
+      "localStorage": [
+        {
+          "name": "rc::a",
+          "value": "NzlmdXo3ajMyaTE0"
+        },
+        {
+          "name": "rc::f",
+          "value": "0aALHWB15fESUph8gU-gHvBp9yI4gFQH_CXKY_oxncfDCEvPHhX8Llub5SA5pJUW3elMayJa0"
+        }
+      ]
+    }
+  ]
+}

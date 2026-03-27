@@ -124,16 +124,6 @@ export class BundleIntelligenceService {
         savings: 25,
         isFake: false,
       },
-      {
-        name: 'Great Joy Anamorphic Set',
-        description: '35mm + 50mm + 85mm Great Joy anamorphic lenses',
-        items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm'],
-        category: 'lens_set',
-        dailyPrice: 99,
-        account: 'both',
-        savings: 20,
-        isFake: false,
-      },
 
       // Lighting Packages (matching actual inventory items)
       {
@@ -203,7 +193,7 @@ export class BundleIntelligenceService {
     }
 
     // Detect lens set requests
-    const lensTerms = /\b(lens|lenses|prime|zoom|glass|optics|anamorphic|blazar|remus|great joy)\b/gi;
+    const lensTerms = /\b(lens|lenses|prime|zoom|glass|optics|anamorphic|blazar|remus)\b/gi;
     const lensCount = (message.match(lensTerms) || []).length;
     const mentionedLenses = mentionedItems.filter(item =>
       /lens|mm|prime|zoom|24-70|70-200|50mm|35mm|85mm/i.test(item)

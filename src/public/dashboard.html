@@ -111,7 +111,19 @@
     .stat-card .value.red { color: #ef4444; text-shadow: 0 0 20px rgba(239,68,68,0.15); }
     .stat-card.lost-revenue-card { border-left: 3px solid #ef4444; box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), inset 3px 0 8px rgba(239,68,68,0.06), 0 4px 24px rgba(0,0,0,0.25); }
     .stat-card.lost-revenue-card:hover { border-left-color: #f87171; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 0 24px rgba(239,68,68,0.15), 0 8px 40px rgba(0,0,0,0.3); }
-    .stat-card.denied-revenue-card { border-left: 3px solid #f59e0b; box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), inset 3px 0 8px rgba(245,158,11,0.06), 0 4px 24px rgba(0,0,0,0.25); }
+    .stat-card[data-stat="business-intel"] .bi-section { margin-bottom: 12px; }
+    .stat-card[data-stat="business-intel"] .bi-section-title { font-size: 11px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .stat-card[data-stat="business-intel"] .bi-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px; }
+    .stat-card[data-stat="business-intel"] .bi-row .bi-item { color: #c9ccd8; flex: 1; }
+    .stat-card[data-stat="business-intel"] .bi-row .bi-value { color: #22c55e; font-weight: 600; min-width: 60px; text-align: right; }
+    .stat-card[data-stat="business-intel"] .bi-row .bi-value.red { color: #ef4444; }
+    .stat-card[data-stat="business-intel"] .bi-row .bi-value.amber { color: #f59e0b; }
+    .stat-card[data-stat="business-intel"] .bi-row .bi-value.purple { color: #a78bfa; }
+    .stat-card[data-stat="business-intel"] .bi-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+    .stat-card[data-stat="business-intel"] .bi-badge.strong { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .stat-card[data-stat="business-intel"] .bi-badge.moderate { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .stat-card[data-stat="business-intel"] .bi-badge.watch { background: rgba(139,92,246,0.15); color: #a78bfa; }
+        .stat-card.denied-revenue-card { border-left: 3px solid #f59e0b; box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), inset 3px 0 8px rgba(245,158,11,0.06), 0 4px 24px rgba(0,0,0,0.25); }
     .stat-card.denied-revenue-card:hover { border-left-color: #fbbf24; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 0 24px rgba(245,158,11,0.15), 0 8px 40px rgba(0,0,0,0.3); }
 
     /* Calendar - Carousel Style */
@@ -331,6 +343,22 @@
     .stat-rental-photo {
       width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: rgba(30,33,46,0.5);
     }
+    .stat-rental-photos {
+      display: flex; gap: 3px; flex-shrink: 0; align-items: center;
+    }
+    .stat-rental-photos img {
+      width: 32px; height: 32px; border-radius: 6px;
+      object-fit: cover; background: rgba(30,33,46,0.5);
+      cursor: pointer; transition: transform 0.15s;
+    }
+    .stat-rental-photos img:hover {
+      transform: scale(3); z-index: 100; position: relative;
+      border: 1px solid #6ea8fe; transform-origin: left center;
+    }
+    .stat-rental-photos .photos-more {
+      font-size: 9px; color: #6b6f82; white-space: nowrap;
+    }
+    /* Tile spanning now controlled by data-size attribute */
     .stat-rental-info { flex: 1; min-width: 0; }
     .stat-rental-name { font-size: 11px; color: #e4e6eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .stat-rental-items { font-size: 10px; color: #6b6f82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -437,7 +465,21 @@
     .section-body { padding: 0; overflow-x: auto; }
     .section-body.padded { padding: 18px; }
 
+    /* ===== All panels expanded by default ===== */
+    .panel-wrapper .section {
+      overflow: visible;
+    }
+
+    /* Stats grid collapse toggle */
+    .stats-toggle { display:flex; align-items:center; gap:8px; padding:8px 0 4px; cursor:pointer; color:#8b8fa3; font-size:12px; user-select:none; }
+    .stats-toggle:hover { color:#e4e6eb; }
+    .stats-toggle .chevron { transition:transform 0.3s; font-size:9px; }
+    .stats-toggle.collapsed .chevron { transform:rotate(-90deg); }
+    .stats-grid.stats-collapsed { max-height:0 !important; overflow:hidden; padding:0 !important; margin:0 !important; opacity:0; transition:max-height 0.4s ease, opacity 0.3s ease; }
+    .stats-grid:not(.stats-collapsed) { transition:max-height 0.4s ease, opacity 0.3s ease; opacity:1; }
+
     /* Marketing listings */
+    .port-card:hover { border-color: #ff9800 !important; }
     .mktg-filter-btn { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#8b8fa3; padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer; transition:all 0.2s; }
     .mktg-filter-btn.active, .mktg-filter-btn:hover { background:rgba(139,92,246,0.2); border-color:#8b5cf6; color:#c4b5fd; }
     .mktg-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
@@ -467,14 +509,53 @@
     .grid-3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }
     /* ========== TABLET (≤960px) ========== */
     /* ========== TABLET (≤960px) ========== */
+    
+    /* Dynamic tile resizing — iOS widget style */
+    .stat-card[data-size="2x1"] { grid-column: span 2; }
+    .stat-card[data-size="2x2"] { grid-column: span 2; grid-row: span 2; }
+    .stat-card[data-size="1x1"] { grid-column: span 1; }
+    /* Override existing span rules — data-size takes priority */
+    .stat-card[data-size] { grid-column: unset; }
+    .stat-card[data-size="2x1"] { grid-column: span 2; }
+    .stat-card[data-size="2x2"] { grid-column: span 2; grid-row: span 2; }
+    .stat-card[data-size="1x1"] { grid-column: span 1; }
+    /* Resize handle (visible in edit mode) */
+    .stat-resize-btn {
+      display: none; position: absolute; bottom: 4px; right: 6px;
+      background: rgba(110,168,254,0.15); border: 1px solid rgba(110,168,254,0.3);
+      border-radius: 4px; color: #6ea8fe; font-size: 9px; padding: 1px 5px;
+      cursor: pointer; z-index: 3; line-height: 1.4;
+    }
+    .stat-resize-btn:hover { background: rgba(110,168,254,0.3); }
+    body.edit-mode .stat-resize-btn { display: block; pointer-events: auto; }
+    /* 2x2 tiles — expand on hover/tap only */
+    .stat-card[data-size="2x2"] { display: flex; flex-direction: column; }
+    .stat-card[data-size="2x2"] .value { font-size: 36px; }
+    .stat-card[data-size="2x2"] .sub { font-size: 13px; }
+    .stat-card[data-size="2x2"]:hover .stat-expand,
+    .stat-card[data-size="2x2"].expanded .stat-expand {
+      max-height: 500px !important; opacity: 1 !important; margin-top: 10px !important;
+      flex: 1;
+    }
+    .stat-card[data-size="2x2"]:hover .stat-expand-inner,
+    .stat-card[data-size="2x2"].expanded .stat-expand-inner { max-height: none; overflow-y: auto; flex: 1; }
+    /* 2x1 tiles — expand on hover/tap only */
+    .stat-card[data-size="2x1"]:hover .stat-expand,
+    .stat-card[data-size="2x1"].expanded .stat-expand {
+      max-height: 300px !important; opacity: 1 !important; margin-top: 10px !important;
+    }
+    .stat-card[data-size="2x1"]:hover .stat-expand-inner,
+    .stat-card[data-size="2x1"].expanded .stat-expand-inner { max-height: 280px; overflow-y: auto; }
+
     @media (max-width: 960px) {
       .grid-2, .grid-3, .grid-3col { grid-template-columns: 1fr; }
-      .stat-card:hover .stat-expand { max-height: 0; opacity: 0; margin-top: 0; }
-      .stat-card.expanded .stat-expand { max-height: 500px; opacity: 1; margin-top: 10px; }
     }
 
     /* ========== MOBILE (≤768px) — Native iPhone app feel ========== */
     @media (max-width: 768px) {
+      /* Mobile: all tiles revert to 1x1 */
+      .stat-card[data-size="2x1"] { grid-column: span 1; }
+      .stat-card[data-size="2x2"] { grid-column: span 1; grid-row: span 1; }
       /* --- Global: smooth native feel, kill lag --- */
       html { scroll-behavior: smooth; }
       * { -webkit-tap-highlight-color: transparent; }
@@ -562,15 +643,20 @@
       .stat-card-hero .label { grid-column: 1; grid-row: 1; margin-bottom: 0; font-size: 10px; align-self: end; }
       .stat-card-hero .value { grid-column: 1; grid-row: 2; font-size: 28px; flex: none; align-self: start; line-height: 1.1; }
       .stat-card-hero .sub { grid-column: 1; grid-row: 3; margin-top: 2px; font-size: 10px; text-align: left; }
-      /* Show rental list always visible on right side */
+      /* Rental list on right side — only visible on hover/tap */
       .stat-card-hero .stat-expand {
         grid-column: 2; grid-row: 1 / -1;
-        max-height: 160px !important; opacity: 1 !important; margin-top: 0 !important;
+        margin-top: 0 !important;
         overflow-y: auto; overflow-x: hidden;
+      }
+      .stat-card-hero:hover .stat-expand,
+      .stat-card-hero.expanded .stat-expand {
+        max-height: 500px !important; opacity: 1 !important;
       }
       .stat-card-hero .stat-expand-inner { border-top: none; padding-top: 0; }
       .stat-card-hero .stat-rental-row { padding: 2px 0; gap: 4px; }
       .stat-card-hero .stat-rental-photo { width: 24px; height: 24px; border-radius: 3px; }
+      .stat-card-hero .stat-rental-photos img { width: 24px; height: 24px; border-radius: 3px; }
       .stat-card-hero .stat-rental-name { font-size: 10px; }
       .stat-card-hero .stat-rental-amount { font-size: 10px; }
       .stat-card-hero .stat-drag-handle,
@@ -579,7 +665,7 @@
         padding: 12px;
         border-radius: 14px;
         position: relative;
-        overflow: hidden;
+        overflow: visible;
         display: flex;
         flex-direction: column;
         min-height: 76px;
@@ -639,6 +725,8 @@
       .stat-expand-inner { font-size: 10px; padding-top: 6px; }
       .stat-rental-row { gap: 6px; padding: 4px 0; }
       .stat-rental-photo { width: 30px; height: 30px; border-radius: 4px; }
+      .stat-rental-photos img { width: 28px; height: 28px; border-radius: 4px; }
+
       .stat-rental-name { font-size: 10px; }
       .stat-rental-items { font-size: 9px; }
       .stat-rental-amount { font-size: 11px; }
@@ -1684,6 +1772,20 @@
     flex-shrink: 0;
     border: 1px solid rgba(255,255,255,0.06);
   }
+    .rcal-photos-strip {
+      display: flex; gap: 2px; flex-shrink: 0; align-items: center;
+    }
+    .rcal-photos-strip .rcal-photo {
+      width: 28px; height: 28px; border-radius: 6px;
+    }
+    .rcal-photos-strip .rcal-photo:first-child {
+      width: 38px; height: 38px;
+    }
+    .rcal-photos-strip .rcal-photo:hover {
+      transform: scale(3); z-index: 100; position: relative;
+      border-color: #6ea8fe; transform-origin: left center;
+      transition: transform 0.15s;
+    }
   .rcal-renter-name {
     font-size: 12px;
     font-weight: 600;
@@ -1848,8 +1950,58 @@
     .rcal-event-time { font-size: 11px; }
     .rcal-cell { padding: 3px 2px; }
   }
-  </style>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  
+    /* Ensure hover/tap expand works on all screen sizes for 1x1 */
+    .stat-card[data-size="1x1"]:hover .stat-expand,
+    .stat-card[data-size="1x1"].expanded .stat-expand,
+    .stat-card:not([data-size]):hover .stat-expand,
+    .stat-card:not([data-size]).expanded .stat-expand {
+      max-height: 500px; opacity: 1; margin-top: 10px;
+    }
+
+    /* 2x1 and 2x2 tiles: extra info styling when expanded */
+    .stat-card[data-size="2x1"] .stat-rental-row,
+    .stat-card[data-size="2x2"] .stat-rental-row {
+      padding: 5px 0;
+    }
+    .stat-card[data-size="2x2"] .stat-rental-name {
+      font-size: 13px;
+    }
+    .stat-card[data-size="2x2"] .stat-rental-items {
+      font-size: 12px;
+      white-space: normal;
+    }
+    .stat-card[data-size="2x2"] .stat-rental-photos img {
+      width: 40px; height: 40px;
+    }
+    .stat-card[data-size="2x1"] .stat-rental-photos img {
+      width: 36px; height: 36px;
+    }
+    /* 2x1/2x2: show more photo thumbnails */
+    .stat-card[data-size="2x1"] .stat-rental-photos img:nth-child(n+5),
+    .stat-card[data-size="2x2"] .stat-rental-photos img:nth-child(n+7) {
+      /* show more photos on larger tiles - don't hide any */
+    }
+
+    /* Mobile: tap expand must work — override overflow for expanded cards */
+    @media (max-width: 768px) {
+      .stat-card.expanded {
+        overflow: visible !important;
+        z-index: 5;
+      }
+      .stat-card.expanded .stat-expand {
+        max-height: 500px !important; opacity: 1 !important; margin-top: 10px !important;
+      }
+      /* But 2x1/2x2 data-size tiles still force-show on mobile (they're 1x1 width but content is visible) */
+      .stat-card[data-size="2x1"].expanded .stat-expand,
+      .stat-card[data-size="2x2"].expanded .stat-expand {
+        max-height: 500px !important; opacity: 1 !important; margin-top: 8px !important;
+      }
+    }
+
+  
+    @keyframes syncProgress { 0% { width: 0%; } 30% { width: 40%; } 60% { width: 65%; } 90% { width: 85%; } 100% { width: 95%; } }
+    </style>
 </head>
 <body>
 
@@ -1880,13 +2032,16 @@
     <!-- Stats Cards -->
     <div class="panel-wrapper" data-panel="stats" data-panel-label="Stats Cards">
     <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Stats Cards</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <div class="stats-toggle" id="statsToggle" onclick="toggleStatsGrid()">
+      <span class="chevron">&#9660;</span> <span id="statsToggleLabel">Stats Cards</span>
+    </div>
     <div class="stats-grid" id="statsGrid">
-      <div class="stat-card stat-card-hero" data-stat="active" data-stat-label="Active Rentals" draggable="false">
+      <div class="stat-card stat-card-hero" data-stat="active" data-size="2x1" data-stat-label="Active Rentals" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
         <div class="label">Active Rentals</div>
         <div class="value blue" id="statActiveBookings">--</div>
         <div class="sub" id="statActiveBookingsSub"></div>
-        <div class="rcal-tile-hint">📅 Tap to view calendar</div>
+        <div class="rcal-tile-hint">Tap to expand · <button onclick="openRentalCal();event.stopPropagation();" style="background:none;border:1px solid rgba(110,168,254,0.25);color:rgba(110,168,254,0.6);font-size:9px;padding:1px 6px;border-radius:4px;cursor:pointer;">Calendar</button></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandActive"></div></div>
       </div>
       <div class="stat-card" data-stat="earnings" data-stat-label="Earnings" draggable="false">
@@ -1910,13 +2065,13 @@
         <div class="sub" id="statMonthConfirmedSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandConfirmed"></div></div>
       </div>
-      <div class="stat-card" data-stat="ongoing" data-stat-label="Ongoing" draggable="false">
+      <div class="stat-card" data-stat="ongoing" data-size="2x1" data-stat-label="Ongoing" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
         <div class="label">Ongoing</div>
         <div class="value amber" id="statOngoing">--</div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandOngoing"></div></div>
       </div>
-      <div class="stat-card" data-stat="upcoming" data-stat-label="Upcoming" draggable="false">
+      <div class="stat-card" data-stat="upcoming" data-size="2x1" data-stat-label="Upcoming" draggable="false">
         <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
         <div class="label">Upcoming</div>
         <div class="value purple" id="statUpcoming">--</div>
@@ -1998,6 +2153,20 @@
         <div class="value red" id="statTaxLiability">--</div>
         <div class="sub" id="statTaxSub"></div>
         <div class="stat-expand"><div class="stat-expand-inner" id="expandTax"></div></div>
+      </div>
+      <div class="stat-card stat-card-hero" data-stat="business-intel" data-size="2x1" data-stat-label="Business Intelligence" draggable="false" style="border-left:3px solid #8b5cf6;">
+        <span class="stat-drag-handle">&#9776;</span><button class="stat-delete-btn" onclick="removeStat(this)" title="Remove">&times;</button>
+        <div class="label" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Business Intelligence</span>
+          <select id="biPeriod" onchange="loadBI()" class="stat-select">
+            <option value="3m">3 Months</option>
+            <option value="6m" selected>6 Months</option>
+            <option value="12m">12 Months</option>
+          </select>
+        </div>
+        <div class="value purple" id="statBISummary" style="font-size:16px;line-height:1.4;">Loading...</div>
+        <div class="sub" id="statBISub"></div>
+        <div class="stat-expand"><div class="stat-expand-inner" id="expandBI" style="overflow-y:auto;"></div></div>
       </div>
       <!-- Best & Worst Month stats moved to Lifetime Revenue chart header -->
     </div>
@@ -2188,7 +2357,7 @@
           <span>Item Revenue</span>
           <div class="section-header-controls" style="display:flex;gap:6px;align-items:center;">
             <select id="itemPeriod" onchange="loadTopItems()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
-              <option value="month">This Month</option>
+              <option value="month" selected>This Month</option>
               <option value="3m">3 Months</option>
               <option value="6m" selected>6 Months</option>
               <option value="12m">12 Months</option>
@@ -2209,7 +2378,7 @@
           <span>Top Bundles</span>
           <div class="section-header-controls" style="display:flex;gap:6px;align-items:center;">
             <select id="bundlePeriod" onchange="loadTopBundles()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
-              <option value="month">This Month</option>
+              <option value="month" selected>This Month</option>
               <option value="3m">3 Months</option>
               <option value="6m" selected>6 Months</option>
               <option value="12m">12 Months</option>
@@ -2229,7 +2398,7 @@
             <h3 style="color:#e4e6eb;margin:0;font-size:16px;">Item Revenue Breakdown</h3>
             <div style="display:flex;gap:8px;align-items:center;">
               <select id="modalPeriod" onchange="loadItemBreakdown()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;">
-                <option value="month">This Month</option>
+                <option value="month" selected>This Month</option>
                 <option value="3m">3 Months</option>
                 <option value="6m" selected>6 Months</option>
                 <option value="12m">12 Months</option>
@@ -2284,8 +2453,8 @@
             <button onclick="switchMissedTab('notinstock')" id="missedTabNotInStock" class="refresh-btn" style="padding:2px 10px;font-size:11px;border-radius:0 4px 4px 0;">Not in Inventory</button>
           </div>
           <select id="lostRevenuePeriod" onchange="loadLostRevenue()" style="background:rgba(30,33,46,0.6);border:1px solid rgba(255,255,255,0.1);color:#e4e6eb;padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;">
-            <option value="month">This Month</option>
-            <option value="3m" selected>3 Months</option>
+            <option value="month" selected>This Month</option>
+            <option value="3m">3 Months</option>
             <option value="6m">6 Months</option>
             <option value="12m">12 Months</option>
             <option value="all">All Time</option>
@@ -2411,6 +2580,7 @@
         <span>Investment Insights</span>
         <div class="section-header-controls" style="display:flex;align-items:center;gap:8px;">
           <span id="insightsLastUpdated" style="font-size:10px;color:#8b8fa3;font-weight:400;"></span>
+          <span id="insightsLastSync" style="font-size:10px;color:#555;margin-right:6px;"></span>
           <button onclick="syncCompetitors()" id="insightsSyncBtn" style="background:#06b6d4;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Sync</button>
         </div>
       </div>
@@ -2433,6 +2603,7 @@
         <span>Market Opportunities</span>
         <div class="section-header-controls" style="display:flex;align-items:center;gap:8px;">
           <span id="marketReleasesLastScan" style="font-size:10px;color:#8b8fa3;font-weight:400;"></span>
+          <span id="marketLastScan" style="font-size:10px;color:#555;margin-right:6px;"></span>
           <button onclick="scanMarketReleases()" id="marketReleasesScanBtn" style="background:#8b5cf6;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Scan Now</button>
         </div>
       </div>
@@ -2467,117 +2638,7 @@
           <div>
             <label style="font-size:11px;color:#8b8fa3;display:block;margin-bottom:4px;">Item</label>
             <select id="insuranceItem" style="width:100%;padding:8px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;box-sizing:border-box;appearance:auto;">
-              <option value="" disabled selected>Select item...</option>
-              <optgroup label="Camera Bodies">
-                <option>Sony FX3</option>
-                <option>Sony A7 III</option>
-                <option>Sony A7 II</option>
-                <option>Fujifilm X100 VI</option>
-                <option>BMPCC 6K Pro</option>
-                <option>BMPCC 6K Full Frame</option>
-              </optgroup>
-              <optgroup label="Anamorphic Lenses">
-                <option>Anamorphic Blazar Remus 33mm</option>
-                <option>Anamorphic Blazar Remus 45mm</option>
-                <option>Anamorphic Blazar Remus 65mm</option>
-                <option>Anamorphic Blazar Remus 100mm</option>
-                <option>Anamorphic Great Joy lens 35mm</option>
-                <option>Anamorphic Great Joy lens 50mm</option>
-                <option>Anamorphic Great Joy lens 85mm</option>
-              </optgroup>
-              <optgroup label="Sony Lenses">
-                <option>Sony GM 24-70mm f2.8</option>
-                <option>Sony GM 16-35mm f2.8</option>
-                <option>Sony GM 70-200mm f2.8</option>
-                <option>Sony GM 90mm f2.8</option>
-                <option>Sony 28-70mm</option>
-                <option>Sony 11mm f2.8 fisheye</option>
-              </optgroup>
-              <optgroup label="Canon Lenses">
-                <option>Canon EF 24-105mm f4</option>
-                <option>Canon EF 16-35mm f2.8</option>
-              </optgroup>
-              <optgroup label="Lights &amp; Modifiers">
-                <option>Softbox 85cm</option>
-                <option>LED light panels RGB</option>
-                <option>Nanlite Forza 300</option>
-                <option>Nanlite Pavotube 30x II</option>
-                <option>Nanlite 500B</option>
-                <option>Ambitful RGB light tubes 2x set</option>
-                <option>5-in-1 reflector panel</option>
-                <option>Camera flash</option>
-              </optgroup>
-              <optgroup label="Support &amp; Gimbals">
-                <option>C-stand</option>
-                <option>Small rig tripod</option>
-                <option>Sirui tripod</option>
-                <option>DJI RS3 Pro gimbal</option>
-                <option>Motorized slider</option>
-                <option>Tilta Nucleus Nano 2 follow focus</option>
-                <option>Tilta shoulder rig</option>
-                <option>Monopod arm support</option>
-              </optgroup>
-              <optgroup label="Monitors &amp; Transmitters">
-                <option>Atomos Ninja V</option>
-                <option>Hollyland Mars 4K transmitter</option>
-                <option>Hollyland Pyro S transmitter</option>
-                <option>Hollyland 7-inch monitor</option>
-              </optgroup>
-              <optgroup label="Audio">
-                <option>Rode Video Mic Go</option>
-                <option>Rode Wireless Mic Pro set</option>
-                <option>Rode Video Mic Pro Plus</option>
-                <option>Audio boom mic Sennheiser</option>
-                <option>DJI Wireless Mics</option>
-                <option>DJI Mic 2 wireless</option>
-                <option>JBL wireless microphones</option>
-              </optgroup>
-              <optgroup label="Drones &amp; Action Cameras">
-                <option>DJI Mavic 3 Pro</option>
-                <option>DJI Mini 4 Pro</option>
-                <option>DJI Osmo Action Pro 5</option>
-                <option>GoPro 12 Hero</option>
-              </optgroup>
-              <optgroup label="DJ &amp; Speakers">
-                <option>DJ RX3 Pioneer controller</option>
-                <option>JBL Club 120 speaker</option>
-              </optgroup>
-              <optgroup label="Smoke &amp; Effects">
-                <option>Smoke machine fogger</option>
-                <option>Smoke Ninja Pro hazer</option>
-                <option>Smoke Ninja</option>
-              </optgroup>
-              <optgroup label="Power &amp; Batteries">
-                <option>V-mount 95mAh</option>
-                <option>V-mount 150mAh</option>
-                <option>Sony NPF 970 batteries 2x sets</option>
-                <option>DJI gimbal battery</option>
-                <option>Anker Power Station F2000</option>
-              </optgroup>
-              <optgroup label="Filters &amp; Accessories">
-                <option>ND filter</option>
-                <option>Cinebloom filter mist</option>
-                <option>256GB card</option>
-                <option>CF Express Type A card</option>
-                <option>Suction cups</option>
-                <option>PL to Sony E mount</option>
-                <option>PL to EF mount</option>
-                <option>PL to RF mount</option>
-                <option>PL to L mount</option>
-              </optgroup>
-              <optgroup label="Retired / Sold">
-                <option>Sony A7S III</option>
-                <option>V-mount battery</option>
-                <option>DJI Mavic 3 Classic</option>
-                <option>DJI Mini 3 Pro</option>
-                <option>Sony NP-FZ100 battery</option>
-                <option>DZO Vespid Prime 16mm T2.1</option>
-                <option>DZO Vespid Prime 25mm T2.1</option>
-                <option>DZO Vespid Prime 50mm T2.1</option>
-                <option>DZO Vespid Prime 75mm T2.1</option>
-                <option>DZO Vespid Prime 100mm T2.1</option>
-                <option>DZO Vespid Prime 125mm T2.1</option>
-              </optgroup>
+              <option value="" disabled selected>Loading items...</option>
             </select>
           </div>
           <div>
@@ -2604,30 +2665,19 @@
       </div>
     </div>
 
-    <!-- Marketing Listings Panel -->
-    <div class="panel-wrapper" data-panel="marketing-listings" data-panel-label="Marketing Listings">
-    <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Marketing Listings</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
+    <!-- Port to Leo Panel -->
+    <div class="panel-wrapper" data-panel="port-to-leo" data-panel-label="Port to Leo">
+    <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Port to Leo</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
     <div class="section">
       <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>Marketing Listings <span id="marketingListingsCount" style="font-size:14px;color:#8b5cf6;font-weight:700;"></span></span>
+        <span>Port DB Cinema &rarr; Leo <span id="portGapCount" style="font-size:14px;color:#ff9800;font-weight:700;"></span></span>
         <div style="display:flex;align-items:center;gap:8px;">
-          <button onclick="discoverMarketingListings()" id="marketingDiscoverBtn" style="background:#8b5cf6;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Discover</button>
+          <button id="portRefreshBtn" onclick="loadPortGaps()" style="background:#ff9800;border:none;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Refresh</button>
         </div>
       </div>
-      <div style="padding:8px 16px 0;">
-        <div style="display:flex;gap:8px;">
-          <input type="text" id="marketingSearchInput" placeholder="Type an item name to create a listing..." style="flex:1;padding:7px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e4ec;font-size:13px;outline:none;" />
-          <button onclick="createMarketingListing()" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;white-space:nowrap;">+ Create</button>
-        </div>
-      </div>
-      <div style="padding:8px 16px;display:flex;gap:6px;flex-wrap:wrap;" id="marketingFilterBar">
-        <button class="mktg-filter-btn active" data-filter="all" onclick="filterMarketingListings('all',this)">All</button>
-        <button class="mktg-filter-btn" data-filter="pending" onclick="filterMarketingListings('pending',this)">Pending Images</button>
-        <button class="mktg-filter-btn" data-filter="ready" onclick="filterMarketingListings('ready',this)">Ready</button>
-        <button class="mktg-filter-btn" data-filter="uploaded" onclick="filterMarketingListings('uploaded',this)">Uploaded</button>
-      </div>
-      <div class="section-body padded" id="marketingListingsBody">
-        <div class="loading"><div class="spinner"></div><br>Loading marketing listings...</div>
+      <div id="portStatus" style="padding:4px 16px;font-size:12px;color:#aaa;display:none;"></div>
+      <div class="section-body padded" id="portGapsBody" style="max-height:600px;overflow-y:auto;">
+        <div class="loading"><div class="spinner"></div><br>Loading gaps...</div>
       </div>
     </div>
     </div>
@@ -2652,30 +2702,18 @@
         <div class="chat-msg assistant">Hello! I'm your rental manager AI. Ask me anything about rentals, inventory, bookings, or business insights.</div>
       </div>
       <div class="chat-input-row">
-        <input type="text" class="chat-input" id="chatInput" placeholder="Type a message..." autocomplete="off" />
+        <div class="chat-quick-actions" style="display:flex;gap:4px;padding:4px 8px;flex-wrap:wrap;">
+          <button class="chat-quick-btn" onclick="quickChat('Brief me')" style="font-size:10px;padding:2px 8px;border:1px solid rgba(255,255,255,0.15);border-radius:10px;background:transparent;color:#8b8fa3;cursor:pointer;">Brief me</button>
+          <button class="chat-quick-btn" onclick="quickChat('What are today\'s stats?')" style="font-size:10px;padding:2px 8px;border:1px solid rgba(255,255,255,0.15);border-radius:10px;background:transparent;color:#8b8fa3;cursor:pointer;">Stats</button>
+          <button class="chat-quick-btn" onclick="quickChat('Any pending rentals to review?')" style="font-size:10px;padding:2px 8px;border:1px solid rgba(255,255,255,0.15);border-radius:10px;background:transparent;color:#8b8fa3;cursor:pointer;">Pending</button>
+          <button class="chat-quick-btn" onclick="quickChat('What items are compatible with the Canon R5?')" style="font-size:10px;padding:2px 8px;border:1px solid rgba(255,255,255,0.15);border-radius:10px;background:transparent;color:#8b8fa3;cursor:pointer;">Compatibility</button>
+        </div>
+        <input type="text" class="chat-input" id="chatInput" placeholder="Ask about gear, rentals, pricing, or say 'brief me'..." autocomplete="off" />
         <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()">Send</button>
       </div>
     </div>
     </div>
 
-    <!-- Claude Code: Server Operations -->
-    <div class="panel-wrapper" data-panel="claude-code" data-panel-label="Claude Code">
-    <div class="panel-edit-bar" draggable="true"><span class="panel-label"><span class="drag-handle">&#9776;</span> Claude Code</span><button class="panel-delete-btn" onclick="removePanel(this)">&times;</button></div>
-    <div class="chat-panel claude-code-panel">
-      <div class="chat-header" style="border-left:3px solid #22c55e; display:flex; align-items:center; gap:8px;">
-        <span style="color:#22c55e;font-size:16px;">&#9654;</span>
-        <span>Claude Code</span>
-        <span style="font-size:10px;color:#6b6f80;">Server Operations</span>
-        <button onclick="resetCodeTerminal()" style="margin-left:auto;background:none;border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#6b6f80;font-size:12px;padding:2px 8px;cursor:pointer;" title="Reset Session">&#8635; Reset</button>
-        <button onclick="openCronSettings()" style="background:none;border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#6b6f80;font-size:14px;padding:2px 8px;cursor:pointer;" title="Cron Settings">&#9881;</button>
-      </div>
-      <div id="codeTerminal" style="width:100%;height:420px;background:#0f0f23;border-radius:0 0 10px 10px;overflow:hidden;position:relative;">
-        <div id="codeTermOverlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,15,35,0.9);z-index:2;color:#6b6f80;font-size:13px;">
-          Connecting...
-        </div>
-      </div>
-    </div>
-    </div>
 
   </div>
 
@@ -2740,6 +2778,10 @@
     var currentAccount = '';
     var profitChartInstance = null;
     var lifetimeChartInstance = null;
+
+    // Track pending/confirmed counts to detect transitions
+    var _prevPendingCount = null;
+    var _prevConfirmedBookings = null;
     var refreshFastTimer = null;
     var refreshMediumTimer = null;
     var activityPollTimer = null;
@@ -2757,9 +2799,9 @@
         refreshFast();
         refreshMedium();
         pollActivity();
-        if (!refreshFastTimer) refreshFastTimer = setInterval(refreshFast, 30000);
-        if (!refreshMediumTimer) refreshMediumTimer = setInterval(refreshMedium, 300000);
-        if (!activityPollTimer) activityPollTimer = setInterval(pollActivity, 10000);
+        if (!refreshFastTimer) refreshFastTimer = setInterval(refreshFast, 180000);
+        if (!refreshMediumTimer) refreshMediumTimer = setInterval(refreshMedium, 900000);
+        if (!activityPollTimer) activityPollTimer = setInterval(pollActivity, 120000);
       }
     });
 
@@ -2767,8 +2809,7 @@
     document.addEventListener('click', function(e) {
       var card = e.target.closest('.stat-card');
       if (!card) return;
-      // Hero card: open rental calendar overlay instead of toggling expand
-      if (card.classList.contains('stat-card-hero')) { openRentalCal(); return; }
+      // Hero card: toggle expand like all other cards (calendar via long-press or button)
       // Don't toggle when interacting with controls inside the card
       if (e.target.closest('.stat-delete-btn') || e.target.closest('.stat-drag-handle') || e.target.closest('select') || e.target.closest('button') || e.target.closest('a')) return;
       // Collapse all other cards (accordion)
@@ -2779,6 +2820,57 @@
         });
       }
       card.classList.toggle('expanded');
+    });
+
+    // ---- Section Panel Tap-to-Expand (touch/click) ----
+    document.addEventListener('click', function(e) {
+      // Only handle clicks on section headers inside collapsible panels
+      var header = e.target.closest('.panel-wrapper:not([data-panel="stats"]) .section-header');
+      if (!header) return;
+      // Don't interfere with controls inside the header
+      if (e.target.closest('button') || e.target.closest('select') || e.target.closest('a') || e.target.closest('input')) return;
+      var section = header.closest('.section');
+      if (!section) return;
+      // Collapse all other expanded sections (accordion)
+      document.querySelectorAll('.panel-wrapper:not([data-panel="stats"]) .section.panel-expanded').forEach(function(s) {
+        if (s !== section) s.classList.remove('panel-expanded');
+      });
+      section.classList.toggle('panel-expanded');
+    });
+
+    // === Stats Grid Toggle ===
+    function toggleStatsGrid() {
+      var grid = document.getElementById('statsGrid');
+      var toggle = document.getElementById('statsToggle');
+      if (!grid || !toggle) return;
+      var isCollapsed = grid.classList.contains('stats-collapsed');
+      if (isCollapsed) {
+        grid.classList.remove('stats-collapsed');
+        toggle.classList.remove('collapsed');
+      } else {
+        grid.classList.add('stats-collapsed');
+        toggle.classList.add('collapsed');
+      }
+      localStorage.setItem('statsCollapsed', isCollapsed ? 'false' : 'true');
+    }
+    window.toggleStatsGrid = toggleStatsGrid;
+
+    // On load: respect saved preference (default = collapsed)
+    (function() {
+      var pref = localStorage.getItem('statsCollapsed');
+      var grid = document.getElementById('statsGrid');
+      var toggle = document.getElementById('statsToggle');
+      if (pref === 'true') {
+        // User explicitly collapsed — keep collapsed
+        if (grid) grid.classList.add('stats-collapsed');
+        if (toggle) toggle.classList.add('collapsed');
+      }
+      // else default: expanded (stats visible)
+    })();
+
+    // Expand all section panels by default on load
+    document.querySelectorAll('.panel-wrapper:not([data-panel="stats"]) .section').forEach(function(s) {
+      s.classList.add('panel-expanded');
     });
 
     // Enable scroll on stat-expand AFTER expand transition finishes (prevents scrollbar flash)
@@ -2842,7 +2934,14 @@
       });
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({
         panelOrder: panelOrder, hiddenPanels: hiddenPanels,
-        statOrder: statOrder, hiddenStats: hiddenStats
+        statOrder: statOrder, hiddenStats: hiddenStats, statSizes: (function() {
+        var sizes = {};
+        document.querySelectorAll('.stat-card[data-size]').forEach(function(s) {
+          var key = s.getAttribute('data-stat');
+          if (key) sizes[key] = s.getAttribute('data-size');
+        });
+        return sizes;
+      })()
       }));
     }
 
@@ -2867,10 +2966,11 @@
         main.appendChild(fragment);
       }
 
-      // Apply hidden panels
+      // Apply hidden panels (stats panel is always visible — cannot be hidden)
       if (layout.hiddenPanels) {
+        var safeHidden = layout.hiddenPanels.filter(function(id) { return id !== 'stats'; });
         main.querySelectorAll('.panel-wrapper[data-panel]').forEach(function(p) {
-          if (layout.hiddenPanels.indexOf(p.getAttribute('data-panel')) >= 0) {
+          if (safeHidden.indexOf(p.getAttribute('data-panel')) >= 0) {
             p.classList.add('panel-hidden');
           }
         });
@@ -2899,6 +2999,15 @@
           }
         });
       }
+    
+    // Restore tile sizes
+    var layout = getSavedLayout();
+    if (layout && layout.statSizes) {
+      Object.keys(layout.statSizes).forEach(function(key) {
+        var card = document.querySelector('.stat-card[data-stat="' + key + '"]');
+        if (card) card.setAttribute('data-size', layout.statSizes[key]);
+      });
+    }
     }
 
     function toggleEditMode() {
@@ -2906,9 +3015,25 @@
       document.body.classList.toggle('edit-mode');
       document.getElementById('editOverlay').classList.toggle('active');
       if (entering) {
-        // Enable stat card dragging
+        // Enable stat card dragging + show resize buttons
         document.querySelectorAll('.stat-card[data-stat]').forEach(function(s) {
           s.setAttribute('draggable', 'true');
+          if (!s.querySelector('.stat-resize-btn')) {
+            var btn = document.createElement('button');
+            btn.className = 'stat-resize-btn';
+            btn.textContent = s.getAttribute('data-size') || '1x1';
+            btn.onclick = function(e) {
+              e.stopPropagation();
+              var sizes = ['1x1', '2x1', '2x2'];
+              var current = s.getAttribute('data-size') || '1x1';
+              var next = sizes[(sizes.indexOf(current) + 1) % sizes.length];
+              s.setAttribute('data-size', next);
+              btn.textContent = next;
+              if (typeof saveLayout === 'function') saveLayout();
+            };
+            s.style.position = 'relative';
+            s.appendChild(btn);
+          }
         });
         // Mobile: inject floating × on every section inside panels
         if (window.innerWidth <= 768) {
@@ -3306,7 +3431,7 @@
         headers['If-None-Match'] = etagCache[url].etag;
       }
       var fetchOpts = Object.assign({}, opts || {}, { headers: headers });
-      return fetch(url, fetchOpts).then(function(r) {
+      return fetch("/api" + url, fetchOpts).then(function(r) {
         if (r.status === 304 && etagCache[url]) {
           return etagCache[url].data; // Unchanged — use cached data (skip JSON parse + re-render)
         }
@@ -3390,17 +3515,49 @@
       }
       subEl.innerHTML = subHtml;
 
-      // Active expand: combined ongoing + upcoming + pending section
+      // Active expand: grouped by status with color-coded sections
       var activeEl = document.getElementById('expandActive');
       if (activeEl) {
-        var all = (data.ongoingDetails || []).concat(data.upcomingDetails || []);
-        var html = all.length > 0 ? all.map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
-        // Pending section (separated, rose-colored)
-        if (data.pendingDetails && data.pendingDetails.length > 0) {
-          html += '<div style="border-top:1px solid rgba(255,255,255,0.06);margin:8px 0;"></div>';
-          html += '<div style="font-size:10px;color:#f472b6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pending Rentals</div>';
-          html += data.pendingDetails.slice(0, 6).map(function(r) { return renderPendingRow(r); }).join('');
+        var heroSize = document.querySelector('.stat-card-hero') ? (document.querySelector('.stat-card-hero').getAttribute('data-size') || '2x1') : '2x1';
+        var ongoing = (data.ongoingDetails || []).slice().sort(function(a,b) {
+          return new Date(a.endDate || '2099-01-01') - new Date(b.endDate || '2099-01-01');
+        });
+        var upcoming = (data.upcomingDetails || []).slice().sort(function(a,b) {
+          return new Date(a.startDate || '2099-01-01') - new Date(b.startDate || '2099-01-01');
+        });
+        var pending = (data.pendingDetails || []).slice().sort(function(a,b) {
+          return new Date(a.startDate || '2099-01-01') - new Date(b.startDate || '2099-01-01');
+        });
+        var html = '';
+
+        if (ongoing.length === 0 && upcoming.length === 0 && pending.length === 0) {
+          html = '<div style="color:#6b6f82;font-size:11px;">No active rentals</div>';
         }
+
+        // Ongoing section (amber)
+        if (ongoing.length > 0) {
+          html += '<div style="border-left:3px solid #f59e0b;padding-left:8px;margin-bottom:10px;">';
+          html += '<div style="font-size:10px;color:#f59e0b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;font-weight:600;">Ongoing (' + ongoing.length + ')</div>';
+          html += ongoing.map(function(r) { return renderRentalRow(r, heroSize); }).join('');
+          html += '</div>';
+        }
+
+        // Upcoming section (purple)
+        if (upcoming.length > 0) {
+          html += '<div style="border-left:3px solid #a78bfa;padding-left:8px;margin-bottom:10px;">';
+          html += '<div style="font-size:10px;color:#a78bfa;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;font-weight:600;">Upcoming (' + upcoming.length + ')</div>';
+          html += upcoming.map(function(r) { return renderRentalRow(r, heroSize); }).join('');
+          html += '</div>';
+        }
+
+        // Pending section (rose)
+        if (pending.length > 0) {
+          html += '<div style="border-left:3px solid #f472b6;padding-left:8px;margin-bottom:4px;">';
+          html += '<div style="font-size:10px;color:#f472b6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;font-weight:600;">Pending (' + pending.length + ')</div>';
+          html += pending.slice(0, 6).map(function(r) { return renderPendingRow(r); }).join('');
+          html += '</div>';
+        }
+
         activeEl.innerHTML = html;
       }
 
@@ -3411,29 +3568,80 @@
       // Ongoing expand
       var ongoingEl = document.getElementById('expandOngoing');
       if (ongoingEl && data.ongoingDetails) {
-        ongoingEl.innerHTML = data.ongoingDetails.length > 0 ? data.ongoingDetails.map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">None right now</div>';
+        var onSize = document.querySelector('[data-stat="ongoing"]') ? (document.querySelector('[data-stat="ongoing"]').getAttribute('data-size') || '1x1') : '1x1';
+        ongoingEl.innerHTML = data.ongoingDetails.length > 0 ? data.ongoingDetails.map(function(r) { return renderRentalRow(r, onSize); }).join('') : '<div style="color:#6b6f82;font-size:11px;">None right now</div>';
       }
 
       // Upcoming expand
       var upcomingEl = document.getElementById('expandUpcoming');
       if (upcomingEl && data.upcomingDetails) {
-        upcomingEl.innerHTML = data.upcomingDetails.length > 0 ? data.upcomingDetails.map(renderRentalRow).join('') : '<div style="color:#6b6f82;font-size:11px;">None scheduled</div>';
+        var upSize = document.querySelector('[data-stat="upcoming"]') ? (document.querySelector('[data-stat="upcoming"]').getAttribute('data-size') || '1x1') : '1x1';
+        upcomingEl.innerHTML = data.upcomingDetails.length > 0 ? data.upcomingDetails.map(function(r) { return renderRentalRow(r, upSize); }).join('') : '<div style="color:#6b6f82;font-size:11px;">None scheduled</div>';
       }
 
       window._lastBookingStats = data;
+
+      // Detect pending→confirmed transition: if pending dropped or confirmed rose, refresh revenue NOW
+      var curPending = data.pendingRentals || 0;
+      var curConfirmed = (data.ongoingRentals || 0) + (data.upcomingRentals || 0);
+      if (_prevPendingCount !== null && (curPending < _prevPendingCount || curConfirmed > _prevConfirmedBookings)) {
+        // A rental just moved from pending to confirmed — refresh projection + lifetime chart immediately
+        var acct = getAccountQuery();
+        var acctAmp = getAccountParam();
+        fetchJSON('/revenue/projection' + acct).then(renderProjection).catch(function() {});
+        loadLifetimeChart();
+      }
+      _prevPendingCount = curPending;
+      _prevConfirmedBookings = curConfirmed;
+
       // Re-render Month Confirmed with booking stats ongoing/upcoming (matches Active Rentals)
       renderMonthConfirmed();
     }
 
-    function renderRentalRow(r) {
-      var photoHtml = r.photo
-        ? '<img class="stat-rental-photo" src="' + escapeHtml(r.photo) + '" onerror="this.style.display=\'none\'" />'
-        : '<div class="stat-rental-photo" style="display:flex;align-items:center;justify-content:center;font-size:14px;">📷</div>';
+    function renderRentalRow(r, tileSize) {
+      tileSize = tileSize || '1x1';
+      var isWide = tileSize === '2x1' || tileSize === '2x2';
+      var isBig = tileSize === '2x2';
+      // Multi-photo strip: show all product photos from all linked listings
+      var photoHtml = '';
+      var photos = r.photos || (r.photo ? [r.photo] : []);
+      var maxShow = isBig ? 6 : (isWide ? 5 : 4);
+      if (photos.length > 0) {
+        photoHtml = '<div class="stat-rental-photos">';
+        for (var i = 0; i < photos.length && i < maxShow; i++) {
+          photoHtml += '<img src="' + escapeHtml(photos[i]) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'" />';
+        }
+        if (photos.length > maxShow) {
+          photoHtml += '<span class="photos-more">+' + (photos.length - maxShow) + '</span>';
+        }
+        photoHtml += '</div>';
+      } else {
+        photoHtml = '<div class="stat-rental-photo" style="display:flex;align-items:center;justify-content:center;font-size:14px;">📷</div>';
+      }
       var itemsText = r.items && r.items.length > 0 ? r.items.join(', ') : '';
       var dateStr = '';
+      var endDateStr = '';
       if (r.startDate) {
         var d = new Date(r.startDate);
         dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      }
+      if (r.endDate) {
+        var ed = new Date(r.endDate);
+        endDateStr = ed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      }
+      // Duration in days
+      var durationHtml = '';
+      if (isWide && r.startDate && r.endDate) {
+        var ms = new Date(r.endDate) - new Date(r.startDate);
+        var days = Math.max(1, Math.round(ms / 86400000) + 1);
+        durationHtml = '<span style="color:#8b8fa3;font-size:10px;margin-left:4px;">(' + days + 'd)</span>';
+      }
+      // Date range for wide tiles
+      var dateHtml = '';
+      if (isWide && dateStr && endDateStr) {
+        dateHtml = dateStr + ' \u2013 ' + endDateStr;
+      } else if (dateStr) {
+        dateHtml = dateStr;
       }
       // Pickup/return times + day
       var timesHtml = '';
@@ -3443,21 +3651,44 @@
         timesHtml = '<div style="font-size:10px;color:#6ea8fe;margin-top:1px;">' +
           '\u2191' + pLabel + ' · \u2193' + rLabel + '</div>';
       }
+      // Account badge for wide tiles
+      var accountHtml = '';
+      if (isWide && r.account) {
+        var acColor = r.account === 'dbcinema' ? '#6ea8fe' : '#f59e0b';
+        accountHtml = '<span style="font-size:9px;color:' + acColor + ';background:' + acColor + '22;padding:1px 5px;border-radius:3px;margin-left:4px;">' + escapeHtml(r.account) + '</span>';
+      }
+      // Items display: wide tiles show full list, not truncated
+      var itemsHtml = '';
+      if (itemsText) {
+        if (isBig) {
+          itemsHtml = '<div class="stat-rental-items" style="white-space:normal;">' + escapeHtml(itemsText) + '</div>';
+        } else {
+          itemsHtml = '<div class="stat-rental-items">' + escapeHtml(itemsText) + '</div>';
+        }
+      }
       return '<div class="stat-rental-row">' +
         photoHtml +
         '<div class="stat-rental-info">' +
-          '<div class="stat-rental-name">' + escapeHtml(r.renter) + (dateStr ? ' · ' + dateStr : '') + '</div>' +
-          (itemsText ? '<div class="stat-rental-items">' + escapeHtml(itemsText) + '</div>' : '') +
+          '<div class="stat-rental-name">' + escapeHtml(r.renter) + (dateHtml ? ' · ' + dateHtml : '') + durationHtml + accountHtml + '</div>' +
+          itemsHtml +
           timesHtml +
         '</div>' +
         '<div class="stat-rental-amount">\u00A3' + r.earnings + '</div>' +
       '</div>';
     }
-
     function renderPendingRow(r) {
-      var photoHtml = r.photo
-        ? '<img class="stat-rental-photo" src="' + escapeHtml(r.photo) + '" onerror="this.style.display=\'none\'" />'
-        : '<div class="stat-rental-photo" style="display:flex;align-items:center;justify-content:center;font-size:14px;">📷</div>';
+      var photoHtml = '';
+      var photos = r.photos || (r.photo ? [r.photo] : []);
+      if (photos.length > 0) {
+        photoHtml = '<div class="stat-rental-photos">';
+        for (var i = 0; i < photos.length && i < 3; i++) {
+          photoHtml += '<img src="' + escapeHtml(photos[i]) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'" />';
+        }
+        if (photos.length > 3) photoHtml += '<span class="photos-more">+' + (photos.length - 3) + '</span>';
+        photoHtml += '</div>';
+      } else {
+        photoHtml = '<div class="stat-rental-photo" style="display:flex;align-items:center;justify-content:center;font-size:14px;">📷</div>';
+      }
       var itemsText = r.items && r.items.length > 0 ? r.items.join(', ') : '';
       var dateStr = '';
       if (r.startDate) {
@@ -3582,6 +3813,17 @@
 
       // Pull ongoing/upcoming from booking stats (same source as Active Rentals tile)
       var bs = window._lastBookingStats;
+
+      // Show pending earnings total in pink
+      var pendingAmount = 0;
+      if (bs && bs.pendingDetails) {
+        pendingAmount = bs.pendingDetails.reduce(function(s, d) { return s + (d.earnings || 0); }, 0);
+      }
+      if (pendingAmount > 0) {
+        confirmedEl.innerHTML = '\u00A3' + Math.round(currentEarnings).toLocaleString() +
+          ' <span style="color:#f472b6;font-size:0.65em;font-weight:500;">+\u00A3' + Math.round(pendingAmount).toLocaleString() + ' pending</span>';
+      }
+
       var bd = data.breakdown;
       var activeCount = bs ? (bs.ongoingRentals || 0) : (bd ? bd.ongoing : 0);
       var upcomingCount = bs ? (bs.upcomingRentals || 0) : (bd ? bd.upcoming : 0);
@@ -3612,6 +3854,10 @@
             '</div>'
           : '';
       }
+    
+      // Sync lifetime revenue chart when month confirmed changes
+      if (typeof window._lifetimeDebounce !== 'undefined') clearTimeout(window._lifetimeDebounce);
+      window._lifetimeDebounce = setTimeout(function() { if (typeof loadLifetimeChart === 'function') loadLifetimeChart(); }, 2000);
     }
 
     function renderScanner(data) {
@@ -3716,7 +3962,7 @@
         html += '</div>';
       }
 
-      // --- Metrics ---
+      // --- Metrics with stage-to-stage conversion ---
       var total = 0;
       for (var k in data) total += data[k] || 0;
       var inq = data.inquiry || 0;
@@ -3729,25 +3975,46 @@
       var dead = data.dead || 0;
 
       var converted = confirmed + completed;
-      var activePipeline = interested + readyToBook + booked + pending; // all active conversations in progress
-      var resolved = converted + dead; // conversations that reached a terminal state
+      var resolved = converted + dead;
       var convRate = total > 0 ? ((converted / total) * 100).toFixed(1) : '0.0';
-      var progressRate = total > 0 ? (((total - inq - dead) / total) * 100).toFixed(0) : '0'; // % that progressed past inquiry
-      var closeRate = resolved > 0 ? ((converted / resolved) * 100).toFixed(1) : '0.0'; // of resolved, how many converted
+      var closeRate = resolved > 0 ? ((converted / resolved) * 100).toFixed(1) : '0.0';
       var dropOff = total > 0 ? ((dead / total) * 100).toFixed(0) : '0';
+      var activePipeline = total - converted - dead;
+
+      // Stage-to-stage conversion rates
+      var stages = [
+        { from: 'Inquiry', count: inq, next: interested + readyToBook + booked + pending + confirmed + completed },
+        { from: 'Interested', count: interested, next: readyToBook + booked + pending + confirmed + completed },
+        { from: 'Ready', count: readyToBook, next: booked + pending + confirmed + completed },
+        { from: 'Booked', count: booked + pending, next: confirmed + completed },
+        { from: 'Confirmed', count: confirmed, next: completed },
+      ];
 
       html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);">';
       // Row 1: Conversion rate (hero metric)
       html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">';
-      html += '<span style="color:#b0b3c0;font-size:12px;font-weight:600;">Conversion rate</span>';
+      html += '<span style="color:#b0b3c0;font-size:12px;font-weight:600;">Overall conversion</span>';
       html += '<span style="color:#22c55e;font-weight:700;font-size:18px;">' + convRate + '%</span>';
+      html += '</div>';
+      // Stage-to-stage conversion arrows
+      html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+      for (var si = 0; si < stages.length - 1; si++) {
+        var s = stages[si];
+        var rate = s.count > 0 ? Math.round((s.next / (s.count + s.next)) * 100) : 0;
+        var rateColor = rate >= 60 ? '#22c55e' : rate >= 30 ? '#f59e0b' : '#ef4444';
+        html += '<div style="background:rgba(15,18,26,0.4);border-radius:6px;padding:3px 6px;font-size:10px;display:flex;align-items:center;gap:3px;">';
+        html += '<span style="color:#8b8fa3;">' + s.from + '</span>';
+        html += '<span style="color:#555;">\u2192</span>';
+        html += '<span style="color:' + rateColor + ';font-weight:700;">' + rate + '%</span>';
+        html += '</div>';
+      }
       html += '</div>';
       // Row 2: Metric grid
       html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">';
-      // Progress rate (% that moved past inquiry)
+      // Close rate (of resolved, how many converted)
       html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
-      html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">' + progressRate + '%</div>';
-      html += '<div style="font-size:9px;color:#6b6f82;">progress</div>';
+      html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">' + closeRate + '%</div>';
+      html += '<div style="font-size:9px;color:#6b6f82;">close rate</div>';
       html += '</div>';
       // Close rate (of resolved conversations, % that converted)
       html += '<div style="background:rgba(15,18,26,0.4);border-radius:8px;padding:6px 8px;text-align:center;">';
@@ -4484,7 +4751,7 @@
         if (productPhotos.length > 1) {
           html += '<span class="cal-extra-photos">';
           for (var j = 1; j < productPhotos.length && j < 4; j++) {
-            html += '<img src="' + escapeHtml(productPhotos[j]) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">';
+            html += '<img src="' + escapeHtml(productPhotos[j]) + '" alt="" loading="lazy" onerror="this.style.display=&quot;none&quot;">';
           }
           if (productPhotos.length > 4) html += '<span style="color:#6b6f80;font-size:9px;">+' + (productPhotos.length - 4) + '</span>';
           html += '</span>';
@@ -4645,7 +4912,7 @@
     var calProgressTimer = null;
     function startCalProgressUpdater() {
       if (calProgressTimer) clearInterval(calProgressTimer);
-      calProgressTimer = setInterval(updateCalProgress, 60000); // every 60s
+      calProgressTimer = setInterval(updateCalProgress, 300000); // every 5min
     }
     function updateCalProgress() {
       var wraps = document.querySelectorAll('.cal-progress-wrap');
@@ -4886,6 +5153,21 @@
       // Booked = confirmed booking revenue for next month only
       var bookedData = data.months.map(function(d) { return d.bookedRevenue || 0; });
 
+      // Pending revenue (yellow with white diagonal caution-tape stripes)
+      var pendingData = data.months.map(function(d) { return d.pendingRevenue || 0; });
+      var _patternCanvas = document.createElement('canvas');
+      _patternCanvas.width = 14; _patternCanvas.height = 14;
+      var _pctx = _patternCanvas.getContext('2d');
+      _pctx.fillStyle = 'rgba(234, 179, 8, 0.5)';
+      _pctx.fillRect(0, 0, 14, 14);
+      _pctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+      _pctx.lineWidth = 3;
+      _pctx.beginPath();
+      _pctx.moveTo(-3, 14); _pctx.lineTo(14, -3);
+      _pctx.moveTo(-3, 28); _pctx.lineTo(28, -3);
+      _pctx.stroke();
+      var pendingPattern = ctx.createPattern(_patternCanvas, 'repeat');
+
       // Build target lookup: month index → target value
       var targetByIndex = {};
       if (data.targets) {
@@ -5041,6 +5323,17 @@
               borderRadius: 3,
               stack: 'revenue',
               yAxisID: 'y1',
+            },
+            {
+              label: 'Pending',
+              data: pendingData,
+              type: 'bar',
+              backgroundColor: pendingPattern,
+              borderColor: '#eab308',
+              borderWidth: 1,
+              borderRadius: 3,
+              stack: 'revenue',
+              yAxisID: 'y1',
             }
           ]
         },
@@ -5113,6 +5406,10 @@
                   if (context.dataset.label === 'Booked') {
                     if (!context.parsed.y) return null;
                     return 'Booked: \u00A3' + context.parsed.y.toLocaleString();
+                  }
+                  if (context.dataset.label === 'Pending') {
+                    if (!context.parsed.y) return null;
+                    return 'Pending: \u00A3' + context.parsed.y.toLocaleString() + ' (unconfirmed)';
                   }
                   if (context.parsed.y == null) return null;
                   return context.dataset.label + ': \u00A3' + context.parsed.y.toLocaleString();
@@ -5274,16 +5571,138 @@
       var period = document.getElementById('lostRevenuePeriod').value || '3m';
       var acctAmp = getAccountParam();
       Promise.allSettled([
-        fetchJSON('/denied-revenue/summary?period=month' + acctAmp).then(renderDeniedStat),
-        fetchJSON('/missed-revenue/summary?period=month' + acctAmp).then(renderMissedStat),
-        fetchJSON('/denied-revenue/summary?period=' + period + acctAmp).then(renderDeniedItems),
-        fetchJSON('/timeout-revenue/summary?period=' + period + acctAmp).then(renderTimeoutItems),
-        fetchJSON('/lost-revenue/items?period=' + period + acctAmp).then(renderLostRevenueItems),
-        fetchJSON('/lost-revenue/unmatched?period=' + period + acctAmp).then(renderUnmatched),
+        fetchJSON('/lost-revenue/combined?period=' + period + acctAmp).then(function(d) {
+          renderDeniedItems(d.denied);
+          renderTimeoutItems(d.timeout);
+          renderLostRevenueItems(d.items);
+          renderUnmatched(d.unmatched);
+          if (d.denied) renderDeniedStat(d.denied);
+          if (d.missed) renderMissedStat(d.missed);
+        }),
       ]);
     }
 
-    function renderDeniedStat(data) {
+    // === BUSINESS INTELLIGENCE ===
+    function loadBI() {
+      var period = document.getElementById('biPeriod')?.value || '6m';
+      var acctAmp = getAccountParam();
+      fetchJSON('/analytics/business-intelligence?period=' + period + acctAmp)
+        .then(renderBI)
+        .catch(function(e) {
+          document.getElementById('statBISummary').textContent = 'Error loading BI';
+          console.error('BI load error:', e);
+        });
+    }
+
+    function renderBI(data) {
+      if (!data || data.error) {
+        document.getElementById('statBISummary').textContent = data?.error || 'No data';
+        return;
+      }
+
+      // Summary line
+      var recs = data.purchaseRecommendations || {};
+      var buyCount = (recs.buyNow || []).length;
+      var expandCount = (recs.expandStock || []).length;
+      var convertCount = (recs.convertMarketing || []).length;
+      var totalActions = buyCount + expandCount + convertCount;
+
+      var deniedRev = data.denied?.totalRevenue || 0;
+      var missedRev = data.missed?.totalRevenue || 0;
+      var marketingRev = data.marketingDemand?.totalPotentialRevenue || 0;
+
+      var summaryEl = document.getElementById('statBISummary');
+      summaryEl.innerHTML = totalActions + ' recommendations';
+
+      var subEl = document.getElementById('statBISub');
+      subEl.innerHTML = [
+        deniedRev > 0 ? '<span style="color:#f59e0b">£' + deniedRev + ' denied</span>' : '',
+        missedRev > 0 ? '<span style="color:#ef4444">£' + missedRev + ' missed</span>' : '',
+        marketingRev > 0 ? '<span style="color:#a78bfa">£' + marketingRev + ' marketing</span>' : '',
+      ].filter(Boolean).join(' · ');
+
+      // Expand section
+      var exp = document.getElementById('expandBI');
+      var html = '';
+
+      // Purchase Recommendations
+      if (buyCount > 0) {
+        html += '<div class="bi-section"><div class="bi-section-title">Buy Now (not in stock, proven demand)</div>';
+        for (var i = 0; i < Math.min(buyCount, 8); i++) {
+          var b = recs.buyNow[i];
+          html += '<div class="bi-row"><span class="bi-item">' + b.item + '</span><span class="bi-value">£' + b.monthlyRevenuePotential + '/mo</span></div>';
+        }
+        html += '</div>';
+      }
+
+      if (expandCount > 0) {
+        html += '<div class="bi-section"><div class="bi-section-title">Expand Stock (frequently blocked)</div>';
+        for (var i = 0; i < Math.min(expandCount, 8); i++) {
+          var e = recs.expandStock[i];
+          html += '<div class="bi-row"><span class="bi-item">' + e.item + ' (stock: ' + e.currentStock + ')</span><span class="bi-value red">£' + e.blockedRevenue + ' lost</span></div>';
+        }
+        html += '</div>';
+      }
+
+      if (convertCount > 0) {
+        html += '<div class="bi-section"><div class="bi-section-title">Convert Marketing to Real Stock</div>';
+        for (var i = 0; i < Math.min(convertCount, 8); i++) {
+          var m = recs.convertMarketing[i];
+          var badge = m.score >= 90 ? 'strong' : m.score >= 60 ? 'moderate' : 'watch';
+          html += '<div class="bi-row"><span class="bi-item">' + m.item + ' <span class="bi-badge ' + badge + '">' + (badge === 'strong' ? 'STRONG BUY' : badge === 'moderate' ? 'MODERATE' : 'WATCH') + '</span></span><span class="bi-value purple">£' + m.monthlyPotential + '/mo</span></div>';
+        }
+        html += '</div>';
+      }
+
+      // Time Gap Analysis
+      var tg = data.timeGap;
+      if (tg) {
+        html += '<div class="bi-section"><div class="bi-section-title">Time Gap Analysis</div>';
+        html += '<div class="bi-row"><span class="bi-item">Opening hours revenue</span><span class="bi-value">£' + tg.openingHourRevenue + '</span></div>';
+        html += '<div class="bi-row"><span class="bi-item">Outside hours revenue</span><span class="bi-value amber">£' + tg.outsideHourRevenue + '</span></div>';
+        html += '<div class="bi-row"><span class="bi-item">Timed-out requests</span><span class="bi-value red">' + tg.timeoutCount + ' (£' + tg.timeoutRevenue + ')</span></div>';
+        html += '<div class="bi-row"><span class="bi-item">Peak demand</span><span class="bi-value">' + (tg.peakDemandHours || []).map(function(h) { return h + ':00'; }).join(', ') + '</span></div>';
+        if (tg.recommendation) html += '<div style="font-size:11px;color:#8b8fa3;margin-top:4px;font-style:italic;">' + tg.recommendation + '</div>';
+        html += '</div>';
+      }
+
+      // Substitutions
+      var subs = data.substitutions;
+      if (subs && subs.pairs && subs.pairs.length > 0) {
+        html += '<div class="bi-section"><div class="bi-section-title">Substitution Patterns</div>';
+        html += '<div style="font-size:11px;color:#8b8fa3;margin-bottom:4px;">Total substitution revenue: £' + subs.totalSubstitutedRevenue + '</div>';
+        for (var i = 0; i < Math.min(subs.pairs.length, 6); i++) {
+          var s = subs.pairs[i];
+          html += '<div class="bi-row"><span class="bi-item">' + s.requestedItem + ' → ' + s.actualItem + ' (' + s.count + 'x)</span><span class="bi-value">' + s.conversionRate + '</span></div>';
+        }
+        html += '</div>';
+      }
+
+      // Denied Revenue Items
+      if (data.denied && data.denied.topItems && data.denied.topItems.length > 0) {
+        html += '<div class="bi-section"><div class="bi-section-title">Denied Revenue (had stock, did not accept)</div>';
+        for (var i = 0; i < Math.min(data.denied.topItems.length, 6); i++) {
+          var d = data.denied.topItems[i];
+          html += '<div class="bi-row"><span class="bi-item">' + d.item + ' (' + d.count + 'x)</span><span class="bi-value amber">£' + d.revenue + '</span></div>';
+        }
+        html += '</div>';
+      }
+
+      // Investment Scorecard (top items by confidence)
+      if (data.investmentScorecard && data.investmentScorecard.length > 0) {
+        html += '<div class="bi-section"><div class="bi-section-title">Investment Scorecard</div>';
+        for (var i = 0; i < Math.min(data.investmentScorecard.length, 10); i++) {
+          var item = data.investmentScorecard[i];
+          var utilColor = item.utilization > 70 ? 'color:#22c55e' : item.utilization > 40 ? 'color:#f59e0b' : 'color:#8b8fa3';
+          html += '<div class="bi-row"><span class="bi-item">' + item.item + ' <span style="font-size:10px;' + utilColor + '">' + item.utilization + '% util</span></span><span class="bi-value">£' + item.actualRevenue + '</span></div>';
+        }
+        html += '</div>';
+      }
+
+      exp.innerHTML = html || '<div style="color:#8b8fa3;font-size:12px;">No data available for this period.</div>';
+    }
+
+        function renderDeniedStat(data) {
       var el = document.getElementById('statDeniedRevenue');
       var sub = document.getElementById('statDeniedRevenueSub');
       var exp = document.getElementById('expandDeniedRevenue');
@@ -5770,54 +6189,39 @@
         var soonestDate = new Date(soonest);
         var soonestStr = soonestDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
         if (statSub) statSub.textContent = data.length + ' item' + (data.length > 1 ? 's' : '') + ' fully booked \u00B7 next back ' + soonestStr;
+        var soonestTime = data.reduce(function(t, d) { return d.bookedUntil === soonest && d.returnTime ? d.returnTime : t; }, null);
+        if (soonestTime && statSub) statSub.textContent += ' at ' + soonestTime;
 
-        // Expand: list each item
-        if (statExp) {
-          statExp.innerHTML = data.map(function(item) {
-            var returnDate = new Date(item.bookedUntil);
-            var returnStr = returnDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-            var renters = item.currentRenters && item.currentRenters.length > 0
-              ? item.currentRenters.map(function(r) { return r.length > 18 ? r.substring(0, 18) + '\u2026' : r; }).map(escapeHtml).join(', ')
-              : '';
-            var imgHtml = item.imageUrl
-              ? '<img src="' + escapeHtml(item.imageUrl) + '" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0;border:1px solid #3d1f2a;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" /><div style="width:32px;height:32px;border-radius:6px;background:#1e1215;border:1px solid #3d1f2a;display:none;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">\u274C</div>'
-              : '<div style="width:32px;height:32px;border-radius:6px;background:#1e1215;border:1px solid #3d1f2a;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">\u274C</div>';
-            return '<div class="stat-rental-row">' +
-              imgHtml +
-              '<div class="stat-rental-info">' +
-                '<div class="stat-rental-name" style="color:#ef4444;">' + escapeHtml(item.item) + '</div>' +
-                '<div class="stat-rental-items">' + item.totalStock + ' unit' + (item.totalStock > 1 ? 's' : '') + ' out' + (renters ? ' \u00B7 ' + renters : '') + '</div>' +
-              '</div>' +
-              '<div style="font-size:11px;color:#f59e0b;flex-shrink:0;text-align:right;">Back ' + returnStr + '</div>' +
-            '</div>';
-          }).join('');
-        }
       }
 
-      // Also update the full panel section
+      // Update the full panel section — compact per-item tiles
       var section = document.getElementById('unavailableSection');
       var body = document.getElementById('unavailableBody');
       if (!data || data.length === 0) {
-        section.style.display = 'none';
-        return;
+        if (section) section.style.display = 'none';
+      } else {
+        if (section) section.style.display = '';
+        if (body) {
+          var html = '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+          data.forEach(function(item) {
+            var returnDate = new Date(item.bookedUntil);
+            var returnStr = returnDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+            var renters = item.currentRenters && item.currentRenters.length > 0
+              ? item.currentRenters.map(function(r) { return r.split(' ')[0]; }).join(', ')
+              : '';
+            html += '<div style="background:#1e1215;border:1px solid #3d1f2a;border-radius:6px;padding:5px 8px;display:flex;gap:6px;align-items:center;">';
+            if (item.imageUrl) {
+              html += '<img src="' + escapeHtml(item.imageUrl) + '" style="width:26px;height:26px;border-radius:4px;object-fit:cover;flex-shrink:0;" onerror="this.style.display=&quot;none&quot;" />';
+            }
+            html += '<div style="line-height:1.2;">';
+            html += '<div style="color:#ef4444;font-size:11px;font-weight:600;">' + escapeHtml(item.item) + '</div>';
+            html += '<div style="color:#6b6f82;font-size:9px;">' + escapeHtml(renters) + ' &middot; <span style="color:#f59e0b;">' + returnStr + '</span></div>';
+            html += '</div></div>';
+          });
+          html += '</div>';
+          body.innerHTML = html;
+        }
       }
-      section.style.display = '';
-      var html = '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
-      data.forEach(function(item) {
-        html += '<div style="background:#1e1215;border:1px solid #3d1f2a;border-radius:8px;padding:10px 14px;flex:1;min-width:200px;display:flex;gap:10px;align-items:center;">';
-        if (item.imageUrl) {
-          html += '<img src="' + escapeHtml(item.imageUrl) + '" style="width:44px;height:44px;border-radius:6px;object-fit:cover;flex-shrink:0;" onerror="this.style.display=\'none\'" />';
-        }
-        html += '<div>';
-        html += '<div style="color:#ef4444;font-weight:600;font-size:13px;">' + escapeHtml(item.item) + '</div>';
-        html += '<div style="color:#8b8fa3;font-size:11px;margin-top:2px;">All ' + item.totalStock + ' unit' + (item.totalStock > 1 ? 's' : '') + ' out until <span style="color:#f59e0b;">' + item.bookedUntil + '</span></div>';
-        if (item.currentRenters && item.currentRenters.length > 0) {
-          html += '<div style="color:#6b6f82;font-size:10px;margin-top:2px;">With: ' + item.currentRenters.map(escapeHtml).join(', ') + '</div>';
-        }
-        html += '</div></div>';
-      });
-      html += '</div>';
-      body.innerHTML = html;
     }
 
     // ---- AI Investment Insights (Budget-Tiered) ----
@@ -5896,12 +6300,15 @@
       var body = document.getElementById('insightsBody');
       btn.disabled = true;
       btn.textContent = 'Syncing...';
-      body.innerHTML = '<div style="color:#06b6d4;font-size:12px;">Scraping competitor data and generating insights... This may take 1-2 minutes.</div>';
+      body.innerHTML = '<div style="color:#06b6d4;font-size:12px;">Scraping competitor data and generating insights... This may take 1-2 minutes.</div>' +
+        '<div style="margin-top:8px;height:3px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;">' +
+        '<div style="height:100%;background:#06b6d4;width:0%;animation:syncProgress 90s ease-out forwards;"></div></div>';
 
       fetchJSON('/competitor-intel/sync').then(function(data) {
         btn.disabled = false;
         btn.textContent = 'Sync';
         loadInsights(currentInsightsBudget);
+        document.getElementById('insightsLastSync').textContent = 'Synced ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
       }).catch(function(err) {
         btn.disabled = false;
         btn.textContent = 'Sync';
@@ -5976,6 +6383,7 @@
         btn.disabled = false;
         btn.textContent = 'Scan Now';
         renderMarketReleases(data);
+        document.getElementById('marketLastScan').textContent = 'Scanned ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
       }).catch(function(err) {
         btn.disabled = false;
         btn.textContent = 'Scan Now';
@@ -6086,7 +6494,7 @@
       if (btn) { btn.style.display = 'none'; }
       if (noFollowBtn) { noFollowBtn.style.display = 'none'; }
 
-      fetch('/rentals/' + rental.id + '/return', {
+      fetch('/api/rentals/' + rental.id + '/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
@@ -6185,7 +6593,7 @@
       var text = body.outcome === 'good' ? 'Leaving review and preparing thank-you...' : 'Processing...';
       document.getElementById('returnProcessingText').textContent = text;
 
-      fetch('/rentals/' + currentReturnRental.id + '/return', {
+      fetch('/api/rentals/' + currentReturnRental.id + '/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -6277,7 +6685,7 @@
         noFollowBtn.disabled = true;
         noFollowBtn.style.opacity = '0.4';
 
-        fetch('/rentals/' + celebrationRentalId + '/return', {
+        fetch('/api/rentals/' + celebrationRentalId + '/return', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ outcome: 'good', skipFollowUp: false, dashboardApproved: true }),
@@ -6311,7 +6719,7 @@
         btn.disabled = true;
         btn.style.opacity = '0.6';
 
-        fetch('/rentals/' + celebrationRentalId + '/send-thankyou', { method: 'POST' })
+        fetch('/api/rentals/' + celebrationRentalId + '/send-thankyou', { method: 'POST' })
           .then(function(res) { return res.json(); })
           .then(function(result) {
             if (result.success) {
@@ -6340,7 +6748,7 @@
       btn.disabled = true;
       btn.style.opacity = '0.4';
 
-      fetch('/rentals/' + celebrationRentalId + '/return', {
+      fetch('/api/rentals/' + celebrationRentalId + '/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
@@ -6375,7 +6783,7 @@
       // auto-process with "no follow up" so the return isn't silently dropped
       if (celebrationPendingReturn && celebrationRentalId) {
         celebrationPendingReturn = false;
-        fetch('/rentals/' + celebrationRentalId + '/return', {
+        fetch('/api/rentals/' + celebrationRentalId + '/return', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ outcome: 'good', skipFollowUp: true, dashboardApproved: true }),
@@ -6509,7 +6917,33 @@
       el.innerHTML = html;
     }
 
+    // Populate insurance item dropdown from live inventory
+    var _insuranceItemsLoaded = false;
+    function populateInsuranceItems() {
+      if (_insuranceItemsLoaded) return;
+      fetchJSON('/inventory/items').then(function(data) {
+        var sel = document.getElementById('insuranceItem');
+        sel.innerHTML = '<option value="" disabled selected>Select item...</option>';
+        if (!data || !data.categories) return;
+        data.categories.forEach(function(cat) {
+          var grp = document.createElement('optgroup');
+          grp.label = cat.name;
+          cat.items.forEach(function(item) {
+            var opt = document.createElement('option');
+            opt.textContent = item;
+            grp.appendChild(opt);
+          });
+          sel.appendChild(grp);
+        });
+        _insuranceItemsLoaded = true;
+      }).catch(function() {
+        var sel = document.getElementById('insuranceItem');
+        sel.innerHTML = '<option value="" disabled selected>Failed to load items</option>';
+      });
+    }
+
     function openInsuranceModal() {
+      populateInsuranceItems();
       insuranceIsNew = true;
       document.getElementById('insuranceItem').selectedIndex = 0;
       document.getElementById('insuranceDamage').value = '';
@@ -6538,7 +6972,7 @@
 
     function deleteInsuranceClaim(id) {
       if (!confirm('Delete this claim?')) return;
-      fetch('/insurance/claims/' + id, { method: 'DELETE' })
+      fetch('/api/insurance/claims/' + id, { method: 'DELETE' })
         .then(function(r) { return r.json(); })
         .then(function() { loadInsuranceClaims(); loadLifetimeChart(); })
         .catch(function(e) { alert('Failed to delete: ' + e.message); });
@@ -6554,7 +6988,7 @@
       btn.disabled = true; btn.textContent = 'Saving...';
       var payload = { amount: amount, item: item, damage: damage, is_new: insuranceIsNew };
       if (notes) payload.notes = notes;
-      fetch('/insurance/claims', {
+      fetch('/api/insurance/claims', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -6692,8 +7126,8 @@
 
         // Bundle column: color-coded bundleRate%
         var bundleColor = r.bundleRate >= 70 ? '#22c55e' : r.bundleRate >= 30 ? '#f59e0b' : '#555';
-        var bundleTooltip = '';
-        if (r.bundleRate > 0) {
+        var bundleTooltip = r._cachedTooltip || '';
+        if (!r._cachedTooltip && r.bundleRate > 0) {
           var parts = [r.bundleRate + '% bundled'];
           if (r.topPartners && r.topPartners.length > 0) {
             parts.push('Top: ' + r.topPartners.map(function(p) { return p.item + ' (' + p.count + 'x)'; }).join(', '));
@@ -6701,6 +7135,7 @@
           parts.push('Dependency: ' + r.bundleDependencyScore + '%');
           if (r.bundlePenalty > 0) parts.push('Penalty: -' + r.bundlePenalty + 'pts');
           bundleTooltip = parts.join(' | ');
+          r._cachedTooltip = bundleTooltip;
         }
         var bundleHtml = r.bundleRate > 0
           ? '<span style="color:' + bundleColor + ';cursor:help;" title="' + escapeHtml(bundleTooltip) + '">' + r.bundleRate + '%' + (r.bundlePenalty > 0 ? ' <span style="font-size:9px;color:#6ea8fe;">-' + r.bundlePenalty + '</span>' : '') + '</span>'
@@ -6757,7 +7192,7 @@
       try { var parsed = JSON.parse(input); } catch(e) { result.innerHTML = '<span style="color:#ef4444;">Invalid JSON</span>'; return; }
       btn.textContent = 'Importing...';
       btn.disabled = true;
-      fetch('/recommender/ebay-prices', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(parsed) })
+      fetch('/api/recommender/ebay-prices', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(parsed) })
         .then(function(r) { return r.json(); })
         .then(function(data) {
           btn.textContent = 'Import';
@@ -6866,183 +7301,259 @@
       });
     }
 
-    // ---- Marketing Listings ----
-    var marketingListingsCache = [];
-    var marketingFilter = 'all';
+    // ---- Port to Leo ----
+    var portGapsCache = [];
 
-    function loadMarketingListings() {
-      return fetchJSON('/marketing-listings').then(function(data) {
-        marketingListingsCache = data || [];
-        renderMarketingListings();
-      }).catch(function() {
-        marketingListingsCache = [];
-        renderMarketingListings();
-      });
+    function loadPortGaps() {
+      var btn = document.getElementById('portRefreshBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+      fetchJSON('/port-to-leo/gaps')
+        .then(function(data) {
+          portGapsCache = data.gaps || [];
+          if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
+          renderPortGaps();
+        })
+        .catch(function(err) {
+          portGapsCache = [];
+          if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
+          renderPortGaps();
+        });
     }
 
-    function renderMarketingListings() {
-      var body = document.getElementById('marketingListingsBody');
-      var count = document.getElementById('marketingListingsCount');
-      var listings = marketingListingsCache;
+    function renderPortGaps() {
+      var body = document.getElementById('portGapsBody');
+      var count = document.getElementById('portGapCount');
+      if (!body) return;
+      var gaps = portGapsCache;
 
-      // Apply filter
-      if (marketingFilter === 'pending') listings = listings.filter(function(l) { return l.image_status === 'pending'; });
-      else if (marketingFilter === 'ready') listings = listings.filter(function(l) { return l.image_status === 'ready'; });
-      else if (marketingFilter === 'uploaded') listings = listings.filter(function(l) { return l.upload_status === 'uploaded'; });
+      count.textContent = gaps.length ? '(' + gaps.length + ' missing)' : '';
 
-      count.textContent = marketingListingsCache.length ? '(' + marketingListingsCache.length + ')' : '';
-
-      if (listings.length === 0) {
-        body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">No marketing listings yet. Use "Discover" to find candidates from competitor reviews, or type an item name above to create one.</div>';
+      if (gaps.length === 0) {
+        body.innerHTML = '<div style="color:#8b8fa3;font-size:12px;">All DB Cinema listings are already on Leo. Nothing to port.</div>';
         return;
       }
 
-      var html = '<div class="mktg-grid">';
-      for (var i = 0; i < listings.length; i++) {
-        var l = listings[i];
-        var imgHtml = '';
-        if (l.composed_image) {
-          var imgUrl = '/listing-images/' + l.id + '/composed/listing.jpg';
-          imgHtml = '<div class="mktg-card-img"><img src="' + imgUrl + '" alt="" onerror="this.parentNode.innerHTML=\'&#128247;\'"></div>';
-        } else {
-          imgHtml = '<div class="mktg-card-img" style="color:#8b8fa3;font-size:24px;">&#128247;</div>';
-        }
+      var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">';
+      for (var i = 0; i < gaps.length; i++) {
+        var g = gaps[i];
+        var imgUrl = g.image || '';
+        var imgHtml = imgUrl
+          ? '<img src="' + imgUrl + '" style="width:100%;height:150px;object-fit:cover;border-radius:6px 6px 0 0;" loading="lazy" onerror="this.style.display=&quot;none&quot;">'
+          : '<div style="width:100%;height:150px;background:rgba(255,255,255,0.05);border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center;color:#8b8fa3;font-size:24px;">&#128247;</div>';
 
-        var acctBadge = l.account === 'leo'
-          ? '<span class="mktg-badge leo">Leo</span>'
-          : '<span class="mktg-badge db">DB Cinema</span>';
+        var title = (g.title || '').length > 50 ? g.title.substring(0, 50) + '...' : (g.title || '');
+        var price = g.price ? '\u00a3' + g.price : '';
 
-        var statusBadge = '';
-        if (l.upload_status === 'uploaded') statusBadge = '<span class="mktg-badge uploaded">Uploaded</span>';
-        else if (l.image_status === 'ready') statusBadge = '<span class="mktg-badge ready">Ready</span>';
-        else statusBadge = '<span class="mktg-badge pending">' + escapeHtml(l.image_status || 'pending') + '</span>';
-
-        var revHtml = '';
-        if (l.est_monthly_rev_low && l.est_monthly_rev_high) {
-          revHtml = '<div class="mktg-card-rev">Est. revenue: £' + Math.round(l.est_monthly_rev_low) + '-£' + Math.round(l.est_monthly_rev_high) + '/mo</div>';
-        }
-
-        var priceHtml = '';
-        if (l.price_1day) priceHtml = '<span>£' + l.price_1day + '/day</span>';
-
-        html += '<div class="mktg-card" onclick="showMarketingDetail(\'' + l.id + '\')">'
+        html += '<div class="port-card" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;cursor:pointer;" onclick="showPortDetail(' + i + ')">'
           + imgHtml
-          + '<div class="mktg-card-body">'
-          + '<div class="mktg-card-title">' + escapeHtml(l.title || 'Untitled') + '</div>'
-          + '<div class="mktg-card-meta">' + acctBadge + statusBadge + priceHtml + '</div>'
-          + revHtml
-          + '</div>'
-          + '<div class="mktg-card-actions">'
-          + (l.image_status === 'pending' ? '<button style="background:#3b82f6;color:#fff;" onclick="event.stopPropagation();generateMarketingImage(\'' + l.id + '\')">Generate Image</button>' : '')
-          + (l.image_status === 'ready' && !l.approved_by ? '<button style="background:#22c55e;color:#fff;" onclick="event.stopPropagation();approveMarketingListing(\'' + l.id + '\')">Approve</button>' : '')
-          + '<button style="background:rgba(239,68,68,0.2);color:#ef4444;" onclick="event.stopPropagation();deleteMarketingListing(\'' + l.id + '\')">Delete</button>'
-          + '</div>'
-          + '</div>';
+          + '<div style="padding:8px 10px;">'
+          + '<div style="font-size:12px;color:#e2e4ec;font-weight:600;line-height:1.3;margin-bottom:4px;">' + escapeHtml(title) + '</div>'
+          + '<div style="font-size:11px;color:#8b8fa3;">' + price + '</div>'
+          + '</div></div>';
       }
       html += '</div>';
       body.innerHTML = html;
     }
 
-    function filterMarketingListings(filter, btn) {
-      marketingFilter = filter;
-      document.querySelectorAll('#marketingFilterBar .mktg-filter-btn').forEach(function(b) { b.classList.remove('active'); });
-      btn.classList.add('active');
-      renderMarketingListings();
-    }
+    function showPortDetail(idx) {
+      var g = portGapsCache[idx];
+      if (!g) return;
 
-    function createMarketingListing() {
-      var input = document.getElementById('marketingSearchInput');
-      var itemName = (input.value || '').trim();
-      if (!itemName) return;
-      input.value = '';
-      fetchJSON('/marketing-listings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemName: itemName }) })
-        .then(function() { loadMarketingListings(); })
-        .catch(function(err) { alert('Failed: ' + (err.message || 'unknown error')); });
-    }
-
-    function discoverMarketingListings() {
-      var btn = document.getElementById('marketingDiscoverBtn');
-      btn.disabled = true;
-      btn.textContent = 'Discovering...';
-      fetchJSON('/marketing-listings/discover').then(function(data) {
-        btn.disabled = false;
-        btn.textContent = 'Discover';
-        loadMarketingListings();
-        if (data && data.newListings) alert('Discovered ' + data.newListings + ' new listing candidates!');
-      }).catch(function() {
-        btn.disabled = false;
-        btn.textContent = 'Discover';
-      });
-    }
-
-    function generateMarketingImage(id) {
-      var body = document.getElementById('marketingListingsBody');
-      body.innerHTML = '<div style="color:#8b5cf6;font-size:12px;">Generating image... This may take a minute (finding images, removing backgrounds, composing).</div>';
-      fetchJSON('/marketing-listings/' + id + '/generate-image', { method: 'POST' })
-        .then(function(result) {
-          loadMarketingListings();
-          if (result && !result.success) alert('Image generation issue: ' + (result.error || 'unknown'));
-        })
-        .catch(function(err) { loadMarketingListings(); alert('Failed: ' + (err.message || 'unknown error')); });
-    }
-
-    function approveMarketingListing(id) {
-      fetchJSON('/marketing-listings/' + id + '/approve', { method: 'POST' })
-        .then(function() { loadMarketingListings(); })
-        .catch(function(err) { alert('Approve failed: ' + (err.message || 'unknown')); });
-    }
-
-    function deleteMarketingListing(id) {
-      if (!confirm('Delete this marketing listing?')) return;
-      fetchJSON('/marketing-listings/' + id, { method: 'DELETE' })
-        .then(function() { loadMarketingListings(); })
-        .catch(function(err) { alert('Delete failed: ' + (err.message || 'unknown')); });
-    }
-
-    function showMarketingDetail(id) {
-      var listing = marketingListingsCache.find(function(l) { return l.id === id; });
-      if (!listing) return;
-
-      var items = listing.items || [];
-      var itemsHtml = items.map(function(it) { return '<li>' + escapeHtml(it.item || it) + (it.qty > 1 ? ' x' + it.qty : '') + '</li>'; }).join('');
-
-      var imgHtml = '';
-      if (listing.composed_image) {
-        var imgUrl = '/listing-images/' + listing.id + '/composed/listing.jpg';
-        imgHtml = '<img src="' + imgUrl + '" style="width:100%;border-radius:8px;margin-bottom:12px;" onerror="this.style.display=\'none\'">';
-      }
+      var imgUrl = g.image || '';
+      var imgHtml = imgUrl
+        ? '<img src="' + imgUrl + '" style="width:100%;border-radius:8px;margin-bottom:12px;" onerror="this.style.display=&quot;none&quot;">'
+        : '';
 
       var overlay = document.createElement('div');
-      overlay.className = 'mktg-detail-overlay open';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;';
       overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
-      overlay.innerHTML = '<div class="mktg-detail-panel">'
-        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-        + '<h3 style="margin:0;font-size:15px;">' + escapeHtml(listing.title || 'Untitled') + '</h3>'
-        + '<button onclick="this.closest(\'.mktg-detail-overlay\').remove()" style="background:none;border:none;color:#8b8fa3;font-size:20px;cursor:pointer;">&times;</button>'
+
+      var panel = document.createElement('div');
+      panel.style.cssText = 'background:#1a1b2e;border-radius:12px;padding:20px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;color:#e2e4ec;';
+
+      panel.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        + '<h3 style="margin:0;font-size:15px;">' + escapeHtml(g.title || '') + '</h3>'
+        + '<button onclick="this.closest(&quot;div[style*=fixed]&quot;).remove()" style="background:none;border:none;color:#8b8fa3;font-size:20px;cursor:pointer;">&times;</button>'
         + '</div>'
         + imgHtml
-        + '<div style="display:flex;gap:8px;margin-bottom:12px;">'
-        + (listing.account === 'leo' ? '<span class="mktg-badge leo">Leo Adams</span>' : '<span class="mktg-badge db">DB Cinema</span>')
-        + '<span class="mktg-badge ' + (listing.image_status === 'ready' ? 'ready' : 'pending') + '">' + escapeHtml(listing.image_status || 'pending') + '</span>'
-        + '<span class="mktg-badge ' + (listing.upload_status === 'uploaded' ? 'uploaded' : 'pending') + '">' + escapeHtml(listing.upload_status || 'draft') + '</span>'
+        + '<div style="font-size:12px;color:#8b8fa3;margin-bottom:12px;">'
+        + (g.price ? '\u00a3' + g.price + '/day &bull; ' : '')
+        + 'DB Cinema listing'
         + '</div>'
-        + (listing.seo_tag ? '<div style="font-size:11px;color:#8b8fa3;margin-bottom:8px;">SEO: ' + escapeHtml(listing.seo_tag) + '</div>' : '')
-        + '<div style="font-size:12px;color:#c9cbda;margin-bottom:10px;"><strong>Items:</strong><ul style="margin:4px 0;padding-left:20px;">' + itemsHtml + '</ul></div>'
-        + (listing.price_1day ? '<div style="font-size:12px;color:#c9cbda;margin-bottom:10px;"><strong>Pricing:</strong> £' + listing.price_1day + '/day' + (listing.price_3day ? ' | £' + listing.price_3day + '/3 days' : '') + (listing.price_7day ? ' | £' + listing.price_7day + '/7 days' : '') + '</div>' : '')
-        + (listing.est_monthly_rev_low ? '<div style="font-size:12px;color:#22c55e;margin-bottom:10px;"><strong>Est. Revenue:</strong> £' + Math.round(listing.est_monthly_rev_low) + '-£' + Math.round(listing.est_monthly_rev_high) + '/mo</div>' : '')
-        + (listing.estimation_basis ? '<div style="font-size:11px;color:#8b8fa3;margin-bottom:10px;">' + escapeHtml(listing.estimation_basis) + '</div>' : '')
-        + (listing.source_competitor ? '<div style="font-size:11px;color:#8b8fa3;margin-bottom:10px;">Source: ' + escapeHtml(listing.source || '') + ' — ' + escapeHtml(listing.source_competitor) + '</div>' : '')
-        + (listing.description ? '<div style="font-size:12px;color:#c9cbda;margin-bottom:10px;max-height:120px;overflow-y:auto;">' + escapeHtml(listing.description) + '</div>' : '')
-        + '</div>';
+        + '<div id="portActionArea">'
+        + '<button id="portBtn_' + idx + '" onclick="executePort(' + idx + ')" style="width:100%;padding:10px;background:#ff9800;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">Port to Leo</button>'
+        + '</div>'
+        + '<div id="portResult_' + idx + '" style="margin-top:10px;font-size:12px;"></div>';
+
+      overlay.appendChild(panel);
       document.body.appendChild(overlay);
     }
 
-    // Enter key on search input
-    document.getElementById('marketingSearchInput').addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') createMarketingListing();
-    });
+    function executePort(idx) {
+      var g = portGapsCache[idx];
+      if (!g) return;
+      var btn = document.getElementById('portBtn_' + idx);
+      var result = document.getElementById('portResult_' + idx);
+      if (btn) { btn.disabled = true; btn.textContent = 'Porting...'; }
+      if (result) result.innerHTML = '<span style="color:#ff9800;">Downloading image, removing background, re-composing with Leo gradient, generating description...</span>';
 
-    // ---- Tiered refresh system ----
+      fetchJSON('/port-to-leo/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: g.slug, title: g.title, image: g.image, price: g.price })
+      })
+        .then(function(data) {
+          if (data.success) {
+            var html = '<span style="color:#4CAF50;">Ported successfully! Listing created for Leo.</span>';
+            if (data.listingId) html += '<br><img src="/listing-images/' + data.listingId + '/composed/listing.jpg?t=' + Date.now() + '" style="width:100%;border-radius:8px;margin-top:8px;" onerror="this.style.display=\'none\'">';
+            if (data.listingId) {
+              var lid = data.listingId;
+              var inputStyle = 'width:100%;padding:4px 6px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e0e0e0;font-size:11px;font-family:inherit;box-sizing:border-box;';
+              var labelStyle = 'font-size:10px;color:#a78bfa;margin-bottom:2px;font-weight:600;display:block;';
+              var rowStyle = 'margin-bottom:6px;';
+              html += '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid rgba(255,255,255,0.1);">';
+              html += '<div style="font-size:11px;color:#a78bfa;font-weight:700;margin-bottom:8px;">Edit before upload</div>';
+              // Title
+              html += '<div style="' + rowStyle + '"><label style="' + labelStyle + '">Title</label>';
+              html += '<input type="text" id="port-edit-title" value="' + escapeHtml(data.title || '') + '" style="' + inputStyle + '"></div>';
+              // Description
+              html += '<div style="' + rowStyle + '"><label style="' + labelStyle + '">Description</label>';
+              html += '<textarea id="port-edit-description" rows="4" style="' + inputStyle + 'resize:vertical;">' + escapeHtml(data.description || '') + '</textarea></div>';
+              // Category
+              html += '<div style="' + rowStyle + '"><label style="' + labelStyle + '">Category</label>';
+              html += '<select id="port-edit-category" style="' + inputStyle + '">';
+              var cats = [
+                "Film & Photography > Cameras > Digital Cinema Cameras",
+                "Film & Photography > Cameras > DSLR Cameras",
+                "Film & Photography > Cameras > Mirrorless Camera",
+                "Film & Photography > Camera lenses > Mirrorless Lenses",
+                "Film & Photography > Camera lenses > Cinema Prime Lenses",
+                "Film & Photography > Stand & Rigs",
+                "Film & Photography > Flash and lights",
+                "Film & Photography > Monitor",
+                "Film & Photography > Camera Package Deals",
+                "Film & Photography > Streaming",
+                "Film & Photography > Streaming",
+                "Electronics > Drone > DJI Mavic",
+                "Film & Photography > Streaming"
+              ];
+              for (var ci = 0; ci < cats.length; ci++) {
+                html += '<option value="' + cats[ci] + '">' + cats[ci] + '</option>';
+              }
+              html += '</select></div>';
+              // Prices row
+              html += '<div style="display:flex;gap:6px;' + rowStyle + '">';
+              html += '<div style="flex:1;"><label style="' + labelStyle + '">Daily &pound;</label>';
+              html += '<input type="number" id="port-edit-dailyPrice" value="' + (data.dailyPrice || '') + '" style="' + inputStyle + '"></div>';
+              html += '<div style="flex:1;"><label style="' + labelStyle + '">3-day &pound;</label>';
+              html += '<input type="number" id="port-edit-price3days" value="' + (data.price3days || '') + '" style="' + inputStyle + '"></div>';
+              html += '<div style="flex:1;"><label style="' + labelStyle + '">7-day &pound;</label>';
+              html += '<input type="number" id="port-edit-price7days" value="' + (data.price7days || '') + '" style="' + inputStyle + '"></div>';
+              html += '</div>';
+              // Estimated value
+              html += '<div style="' + rowStyle + '"><label style="' + labelStyle + '">Retail Value &pound;</label>';
+              html += '<input type="number" id="port-edit-estimatedValue" value="' + (data.estimatedValue || '') + '" style="' + inputStyle + '"></div>';
+              // Upload button
+              html += '<div style="margin-top:8px;"><button onclick="uploadToHygglo(\'' + lid + '\', this)" style="width:100%;padding:8px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600;">Upload to Hygglo</button></div>';
+              html += '</div>';
+            }
+            if (result) result.innerHTML = html;
+            if (btn) { btn.textContent = 'Done'; btn.style.background = '#4CAF50'; }
+            // Remove from gaps cache
+            portGapsCache.splice(idx, 1);
+          } else {
+            if (result) result.innerHTML = '<span style="color:#f44336;">Failed: ' + (data.error || 'unknown') + '</span>';
+            if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+          }
+        })
+        .catch(function(err) {
+          if (result) result.innerHTML = '<span style="color:#f44336;">Error: ' + (err.message || err) + '</span>';
+          if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+        });
+    }
+
+
+    function uploadToHygglo(listingId, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Filling Hygglo form...';
+      btn.style.background = '#818cf8';
+
+      // Read edited values from the edit panel
+      var editTitle = document.getElementById('port-edit-title');
+      var editDesc = document.getElementById('port-edit-description');
+      var editCat = document.getElementById('port-edit-category');
+      var editDaily = document.getElementById('port-edit-dailyPrice');
+      var edit3d = document.getElementById('port-edit-price3days');
+      var edit7d = document.getElementById('port-edit-price7days');
+      var editRetail = document.getElementById('port-edit-estimatedValue');
+
+      var uploadBody = { listingId: listingId, autoPublish: true };
+      if (editTitle && editTitle.value) uploadBody.title = editTitle.value;
+      if (editDesc && editDesc.value) uploadBody.description = editDesc.value;
+      if (editCat && editCat.value) uploadBody.categoryPath = editCat.value.split(' > ');
+      if (editDaily && editDaily.value) uploadBody.dailyPrice = Number(editDaily.value);
+      if (edit3d && edit3d.value) uploadBody.price3days = Number(edit3d.value);
+      if (edit7d && edit7d.value) uploadBody.price7days = Number(edit7d.value);
+      if (editRetail && editRetail.value) uploadBody.estimatedValue = Number(editRetail.value);
+
+      fetchJSON('/port-to-leo/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(uploadBody)
+      })
+        .then(function(data) {
+          if (data.success) {
+            if (data.error && data.error.includes('REVIEW_REQUIRED')) {
+              btn.textContent = 'Form filled - review on VPS';
+              btn.style.background = '#f59e0b';
+              btn.disabled = true;
+              if (data.screenshotPath) {
+                var imgLink = document.createElement('a');
+                imgLink.href = '/port-to-leo/screenshot?path=' + encodeURIComponent(data.screenshotPath);
+                imgLink.target = '_blank';
+                imgLink.style.cssText = 'display:block;margin-top:6px;';
+                var img = document.createElement('img');
+                img.src = '/port-to-leo/screenshot?path=' + encodeURIComponent(data.screenshotPath);
+                img.style.cssText = 'max-width:100%;border-radius:6px;border:1px solid rgba(255,255,255,0.1);';
+                imgLink.appendChild(img);
+                btn.parentElement.appendChild(imgLink);
+              }
+            } else {
+              btn.textContent = 'Published on Hygglo!';
+              btn.style.background = '#4CAF50';
+              if (data.hyggloListingUrl) {
+                var link = document.createElement('a');
+                link.href = data.hyggloListingUrl;
+                link.target = '_blank';
+                link.textContent = 'View on Hygglo \u2192';
+                link.style.cssText = 'display:block;font-size:12px;color:#22c55e;margin-top:6px;font-weight:600;';
+                btn.parentElement.appendChild(link);
+              }
+              if (data.screenshotPath) {
+                var pubImg = document.createElement('img');
+                pubImg.src = '/port-to-leo/screenshot?path=' + encodeURIComponent(data.screenshotPath);
+                pubImg.style.cssText = 'max-width:100%;border-radius:6px;border:1px solid rgba(34,197,94,0.3);margin-top:6px;';
+                btn.parentElement.appendChild(pubImg);
+              }
+            }
+          } else {
+            btn.textContent = 'Upload failed';
+            btn.style.background = '#f44336';
+            btn.disabled = false;
+            var err = document.createElement('div');
+            err.style.cssText = 'font-size:10px;color:#f44336;margin-top:4px;';
+            err.textContent = data.error || 'Unknown error';
+            btn.parentElement.appendChild(err);
+          }
+        })
+        .catch(function(err) {
+          btn.textContent = 'Error';
+          btn.style.background = '#f44336';
+          btn.disabled = false;
+        });
+    }
+
+        // ---- Tiered refresh system ----
     // Fast tier: 30s — health, stats, scanner, calendar (6 calls)
     // Medium tier: 5min — revenue, funnel, lost revenue, charts (11 calls)
     // On-demand tier: page load + manual refresh button only (15 calls)
@@ -7073,14 +7584,17 @@
       Promise.allSettled([
         fetchJSON('/revenue/projection' + acct).then(renderProjection).catch(function() {}),
         fetchJSON('/bookings/by-stage' + acct).then(renderFunnel).catch(function(e) { renderError(document.getElementById('funnelBody'), e.message); }),
-        fetchJSON('/denied-revenue/summary?period=month' + acctAmp).then(renderDeniedStat).catch(function() {}),
-        fetchJSON('/missed-revenue/summary?period=month' + acctAmp).then(renderMissedStat).catch(function() {}),
+        loadBI(),
+
         // Combined lost-revenue: 1 call replaces 4 separate calls
         fetchJSON('/lost-revenue/combined?period=' + lostPeriod + acctAmp).then(function(d) {
           renderDeniedItems(d.denied);
           renderTimeoutItems(d.timeout);
           renderLostRevenueItems(d.items);
           renderUnmatched(d.unmatched);
+          // Also render stat cards from combined data (avoids duplicate API calls)
+          if (d.denied) renderDeniedStat(d.denied);
+          if (d.missed) renderMissedStat(d.missed);
         }).catch(function() {}),
         fetchJSON('/revenue/ai-boost?period=' + (document.getElementById('aiBoostPeriod').value || 'month') + acctAmp).then(renderAiBoost).catch(function() {}),
         fetchJSON('/revenue/monthly?months=12' + acctAmp).then(renderBestWorst).catch(function() {}),
@@ -7104,7 +7618,7 @@
         loadPriceReco(),
         loadInventoryWorth(),
         loadInsuranceClaims(),
-        loadMarketingListings(),
+        loadPortGaps(),
         loadLifetimeChart(),
       ]);
     }
@@ -7132,8 +7646,8 @@
       // Start tiered timers
       clearInterval(refreshFastTimer);
       clearInterval(refreshMediumTimer);
-      refreshFastTimer = setInterval(refreshFast, 30000);    // 30s
-      refreshMediumTimer = setInterval(refreshMedium, 300000); // 5min
+      refreshFastTimer = setInterval(refreshFast, 180000);   // 10min
+      refreshMediumTimer = setInterval(refreshMedium, 900000); // 60min
     }
 
     // Poll activity more frequently (every 10s)
@@ -7141,7 +7655,7 @@
       var acctAmp = getAccountParam();
       fetchJSON('/activity/recent?limit=50' + acctAmp).then(renderActivity).catch(function() {});
     }
-    activityPollTimer = setInterval(pollActivity, 10000); // 10s — paused when tab hidden
+    activityPollTimer = setInterval(pollActivity, 120000); // 2min — paused when tab hidden
 
     // Initial load
     refreshAll();
@@ -7161,10 +7675,27 @@
     function appendChatMessage(text, role) {
       var div = document.createElement('div');
       div.className = 'chat-msg ' + role;
-      div.textContent = text;
+      if (role === 'assistant') {
+        // Render with basic formatting: bold, newlines, bullet points
+        var html = text
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/`(.*?)`/g, '<code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px;">$1</code>')
+          .replace(/^- (.*)/gm, '<span style="padding-left:8px;">• $1</span>')
+          .replace(/^(\d+)\. (.*)/gm, '<span style="padding-left:8px;">$1. $2</span>')
+          .replace(/\n/g, '<br>');
+        div.innerHTML = html;
+      } else {
+        div.textContent = text;
+      }
       chatMessages.appendChild(div);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return div;
+    }
+
+    function quickChat(text) {
+      chatInput.value = text;
+      sendChatMessage();
     }
 
     function sendChatMessage() {
@@ -7202,157 +7733,6 @@
         chatInput.focus();
       });
     }
-
-    // ---- Claude Code Terminal (xterm.js + WebSocket + PTY) ----
-    var codeTerm = null;
-    var codeTermWs = null;
-    var codeTermFit = null;
-    var codeTermReconnectTimer = null;
-
-    function resetCodeTerminal() {
-      if (codeTermWs && codeTermWs.readyState === 1) {
-        codeTermWs.send(JSON.stringify({ type: 'kill' }));
-      }
-      // PTY exit event will trigger auto-restart via the 'exit' handler
-    }
-
-    function initCodeTerminal() {
-      var container = document.getElementById('codeTerminal');
-      var overlay = document.getElementById('codeTermOverlay');
-      if (!container || typeof Terminal === 'undefined') return;
-
-      // Clear reconnect timer
-      if (codeTermReconnectTimer) { clearTimeout(codeTermReconnectTimer); codeTermReconnectTimer = null; }
-
-      // Clean up old
-      if (codeTermWs) try { codeTermWs.close(); } catch(e) {}
-      if (codeTerm) try { codeTerm.dispose(); } catch(e) {}
-
-      // Create xterm instance
-      codeTerm = new Terminal({
-        cursorBlink: true,
-        fontSize: 13,
-        fontFamily: "'SF Mono', Monaco, 'Cascadia Code', 'Courier New', monospace",
-        theme: {
-          background: '#0f0f23',
-          foreground: '#e2e8f0',
-          cursor: '#22c55e',
-          cursorAccent: '#0f0f23',
-          selectionBackground: 'rgba(34,197,94,0.3)',
-          black: '#1a1a2e',
-          red: '#f43f5e',
-          green: '#10b981',
-          yellow: '#f59e0b',
-          blue: '#6366f1',
-          magenta: '#a855f7',
-          cyan: '#06b6d4',
-          white: '#e2e8f0',
-          brightBlack: '#64748b',
-          brightRed: '#fb7185',
-          brightGreen: '#34d399',
-          brightYellow: '#fbbf24',
-          brightBlue: '#818cf8',
-          brightMagenta: '#c084fc',
-          brightCyan: '#22d3ee',
-          brightWhite: '#f8fafc',
-        },
-        scrollback: 5000,
-        convertEol: true,
-      });
-
-      var FA = (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) ? FitAddon.FitAddon : (typeof FitAddon !== 'undefined' ? FitAddon : null);
-      if (!FA) { console.error('FitAddon not loaded'); return; }
-      codeTermFit = new FA();
-      codeTerm.loadAddon(codeTermFit);
-
-      // Clear container and open terminal
-      var termBox = container.querySelector('.xterm') ? container : container;
-      // Remove any old xterm elements but keep overlay
-      var kids = container.children;
-      for (var i = kids.length - 1; i >= 0; i--) {
-        if (kids[i].id !== 'codeTermOverlay') container.removeChild(kids[i]);
-      }
-      codeTerm.open(container);
-      try { codeTermFit.fit(); } catch(e) {}
-
-      overlay.textContent = 'Connecting...';
-      overlay.style.display = 'flex';
-
-      // WebSocket connect
-      var proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      codeTermWs = new WebSocket(proto + '://' + location.host + '/ws/terminal');
-
-      codeTermWs.onopen = function() {
-        overlay.style.display = 'none';
-        try { codeTermFit.fit(); } catch(e) {}
-      };
-
-      codeTermWs.onmessage = function(e) {
-        try {
-          var msg = JSON.parse(e.data);
-          if (msg.type === 'output') {
-            codeTerm.write(msg.data);
-          } else if (msg.type === 'scrollback') {
-            codeTerm.write(msg.data);
-          } else if (msg.type === 'spawned') {
-            overlay.style.display = 'none';
-            try { codeTermFit.fit(); } catch(ex) {}
-          } else if (msg.type === 'reattached') {
-            overlay.style.display = 'none';
-            try { codeTermFit.fit(); } catch(ex) {}
-            codeTerm.write('\r\n\x1b[36m--- Reconnected to existing session ---\x1b[0m\r\n');
-          } else if (msg.type === 'exit') {
-            codeTerm.write('\r\n\x1b[33m--- Session ended. Restarting... ---\x1b[0m\r\n');
-            codeTermReconnectTimer = setTimeout(initCodeTerminal, 3000);
-          }
-        } catch(err) {
-          codeTerm.write(e.data);
-        }
-      };
-
-      codeTermWs.onclose = function() {
-        overlay.textContent = 'Disconnected. Reconnecting...';
-        overlay.style.display = 'flex';
-        codeTermReconnectTimer = setTimeout(initCodeTerminal, 2000);
-      };
-
-      codeTermWs.onerror = function() {
-        // onclose will fire after this
-      };
-
-      // Forward keystrokes to server
-      codeTerm.onData(function(data) {
-        if (codeTermWs && codeTermWs.readyState === 1) {
-          codeTermWs.send(JSON.stringify({ type: 'input', data: data }));
-        }
-      });
-
-      // Forward resize
-      codeTerm.onResize(function(size) {
-        if (codeTermWs && codeTermWs.readyState === 1) {
-          codeTermWs.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
-        }
-      });
-    }
-
-    // Initialize terminal when DOM is ready
-    if (document.getElementById('codeTerminal')) {
-      // Wait for xterm.js scripts to load
-      setTimeout(initCodeTerminal, 500);
-    }
-
-    // Re-fit on window resize
-    window.addEventListener('resize', function() {
-      if (codeTermFit) try { codeTermFit.fit(); } catch(e) {}
-    });
-
-    // Reconnect on visibility change (mobile wake-up recovery)
-    document.addEventListener('visibilitychange', function() {
-      if (!document.hidden && codeTermWs && codeTermWs.readyState !== 1) {
-        // Tab became visible and WebSocket is not open — reconnect
-        initCodeTerminal();
-      }
-    });
 
     // ---- Cron Settings ----
     function openCronSettings() {
@@ -7627,9 +8007,19 @@
         // Label cell
         var photos = r.photos || [];
         var productPhotos = photos.filter(function(p) { return p.indexOf('/products/') >= 0; });
-        var photoHtml = productPhotos.length > 0
-          ? '<img class="rcal-photo" src="' + escapeHtml(productPhotos[0]) + '" alt="" loading="lazy" onerror="this.outerHTML=\'<div class=rcal-photo-placeholder>📷</div>\'">'
-          : '<div class="rcal-photo-placeholder">📷</div>';
+var photoHtml = '';
+if (productPhotos.length > 1) {
+  photoHtml = '<div class="rcal-photos-strip">';
+  for (var pi = 0; pi < productPhotos.length && pi < 4; pi++) {
+    photoHtml += '<img class="rcal-photo" src="' + escapeHtml(productPhotos[pi]) + '" alt="" loading="lazy" onerror="this.style.display=&quot;none&quot;">';
+  }
+  if (productPhotos.length > 4) photoHtml += '<span style="font-size:9px;color:#6b6f82;">+' + (productPhotos.length - 4) + '</span>';
+  photoHtml += '</div>';
+} else if (productPhotos.length === 1) {
+  photoHtml = '<img class="rcal-photo" src="' + escapeHtml(productPhotos[0]) + '" alt="" loading="lazy" onerror="this.outerHTML=\'<div class=rcal-photo-placeholder>\ud83d\udcf7</div>\'">';
+} else {
+  photoHtml = '<div class="rcal-photo-placeholder">\ud83d\udcf7</div>';
+}
 
         var notes = r.notes || {};
         var allItems = (r.items && r.items.length > 0) ? r.items : (notes.allItems || []);
@@ -7780,8 +8170,6 @@
     });
 
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 
 </body>
 </html>

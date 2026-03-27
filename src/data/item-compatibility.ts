@@ -42,8 +42,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
       'Sony GM 90mm f2.8', 'Sony 28-70mm', 'Sony 11mm f2.8 fisheye',
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [
       'DJI RS3 Pro gimbal', 'Atomos Ninja V', 'Hollyland Mars 4K transmitter',
       'Hollyland Pyro S transmitter', 'Hollyland 7-inch monitor', 'ND filter',
@@ -53,6 +52,27 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     ],
     included_with_rental: ['3x NP-FZ100 batteries', '128GB SD card'],
     notes: 'Uses NP-FZ100 battery (NOT NP-FW50). Sony E-mount full frame. CFexpress Type A primary slot, SD secondary. V-mount battery rental includes all necessary plates, adapters, and cables for external power. NPF 970 batteries power the Atomos Ninja V monitor, not the FX3 directly.',
+  },
+  {
+    item_name: 'Sony A7 V',
+    battery_type: 'Sony NP-FZ100',
+    compatible_batteries: ['Sony NPF 970 batteries 2x sets'],
+    card_type: 'SD UHS-I/II dual slot',
+    compatible_cards: ['256GB card'],
+    lens_mount: 'Sony E-mount (full frame)',
+    compatible_lenses: [
+      'Sony GM 24-70mm f2.8', 'Sony GM 16-35mm f2.8', 'Sony GM 70-200mm f2.8',
+      'Sony GM 90mm f2.8', 'Sony 28-70mm', 'Sony 11mm f2.8 fisheye',
+      'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
+      'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
+          ],
+    compatible_accessories: [
+      'DJI RS3 Pro gimbal', 'ND filter', 'Cinebloom filter mist',
+      'Tilta shoulder rig', 'Small rig tripod', 'Sirui tripod',
+      'PL to Sony E mount',
+    ],
+    included_with_rental: ['3x NP-FZ100 batteries', '128GB SD card'],
+    notes: 'Uses NP-FZ100 battery (same as FX3). Sony E-mount full frame. Dual SD card slots. Good hybrid photo/video body.',
   },
   {
     item_name: 'Sony A7 III',
@@ -66,8 +86,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
       'Sony GM 90mm f2.8', 'Sony 28-70mm', 'Sony 11mm f2.8 fisheye',
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [
       'DJI RS3 Pro gimbal', 'ND filter', 'Cinebloom filter mist',
       'Tilta shoulder rig', 'Small rig tripod', 'Sirui tripod',
@@ -88,8 +107,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
       'Sony GM 90mm f2.8', 'Sony 28-70mm', 'Sony 11mm f2.8 fisheye',
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [
       'DJI RS3 Pro gimbal', 'ND filter', 'Cinebloom filter mist',
       'Small rig tripod', 'Sirui tripod', 'PL to Sony E mount',
@@ -198,9 +216,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: ['256GB card'],
     lens_mount: 'Fixed triple-camera system',
     compatible_lenses: [],
-    compatible_accessories: ['ND filter'], // Mavic ND filter set
-    included_with_rental: ['3x flight batteries', 'charging hub', 'RC Pro controller', 'ND filters'],
-    notes: 'Fly More Combo included. Proprietary DJI batteries. Fixed cameras (Hasselblad + 70mm + 166mm). 46min max flight time per battery.',
+    compatible_accessories: [], // Mavic has its own ND kit — NOT our 82mm variable ND
+    included_with_rental: ['3x flight batteries', 'charging hub', 'RC Pro controller', 'DJI ND filter set (8/16/32/64)'],
+    notes: 'Fly More Combo included. Proprietary DJI batteries. Fixed cameras (Hasselblad + 70mm + 166mm). 46min max flight time per battery. ND FILTERS: The Mavic comes with its own DJI ND filter kit (ND8/16/32/64) designed for its lens — this is NOT our 82mm variable ND filter, which is for interchangeable lenses only.',
   },
   {
     item_name: 'DJI Mini 4 Pro',
@@ -328,7 +346,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: ['ND filter', 'Cinebloom filter mist', 'Tilta Nucleus Nano 2 follow focus', 'Sirui tripod', 'Small rig tripod'],
     included_with_rental: ['Front/rear lens caps', 'Lens case', 'Tripod collar'],
-    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II. 77mm filter thread. Telephoto zoom for events, weddings, sports, interviews. Heavy lens — tripod with tripod collar recommended. Manageable on gimbal with lighter bodies.',
+    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II. 77mm filter thread — our 82mm ND and Cinebloom fit with the included 77-82mm step-up ring. Telephoto zoom for events, weddings, sports, interviews. Heavy lens — tripod with tripod collar recommended. Manageable on gimbal with lighter bodies.',
   },
   {
     item_name: 'Sony GM 90mm f2.8',
@@ -338,9 +356,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: [],
     lens_mount: 'Sony E-mount (full frame)',
     compatible_lenses: [],
-    compatible_accessories: ['ND filter', 'Cinebloom filter mist', 'Tilta Nucleus Nano 2 follow focus', 'DJI RS3 Pro gimbal'],
+    compatible_accessories: ['Tilta Nucleus Nano 2 follow focus', 'DJI RS3 Pro gimbal'],
     included_with_rental: ['Front/rear lens caps', 'Lens pouch'],
-    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II. 67mm filter thread. Macro 1:1 + beautiful portrait bokeh. Lightweight, works great on gimbal.',
+    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II. 67mm filter thread — our 82mm ND and Cinebloom filters do NOT fit (no step-up ring available for this size gap). Macro 1:1 + beautiful portrait bokeh. Lightweight, works great on gimbal.',
   },
   {
     item_name: 'Sony 28-70mm',
@@ -350,9 +368,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: [],
     lens_mount: 'Sony E-mount (full frame)',
     compatible_lenses: [],
-    compatible_accessories: ['ND filter', 'Cinebloom filter mist', 'DJI RS3 Pro gimbal'],
+    compatible_accessories: ['DJI RS3 Pro gimbal'],
     included_with_rental: ['Front/rear lens caps'],
-    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II. 55mm filter thread. Compact budget zoom, lightweight and versatile. Great for gimbal work.',
+    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II. 55mm filter thread — our 82mm ND and Cinebloom filters do NOT fit (no step-up ring available for this size gap). Compact budget zoom, lightweight and versatile. Great for gimbal work.',
   },
   {
     item_name: 'Sony 11mm f2.8 fisheye',
@@ -364,7 +382,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: ['DJI RS3 Pro gimbal'],
     included_with_rental: ['Front/rear lens caps'],
-    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II (with crop). Ultra-wide fisheye, bulbous front element — standard screw-in filters NOT compatible. Great for skateboard, POV, creative angles.',
+    notes: 'Fits all our Sony cameras: FX3, A7 III, A7 II (with crop). Ultra-wide fisheye, bulbous front element — NO filter thread, our ND and Cinebloom filters cannot be used. Great for skateboard, POV, creative angles.',
   },
 
   // ──────────────────────────────────────────
@@ -392,7 +410,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: ['ND filter', 'Cinebloom filter mist', 'Tilta Nucleus Nano 2 follow focus', 'DJI RS3 Pro gimbal'],
     included_with_rental: ['Front/rear lens caps', 'Lens pouch'],
-    notes: 'Fits BMPCC 6K Pro (native EF mount). Fits BMPCC 6K Full Frame via L-mount to EF adapter. Does NOT fit Sony cameras. 77mm filter thread. Versatile all-purpose zoom, good for run-and-gun.',
+    notes: 'Fits BMPCC 6K Pro (native EF mount). Fits BMPCC 6K Full Frame via L-mount to EF adapter. Does NOT fit Sony cameras. 77mm filter thread — our 82mm ND and Cinebloom fit with the included 77-82mm step-up ring. Versatile all-purpose zoom, good for run-and-gun.',
   },
 
   // ──────────────────────────────────────────
@@ -406,9 +424,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: [],
     lens_mount: 'PL mount (requires adapter for all our cameras)',
     compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus'],
+    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus', 'ND filter', 'Cinebloom filter mist'],
     included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter: PL to Sony E for FX3/A7, PL to EF for BMPCC 6K Pro, PL to L for BMPCC 6K FF. 1.5x squeeze factor. Dual-focus anamorphic. Cinematic oval bokeh and flares.',
+    notes: 'PL mount anamorphic — requires PL adapter: PL to Sony E for FX3/A7, PL to EF for BMPCC 6K Pro, PL to L for BMPCC 6K FF. 1.5x squeeze factor. 77mm front thread — our 82mm ND and Cinebloom fit with the included 77-82mm step-up ring. Dual-focus anamorphic. Cinematic oval bokeh and flares.',
   },
   {
     item_name: 'Anamorphic Blazar Remus 45mm',
@@ -418,9 +436,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: [],
     lens_mount: 'PL mount (requires adapter for all our cameras)',
     compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus'],
+    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus', 'ND filter', 'Cinebloom filter mist'],
     included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter. 1.5x squeeze. Versatile mid-range focal length for anamorphic narratives, music videos.',
+    notes: 'PL mount anamorphic — requires PL adapter. 1.5x squeeze. 77mm front thread — our 82mm ND and Cinebloom fit with the included 77-82mm step-up ring. Versatile mid-range focal length for anamorphic narratives, music videos.',
   },
   {
     item_name: 'Anamorphic Blazar Remus 65mm',
@@ -430,9 +448,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: [],
     lens_mount: 'PL mount (requires adapter for all our cameras)',
     compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus'],
+    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus', 'ND filter', 'Cinebloom filter mist'],
     included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter. 1.5x squeeze. Medium telephoto for close-ups and dialogue scenes.',
+    notes: 'PL mount anamorphic — requires PL adapter. 1.5x squeeze. 77mm front thread — our 82mm ND and Cinebloom fit with the included 77-82mm step-up ring. Medium telephoto for close-ups and dialogue scenes.',
   },
   {
     item_name: 'Anamorphic Blazar Remus 100mm',
@@ -442,45 +460,9 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_cards: [],
     lens_mount: 'PL mount (requires adapter for all our cameras)',
     compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus', 'Sirui tripod'],
+    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus', 'Sirui tripod', 'ND filter', 'Cinebloom filter mist'],
     included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter. 1.5x squeeze. Longest in the Remus set — great for compressed anamorphic portraits. Tripod recommended.',
-  },
-  {
-    item_name: 'Anamorphic Great Joy lens 35mm',
-    battery_type: 'N/A (lens)',
-    compatible_batteries: [],
-    card_type: 'N/A',
-    compatible_cards: [],
-    lens_mount: 'PL mount (requires adapter for all our cameras)',
-    compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus'],
-    included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter. 2x squeeze (full anamorphic). Great Joy set delivers classic anamorphic look with more dramatic flares than Blazar Remus.',
-  },
-  {
-    item_name: 'Anamorphic Great Joy lens 50mm',
-    battery_type: 'N/A (lens)',
-    compatible_batteries: [],
-    card_type: 'N/A',
-    compatible_cards: [],
-    lens_mount: 'PL mount (requires adapter for all our cameras)',
-    compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus'],
-    included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter. 2x squeeze (full anamorphic). Mid-range standard focal length.',
-  },
-  {
-    item_name: 'Anamorphic Great Joy lens 85mm',
-    battery_type: 'N/A (lens)',
-    compatible_batteries: [],
-    card_type: 'N/A',
-    compatible_cards: [],
-    lens_mount: 'PL mount (requires adapter for all our cameras)',
-    compatible_lenses: [],
-    compatible_accessories: ['PL to Sony E mount', 'PL to EF mount', 'PL to L mount', 'PL to RF mount', 'Tilta Nucleus Nano 2 follow focus', 'Sirui tripod'],
-    included_with_rental: ['Front/rear lens caps', 'Lens case'],
-    notes: 'PL mount anamorphic — requires PL adapter. 2x squeeze (full anamorphic). Portrait/close-up focal length. Heavier — tripod support helps.',
+    notes: 'PL mount anamorphic — requires PL adapter. 1.5x squeeze. 77mm front thread — our 82mm ND and Cinebloom fit with the included 77-82mm step-up ring. Longest in the Remus set — great for compressed anamorphic portraits. Tripod recommended.',
   },
 
   // ──────────────────────────────────────────
@@ -816,7 +798,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: [],
     included_with_rental: ['ND filter', 'Filter case'],
-    notes: 'Variable ND filter — reduces light for open-aperture shooting in bright conditions. Essential for cinematic shallow depth of field outdoors. Check filter thread size matches your lens (77mm or 82mm for most GM lenses). Step-up rings available if needed.',
+    notes: 'Variable ND filter (82mm thread). DIRECT FIT: Sony GM 24-70mm f2.8, Sony GM 16-35mm f2.8, Canon EF 16-35mm f2.8 (all 82mm). WITH 77-82mm STEP-UP RING (included): Canon EF 24-105mm f4, Sony GM 70-200mm f2.8, all Blazar Remus anamorphics (77mm front). DOES NOT FIT: Sony GM 90mm f2.8 (67mm), Sony 28-70mm (55mm), Sony 11mm fisheye (no thread/bulbous front). Essential for cinematic shallow depth of field outdoors.',
   },
   {
     item_name: 'Cinebloom filter mist',
@@ -828,7 +810,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [],
     compatible_accessories: [],
     included_with_rental: ['Cinebloom filter', 'Filter case'],
-    notes: 'Moment CineBloom diffusion/mist filter. Softens highlights, creates halation and a dreamy cinematic look. Screw-on — check filter thread matches your lens. Popular for music videos, weddings, and narrative work.',
+    notes: 'Moment CineBloom diffusion/mist filter (82mm thread). DIRECT FIT: Sony GM 24-70mm f2.8, Sony GM 16-35mm f2.8, Canon EF 16-35mm f2.8 (all 82mm). WITH 77-82mm STEP-UP RING (included): Canon EF 24-105mm f4, Sony GM 70-200mm f2.8, all Blazar Remus anamorphics (77mm front). DOES NOT FIT: Sony GM 90mm f2.8 (67mm), Sony 28-70mm (55mm), Sony 11mm fisheye (no thread/bulbous front). Softens highlights, creates halation and a dreamy cinematic look. Popular for music videos, weddings, and narrative work.',
   },
 
   // ──────────────────────────────────────────
@@ -936,11 +918,10 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [],
     included_with_rental: ['PL to E adapter'],
-    notes: 'Allows PL mount lenses (all our anamorphic lenses) to be used on Sony cameras: FX3, A7 III, A7 II. Required for using Blazar Remus or Great Joy anamorphic lenses on Sony bodies.',
+    notes: 'Allows PL mount lenses (all our anamorphic lenses) to be used on Sony cameras: FX3, A7 III, A7 II. Required for using Blazar Remus anamorphic lenses on Sony bodies.',
   },
   {
     item_name: 'PL to EF mount',
@@ -952,8 +933,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [],
     included_with_rental: ['PL to EF adapter'],
     notes: 'Allows PL mount lenses to be used on BMPCC 6K Pro (Canon EF mount). Required for anamorphic lenses on BMPCC 6K Pro.',
@@ -968,8 +948,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [],
     included_with_rental: ['PL to L adapter'],
     notes: 'Allows PL mount lenses to be used on BMPCC 6K Full Frame (L-mount). Required for anamorphic lenses on BMPCC 6K FF.',
@@ -984,8 +963,7 @@ export const ITEM_COMPATIBILITY: CompatibilityEntry[] = [
     compatible_lenses: [
       'Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm',
       'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm',
-      'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm',
-    ],
+          ],
     compatible_accessories: [],
     included_with_rental: ['PL to RF adapter'],
     notes: 'PL to Canon RF mount adapter. We do NOT stock Canon RF cameras, but this adapter is available for renters who bring their own RF body and want to use our PL anamorphic lenses.',

@@ -1,0 +1,190 @@
+{
+  "cookies": [
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4yAQQAQjaim0n/4eVVcNZ3oCnd54GGwE+a7biVw8AzNCR59m4=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v1/account",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_GRECAPTCHA",
+      "value": "09AKhCRwiK4Y9oKpd_y_EAvPNE4dxJAn_hMp35yuXiFE0qa0AXnP-gNgs3k6CTJ0904jfd9FHUEB26YNA-9PsO1R0",
+      "domain": "www.google.com",
+      "path": "/recaptcha",
+      "expires": 1788367823.044119,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4yAQQAQjaim0n/4eVVcNZ3oCnd54GGwE+a7biVw8AzNCR59m4=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v4",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4yAQQAQjaim0n/4eVVcNZ3oCnd54GGwE+a7biVw8AzNCR59m4=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v2",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "heroku-session-affinity",
+      "value": "Q38DAQERU3RpY2t5U2Vzc2lvbkRhdGEB/4AAAQMBBUFwcElEAQwAAQhEeW5vTmFtZQEMAAEJRHlub0NvdW50AQQAAAAM/4ACBXdlYi4xAQQAHl3qmRvqT/N4AwHTj4XxPF5Mo9/LJkUeeeA06gF/8jk=",
+      "domain": "api.hygglo.com",
+      "path": "/api/v1",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.39687779.1772815808",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1807375812.538288,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gcl_au",
+      "value": "1.1.2113624901.1772815808",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1780591808,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "intercom-id-mcsnl4c5",
+      "value": "6ae0b1e3-6421-4fc3-be38-498412e0bd2c",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1796145812,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "intercom-device-id-mcsnl4c5",
+      "value": "939a01cc-e0c8-40a9-b973-218c4cb01e1e",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1796145834,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_C3860FG1TN",
+      "value": "GS2.1.s1772815808$o1$g1$t1772815812$j56$l0$h0",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1807375812.53794,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "dslang",
+      "value": "US-EN",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "site",
+      "value": "USA",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "geo",
+      "value": "DE",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "ctx",
+      "value": "{\"selectedDates\":null,\"appearance\":\"light\",\"location\":{\"position\":{\"latitude\":51.4964,\"longitude\":-0.1224},\"name\":\"United%20Kingdom\",\"isCurrentPosition\":false,\"isUserSelectedLocation\":false,\"country\":\"GB\"},\"clientInfo\":{\"versionString\":\"Hygglo-web\"},\"coreBaseUrl\":\"https%3A%2F%2Fapi.hygglo.com%2F\",\"showDebugMenu\":false,\"sessionId\":\"8da722b5-1bcd-4372-8d7d-0664a2567536\",\"refreshToken\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoxMzE4MDA5OCwiaWF0IjoxNzcyODE1ODMzLCJleHAiOjE3NzI4MTc2MzMsInN1YiI6Im5nSHlnZ2xvQXBwIn0.ldWHVLRJ5SO151J22rkRrE0wbEdO2FSh8ophIdMEEBU\",\"language\":\"en\",\"viewMarketCountry\":\"GB\"}",
+      "domain": "hygglo.com",
+      "path": "/",
+      "expires": 1804351833,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "intercom-session-mcsnl4c5",
+      "value": "S0N1ZDhld1BkeU0rQkVqSS9PRzZmU2FsaFJQT2ZQU0hZeWpXNUtRSm51NXRVWUZ1ZGZqQTcyRzlEM29oTHhzVkYxUVBGeHJvU2VwQmRjZ3dSZWQ4TytLTTZPd0o3eHJiZGdwWXc5SlFFWGlHV2lpeVNvNlFJdHc3TkVoUEc2aU0zT3orT3Z2dUpqTTR1VExIWlNkZktUVTY4dEJqUnhjUWZCbXh4bnozZjZTTmRWemkyV2ozSVVvaWJjTFlQaDY1VDAySGoxS1pWUXA2NXdrVEFtTE1DQT09LS0ydTBIcjZBZ1pKT3p2bkplSko5LzNBPT0=--30f889d59dfa4969d0f381bbc5def01397fb67c3",
+      "domain": ".hygglo.com",
+      "path": "/",
+      "expires": 1773420633,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://hygglo.com",
+      "localStorage": [
+        {
+          "name": "last-used-login-method",
+          "value": "\"email\""
+        },
+        {
+          "name": "_gcl_ls",
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"creationTimeMs\":1772815808232},\"expires\":1780591808232}}"
+        },
+        {
+          "name": "fatllama_welcome_modal_shown",
+          "value": "true"
+        },
+        {
+          "name": "intercom.intercom-state-mcsnl4c5",
+          "value": "{\"app\":{\"openConfig\":{\"unifiedStyling\":true,\"openTo\":\"home\",\"spaces\":[{\"type\":\"home\",\"label\":\"Home\",\"navigationLabel\":\"Home\",\"badge\":null},{\"type\":\"messages\",\"label\":\"Messages\",\"navigationLabel\":\"Messages\",\"badge\":null},{\"type\":\"tickets\",\"label\":\"Tickets\",\"navigationLabel\":\"Tickets\",\"badge\":null},{\"type\":\"help\",\"label\":\"Help\",\"navigationLabel\":\"Help\",\"badge\":null}],\"userHasReceivedChecklists\":false,\"userHasLiveNewsfeed\":false,\"userHasTickets\":false},\"selfServeSuggestionsMatch\":false,\"name\":\"Hygglo\",\"features\":{\"anonymousInboundMessages\":true,\"googleAnalytics\":false,\"hubspotInstalled\":false,\"inboundMessages\":true,\"marketoEnrichmentInstalled\":false,\"googleAnalytics4Integration\":true},\"helpCenterSiteUrl\":\"https://help.hygglo.info\",\"inboundConversationsDisabled\":false,\"isDeveloperWorkspace\":false,\"customGoogleAnalyticsTrackerId\":null},\"launcher\":{\"isLauncherEnabled\":true},\"launcherDiscoveryMode\":{\"hasDiscoveredLauncher\":true},\"launcherSettings\":{\"alignment\":\"right\",\"color\":\"#833085\",\"colorDark\":\"#6ecf7e\",\"hasRequiredFeatures\":true,\"horizontalPadding\":20,\"instantBootEnabled\":true,\"launcherLogoUrl\":null,\"launcherLogoDarkUrl\":null,\"secondaryColor\":\"#ffffff\",\"secondaryColorDark\":\"#ffffff\",\"showLauncher\":true,\"themeMode\":\"system\",\"updatedAt\":1772805730,\"verticalPadding\":20,\"isLoading\":false},\"user\":{\"role\":\"user\",\"locale\":\"en\",\"hasConversations\":true},\"message\":{},\"conversations\":{\"byId\":{}},\"openOnBoot\":{\"type\":null,\"metadata\":{},\"lastOpenAtTimestamp\":1772815834566},\"operator\":{\"lastComposerEvent\":0},\"router\":{\"isInitialized\":true,\"navigationQueue\":[],\"action\":\"POP\",\"location\":{\"pathname\":\"/home\",\"search\":\"\",\"hash\":\"\",\"state\":null,\"key\":\"default\"}}}"
+        }
+      ]
+    },
+    {
+      "origin": "https://www.google.com",
+      "localStorage": [
+        {
+          "name": "rc::a",
+          "value": "dzQ4cW9xMTUwbW1vZA=="
+        },
+        {
+          "name": "rc::f",
+          "value": "0aALHWB14eqPdw1dxnxF75wGENX-SJPjyasJRXQMZu3o6C39VxRqj6GNYIa7Xm4tv5SaZCdBE"
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,3 @@
-// Prisma schema for Rental Manager
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,33 +8,33 @@ datasource db {
 }
 
 model rental {
-  id              String          @id @default(uuid())
-  listing_id      String          @unique
-  title           String
-  status          String          // 'ongoing' or 'upcoming'
-  start_date      DateTime?
-  end_date        DateTime?
-  renter_info     String?
-  listing_url     String
-  description     String?         @db.Text
-  photos_urls     String[]        // Array of photo URLs
-  rental_price    Float?          // owner earnings (what Daniel receives after platform fees)
-  renter_price    Float?          // renter-facing total (what borrower pays including platform fees)
-  price_per_day   Float?          // calculated owner earnings per day
-  currency        String?         @default("GBP")
-  account         String?         // 'dbcinema' or 'leo' — which Hygglo account this rental belongs to
-  listing_location String?        // Advertised pickup location from the listing (e.g. "Stratford", "Shoreditch") — may be fake
-  parsed_items    Json?           // AI-parsed items: [{item: "Sony FX3", qty: 1}, {item: "Sony GM 24-70mm f2.8", qty: 1}]
-  order_step      String?         // Active Hygglo order step: REQUEST, APPROVED, FUNDS_RESERVED, VERIFIED, BOOKED_AFTER_VERIFIED, DELIVERED, RETURNED, REVIEWED
-  transcript_hash String?         // Hash of last processed transcript — skip AI extraction if unchanged
-  created_at      DateTime        @default(now())
-  updated_at      DateTime        @updatedAt
-  extracted_items extracteditem[]
-  catalog_items   itemcatalog[]
-  ai_decisions    ai_decision[]
-  bookings        booking[]
-  follow_up_state follow_up_state?
-  renter_links    rental_renter_link[]
+  id               String               @id @default(uuid())
+  listing_id       String               @unique
+  title            String
+  status           String
+  start_date       DateTime?
+  end_date         DateTime?
+  renter_info      String?
+  listing_url      String
+  description      String?
+  photos_urls      String[]
+  rental_price     Float?
+  price_per_day    Float?
+  currency         String?              @default("GBP")
+  account          String?
+  created_at       DateTime             @default(now())
+  updated_at       DateTime             @updatedAt
+  listing_location String?
+  parsed_items     Json?
+  order_step       String?
+  renter_price     Float?
+  transcript_hash  String?
+  ai_decisions     ai_decision[]
+  bookings         booking[]
+  extracted_items  extracteditem[]
+  follow_up_state  follow_up_state?
+  catalog_items    itemcatalog[]
+  renter_links     rental_renter_link[]
 
   @@index([status])
   @@index([listing_id])
@@ -47,7 +45,7 @@ model extracteditem {
   id               String   @id @default(uuid())
   rental_id        String
   item_name        String
-  source           String   // 'photo' or 'description'
+  source           String
   confidence_score Float?
   created_at       DateTime @default(now())
   rental           rental   @relation(fields: [rental_id], references: [id], onDelete: Cascade)
@@ -57,12 +55,12 @@ model extracteditem {
 }
 
 model itemcatalog {
-  id             String   @id @default(uuid())
-  listing_id     String
-  item_name      String
-  description    String?  @db.Text
-  first_seen_at  DateTime @default(now())
-  rental         rental   @relation(fields: [listing_id], references: [listing_id], onDelete: Cascade)
+  id            String   @id @default(uuid())
+  listing_id    String
+  item_name     String
+  description   String?
+  first_seen_at DateTime @default(now())
+  rental        rental   @relation(fields: [listing_id], references: [listing_id], onDelete: Cascade)
 
   @@unique([listing_id, item_name])
   @@index([listing_id])
@@ -71,8 +69,8 @@ model itemcatalog {
 model conversation {
   id         String   @id @default(uuid())
   chat_id    String
-  role       String   // 'user', 'assistant', 'system'
-  content    String   @db.Text
+  role       String
+  content    String
   metadata   Json?
   created_at DateTime @default(now())
 
@@ -84,16 +82,16 @@ model conversation {
 model ai_decision {
   id                String   @id @default(uuid())
   rental_id         String?
-  decision_type     String   // 'approve', 'reject', 'message', 'escalate', 'analyze'
-  input_summary     String   @db.Text
-  output_summary    String   @db.Text
+  decision_type     String
+  input_summary     String
+  output_summary    String
   confidence        Float?
-  action_taken      String?  @db.Text
+  action_taken      String?
   notified          Boolean  @default(false)
-  was_sent          Boolean? // true = sent, false = blocked, null = legacy/internal
-  feedback_analyzed Boolean  @default(false) // has the feedback loop processed this row?
   created_at        DateTime @default(now())
-  rental            rental?  @relation(fields: [rental_id], references: [id], onDelete: SetNull)
+  feedback_analyzed Boolean  @default(false)
+  was_sent          Boolean?
+  rental            rental?  @relation(fields: [rental_id], references: [id])
 
   @@index([rental_id])
   @@index([decision_type])
@@ -105,9 +103,9 @@ model ai_decision {
 
 model rule {
   id         String   @id @default(uuid())
-  category   String   // 'inventory', 'policy', 'communication', 'pricing', 'faq'
+  category   String
   name       String
-  content    String   @db.Text
+  content    String
   is_active  Boolean  @default(true)
   priority   Int      @default(0)
   created_at DateTime @default(now())
@@ -119,10 +117,10 @@ model rule {
 
 model memory {
   id           String    @id @default(uuid())
-  memory_type  String    // 'pattern', 'fact', 'preference', 'renter_profile'
+  memory_type  String
   subject      String
-  content      String    @db.Text
-  importance   Int       @default(5) // 1-10
+  content      String
+  importance   Int       @default(5)
   access_count Int       @default(0)
   expires_at   DateTime?
   created_at   DateTime  @default(now())
@@ -136,48 +134,47 @@ model memory {
 model bot_config {
   id    String @id @default(uuid())
   key   String @unique
-  value String @db.Text
+  value String
 
   @@index([key])
 }
 
-// === Phase 1A: Availability Calendar ===
-
 model booking {
-  id              String    @id @default(uuid())
-  item_name       String
-  quantity        Int       @default(1)
-  start_date      DateTime
-  end_date        DateTime
-  renter_name     String
-  renter_contact  String?
-  account         String    // 'dbcinema' or 'leo'
-  rental_id       String?
-  rental          rental?   @relation(fields: [rental_id], references: [id], onDelete: SetNull)
-  pickup_time     String?   // e.g. '10:00'
-  return_time     String?   // e.g. '19:00'
-  pickup_date     DateTime? // Actual pickup date (may be evening before start_date)
-  return_date     DateTime? // Actual return date (may be morning after end_date)
-  pickup_reminded Boolean   @default(false)
-  return_reminded Boolean   @default(false)
-  // Arrival confirmation tracking
-  pickup_arrival_sent_at        DateTime?  // When first pickup arrival check was sent to renter
-  pickup_arrival_followup_sent  Boolean    @default(false) // Second arrival reminder sent
-  pickup_arrival_confirmed      Boolean    @default(false) // Renter confirmed pickup arrival
-  return_arrival_sent_at        DateTime?  // When first return arrival check was sent to renter
-  return_arrival_followup_sent  Boolean    @default(false) // Second return arrival reminder sent
-  return_arrival_confirmed      Boolean    @default(false) // Renter confirmed return arrival
-  // Delivery method tracking (null = unknown/not discussed, 'collection' = in-person, 'delivery' = Addison Lee courier)
-  pickup_method   String?   // 'collection' or 'delivery' — only set when CONFIRMED, not just discussed
-  return_method   String?   // 'collection' or 'delivery' — only set when CONFIRMED, not just discussed
-  status          String    @default("confirmed") // 'confirmed', 'completed', 'cancelled'
-  revenue         Float?
-  platform_fee    Float?
-  delivery_fee    Float?
-  net_profit      Float?
-  notes           String?   @db.Text
-  created_at      DateTime  @default(now())
-  updated_at      DateTime  @updatedAt
+  id                           String    @id @default(uuid())
+  item_name                    String
+  quantity                     Int       @default(1)
+  start_date                   DateTime
+  end_date                     DateTime
+  renter_name                  String
+  renter_contact               String?
+  account                      String
+  rental_id                    String?
+  pickup_time                  String?
+  return_time                  String?
+  pickup_reminded              Boolean   @default(false)
+  return_reminded              Boolean   @default(false)
+  status                       String    @default("confirmed")
+  revenue                      Float?
+  platform_fee                 Float?
+  delivery_fee                 Float?
+  net_profit                   Float?
+  notes                        String?
+  created_at                   DateTime  @default(now())
+  updated_at                   DateTime  @updatedAt
+  pickup_date                  DateTime?
+  return_date                  DateTime?
+  pickup_arrival_confirmed     Boolean   @default(false)
+  pickup_arrival_followup_sent Boolean   @default(false)
+  pickup_arrival_sent_at       DateTime?
+  return_arrival_confirmed     Boolean   @default(false)
+  return_arrival_followup_sent Boolean   @default(false)
+  return_arrival_sent_at       DateTime?
+  pickup_method                String?
+  return_method                String?
+  pickup_pre_reminded          Boolean   @default(false)
+  return_pre_reminded          Boolean   @default(false)
+  midpoint_checkin_sent        Boolean   @default(false)
+  rental                       rental?   @relation(fields: [rental_id], references: [id])
 
   @@index([item_name])
   @@index([start_date, end_date])
@@ -188,17 +185,13 @@ model booking {
   @@index([item_name, status, return_date, end_date])
 }
 
-// === Phase 1B: Renter Blacklist ===
-
 model blacklisted_renter {
   id         String   @id @default(uuid())
   name       String   @unique
-  reason     String   @db.Text
+  reason     String
   added_by   String   @default("owner")
   created_at DateTime @default(now())
 }
-
-// === Phase 2A: Demand Tracker ===
 
 model demand_record {
   id               String    @id @default(uuid())
@@ -208,17 +201,15 @@ model demand_record {
   dates_end        DateTime?
   renter_name      String?
   account          String?
-  outcome          String    @default("pending") // 'accepted', 'rejected', 'pending', 'cancelled'
+  outcome          String    @default("pending")
   rejection_reason String?
   rental_value     Float?
-  source           String?   // 'hygglo', 'manual', etc.
+  source           String?
   created_at       DateTime  @default(now())
 
   @@index([outcome])
   @@index([created_at])
 }
-
-// === Phase 4A: Delivery Quote Calculator ===
 
 model item_spec {
   id         String  @id @default(uuid())
@@ -227,15 +218,13 @@ model item_spec {
   length_cm  Float?
   width_cm   Float?
   height_cm  Float?
-  size_score Int     @default(2) // 1-5: XS/S/M/L/XL
+  size_score Int     @default(2)
   category   String?
   notes      String?
 
   @@index([item_name])
   @@index([size_score])
 }
-
-// === Phase 4B: Market Insight Tool ===
 
 model market_snapshot {
   id           String   @id @default(uuid())
@@ -254,8 +243,8 @@ model market_snapshot {
 
 model market_report {
   id          String   @id @default(uuid())
-  report_type String   // 'weekly', 'on_demand'
-  content     String   @db.Text
+  report_type String
+  content     String
   insights    Json?
   created_at  DateTime @default(now())
 
@@ -263,14 +252,12 @@ model market_report {
   @@index([created_at])
 }
 
-// === Error Log (local monitoring, replaces external Sentry) ===
-
 model error_log {
   id                String   @id @default(uuid())
-  error_type        String   // 'exception', 'quality_warning', 'validation_failure', 'slow_api'
-  operation         String   // 'telegram_polling', 'vision_analysis', etc.
-  message           String   @db.Text
-  stack_trace       String?  @db.Text
+  error_type        String
+  operation         String
+  message           String
+  stack_trace       String?
   context           Json?
   feedback_analyzed Boolean  @default(false)
   created_at        DateTime @default(now())
@@ -279,16 +266,14 @@ model error_log {
   @@index([created_at])
 }
 
-// === System Diagnostics ===
-
 model system_diagnostic {
-  id          String   @id @default(uuid())
-  category    String   // scan_cycle, cleanup, promotion, revenue, notification, pipeline
-  event_type  String   // stale_cleanup, force_promote, rate_limited, grounding_failure, etc.
-  summary     String
-  data        Json     // compact structured payload — counts/deltas, not full payloads
-  rental_id   String?
-  created_at  DateTime @default(now())
+  id         String   @id @default(uuid())
+  category   String
+  event_type String
+  summary    String
+  data       Json
+  rental_id  String?
+  created_at DateTime @default(now())
 
   @@index([category])
   @@index([event_type])
@@ -296,14 +281,12 @@ model system_diagnostic {
   @@index([rental_id])
 }
 
-// === Intelligence & Safety Improvements ===
-
 model validation_log {
   id             String   @id @default(uuid())
   ai_decision_id String?
-  response_text  String   @db.Text
+  response_text  String
   violations     String[]
-  severity       String   // 'critical', 'high', 'medium', 'low'
+  severity       String
   blocked        Boolean
   created_at     DateTime @default(now())
 
@@ -329,17 +312,17 @@ model response_quality {
 }
 
 model prompt_component {
-  id           String   @id @default(uuid())
-  name         String
-  version      String
-  content      String   @db.Text
-  category     String   // 'core', 'rules', 'context', 'instructions'
-  active       Boolean  @default(true)
-  ab_group     String?  // 'A', 'B', null
-  usage_count  Int      @default(0)
-  pass_rate    Float?   // validation pass rate
-  created_at   DateTime @default(now())
-  updated_at   DateTime @updatedAt
+  id          String   @id @default(uuid())
+  name        String
+  version     String
+  content     String
+  category    String
+  active      Boolean  @default(true)
+  ab_group    String?
+  usage_count Int      @default(0)
+  pass_rate   Float?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
 
   @@unique([name, version])
   @@index([category])
@@ -361,37 +344,32 @@ model prompt_version_log {
   @@index([created_at])
 }
 
-// === Rental Acceptance Rules ===
-
 model renter_profile {
-  id                        String               @id @default(uuid())
-  hygglo_user_id            String?              @unique
-  name                      String
-  name_variants             String[]
-  verification_status       String               @default("unknown") // 'unknown', 'pending', 'verified', 'failed'
-  verification_attempts     Int                  @default(0)
-  verification_guided       Boolean              @default(false)
-  verification_failure_guided Boolean            @default(false)
-  total_rentals             Int                  @default(0)
-  total_spend               Float                @default(0)
-  items_interested          String[]             // Items this renter has asked about or booked
-  rental_progress           String?              @db.Text // Current request progress summary (e.g. "agreed on FX3+24-70, dates 5-7 Feb, pickup 10am")
-  previous_agreements       String?              @db.Text // What was agreed in prior rentals/cancelled requests — for re-request context
-  last_inquiry_summary      String?              @db.Text // What they last asked about
-  preferences               Json?                // {preferred_pickup_time, preferred_items, shoot_types, communication_style, price_sensitivity}
-  first_seen_at             DateTime             @default(now())
-  last_seen_at              DateTime             @default(now())
-  renter_links              rental_renter_link[]
-
-  requires_manual_approval  Boolean   @default(false)
-  rental_issues_note        String?   @db.Text
-
-  hygglo_rating             Float?    // Average star rating (1-5), null = unknown
-  hygglo_review_count       Int?      // Number of reviews
-  hygglo_bad_reviews        String?   @db.Text  // JSON array of reviews < 5 stars: [{stars, text, date}]
-  rating_checked_at         DateTime? // When rating was last checked
-
-  loyalty_voucher           loyalty_voucher?
+  id                          String               @id @default(uuid())
+  hygglo_user_id              String?              @unique
+  name                        String
+  name_variants               String[]
+  verification_status         String               @default("unknown")
+  verification_attempts       Int                  @default(0)
+  verification_guided         Boolean              @default(false)
+  verification_failure_guided Boolean              @default(false)
+  total_rentals               Int                  @default(0)
+  first_seen_at               DateTime             @default(now())
+  last_seen_at                DateTime             @default(now())
+  items_interested            String[]
+  last_inquiry_summary        String?
+  previous_agreements         String?
+  rental_progress             String?
+  rental_issues_note          String?
+  requires_manual_approval    Boolean              @default(false)
+  total_spend                 Float                @default(0)
+  hygglo_bad_reviews          String?
+  hygglo_rating               Float?
+  hygglo_review_count         Int?
+  rating_checked_at           DateTime?
+  preferences                 Json?
+  loyalty_voucher             loyalty_voucher?
+  renter_links                rental_renter_link[]
 
   @@index([name])
   @@index([hygglo_user_id])
@@ -410,8 +388,6 @@ model rental_renter_link {
   @@index([renter_profile_id])
 }
 
-// === Postcode Cache ===
-
 model postcode_cache {
   id          String   @id @default(uuid())
   postcode    String   @unique
@@ -425,8 +401,6 @@ model postcode_cache {
   @@index([cached_at])
 }
 
-// === Upsell Tracking ===
-
 model upsell_log {
   id                String   @id @default(uuid())
   rental_id         String
@@ -434,9 +408,9 @@ model upsell_log {
   items_accepted    String[]
   revenue_before    Float
   revenue_after     Float?
-  upsell_priority   String   // 'critical', 'high', 'medium', 'low'
+  upsell_priority   String
   use_case_detected String?
-  outcome           String   @default("pending") // 'pending', 'accepted', 'partial', 'rejected', 'ignored'
+  outcome           String   @default("pending")
   created_at        DateTime @default(now())
 
   @@index([rental_id])
@@ -444,18 +418,16 @@ model upsell_log {
   @@index([created_at])
 }
 
-// === Revenue Tracking ===
-
 model revenue_metric {
-  id              String   @id @default(uuid())
-  rental_id       String?
-  metric_type     String   // 'booking_revenue', 'upsell_revenue', 'discount_applied', 'delivery_fee', 'platform_fee'
-  amount          Float
-  account         String?  // 'dbcinema' or 'leo'
-  metadata        Json?
-  period_start    DateTime?
-  period_end      DateTime?
-  created_at      DateTime @default(now())
+  id           String    @id @default(uuid())
+  rental_id    String?
+  metric_type  String
+  amount       Float
+  account      String?
+  metadata     Json?
+  period_start DateTime?
+  period_end   DateTime?
+  created_at   DateTime  @default(now())
 
   @@index([metric_type])
   @@index([account])
@@ -463,28 +435,26 @@ model revenue_metric {
   @@index([rental_id])
 }
 
-// === AutoLearn Engine ===
-
 model autolearn_proposal {
-  id              String    @id @default(uuid())
-  cycle_id        String
-  analyzer        String    // 'violation'|'quality'|'conversion'|'token'|'correction'
-  change_type     String    // 'rule_add'|'rule_edit'|'rule_deactivate'|'prompt_edit'|'threshold_adjust'
-  target_entity   String    // e.g. 'rule:pricing:Bundle_Rec' or 'prompt:communication_style'
-  description     String    @db.Text
-  change_payload  Json      // { before, after, metadata }
-  shadow_result   Json?     // { replayed, improved, degraded, neutral, avgQualityDelta }
-  status          String    @default("pending") // pending|approved|vetoed|applied|rolled_back|expired|rework|failed
-  veto_deadline   DateTime
-  vetoed_by       String?
-  veto_reason     String?
-  applied_at      DateTime?
-  rolled_back_at  DateTime?
-  rework_count    Int       @default(0)
-  parent_id       String?
-  rework_reason   String?   @db.Text
-  failed_shadow   Json?
-  created_at      DateTime  @default(now())
+  id             String    @id @default(uuid())
+  cycle_id       String
+  analyzer       String
+  change_type    String
+  target_entity  String
+  description    String
+  change_payload Json
+  shadow_result  Json?
+  status         String    @default("pending")
+  veto_deadline  DateTime
+  vetoed_by      String?
+  veto_reason    String?
+  applied_at     DateTime?
+  rolled_back_at DateTime?
+  created_at     DateTime  @default(now())
+  failed_shadow  Json?
+  parent_id      String?
+  rework_count   Int       @default(0)
+  rework_reason  String?
 
   @@index([status])
   @@index([veto_deadline])
@@ -494,13 +464,13 @@ model autolearn_proposal {
 }
 
 model autolearn_log {
-  id              String    @id @default(uuid())
-  proposal_id     String?
-  event_type      String    // cycle_start|cycle_end|applied|vetoed|rollback|daily_summary
-  details         Json?
-  quality_before  Float?
-  quality_after   Float?
-  created_at      DateTime  @default(now())
+  id             String   @id @default(uuid())
+  proposal_id    String?
+  event_type     String
+  details        Json?
+  quality_before Float?
+  quality_after  Float?
+  created_at     DateTime @default(now())
 
   @@index([event_type])
   @@index([proposal_id])
@@ -508,12 +478,12 @@ model autolearn_log {
 }
 
 model autolearn_snapshot {
-  id              String    @id @default(uuid())
-  proposal_id     String
-  entity_type     String    // 'rule'|'prompt_component'|'bot_config'
-  entity_id       String
-  snapshot_data   Json
-  created_at      DateTime  @default(now())
+  id            String   @id @default(uuid())
+  proposal_id   String
+  entity_type   String
+  entity_id     String
+  snapshot_data Json
+  created_at    DateTime @default(now())
 
   @@index([proposal_id])
   @@index([entity_type])
@@ -521,44 +491,42 @@ model autolearn_snapshot {
 }
 
 model follow_up_state {
-  id                    String    @id @default(uuid())
-  rental_id             String    @unique
-  rental                rental    @relation(fields: [rental_id], references: [id], onDelete: Cascade)
+  id                     String    @id @default(uuid())
+  rental_id              String    @unique
   last_renter_message_at DateTime?
-  last_bot_message_at   DateTime?
-  last_bot_followup_at  DateTime?
-  followup_count        Int       @default(0)
-  custom_reminder_at    DateTime?
+  last_bot_message_at    DateTime?
+  last_bot_followup_at   DateTime?
+  followup_count         Int       @default(0)
+  custom_reminder_at     DateTime?
   custom_reminder_reason String?
-  paused_until          DateTime?
-  auto_accept_eligible  Boolean   @default(false)
-  auto_accepted         Boolean   @default(false)
-  items_confirmed       Boolean   @default(false)
-  availability_verified Boolean   @default(false)
-  discount_eligible     Boolean   @default(false)
-  discount_applied      Boolean   @default(false)
-  conversation_stage    String    @default("inquiry") // inquiry, interested, ready_to_book, booked, confirmed, completed, dead
-  stage_before_dead     String?   // stores previous stage when conversation goes DEAD, for smart revival
-  stage_changed_at      DateTime?
-  time_request_sent        Boolean   @default(false)
-  time_request_sent_at     DateTime?
-  time_followup_count      Int       @default(0)
-  last_time_followup_at    DateTime?
-  times_status             String    @default("none")  // none|tentative|confirmed|auto_assigned
-  times_auto_assigned      Boolean   @default(false)
-  times_auto_assigned_at   DateTime?
-  conversation_summary     String?   @db.Text
-  rejected_suggestions     String?   // comma-separated list of items the renter declined
-  structured_state         Json?     // { confirmedItems, agreedTimes, questionsAsked, etc. }
-  status                String    @default("active") // 'active', 'completed', 'paused', 'auto_accepted'
-  created_at            DateTime  @default(now())
-  updated_at            DateTime  @updatedAt
+  paused_until           DateTime?
+  auto_accept_eligible   Boolean   @default(false)
+  auto_accepted          Boolean   @default(false)
+  items_confirmed        Boolean   @default(false)
+  availability_verified  Boolean   @default(false)
+  discount_eligible      Boolean   @default(false)
+  discount_applied       Boolean   @default(false)
+  status                 String    @default("active")
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+  conversation_stage     String    @default("inquiry")
+  stage_changed_at       DateTime?
+  last_time_followup_at  DateTime?
+  time_followup_count    Int       @default(0)
+  time_request_sent      Boolean   @default(false)
+  time_request_sent_at   DateTime?
+  times_auto_assigned    Boolean   @default(false)
+  times_auto_assigned_at DateTime?
+  times_status           String    @default("none")
+  conversation_summary   String?
+  rejected_suggestions   String?
+  stage_before_dead      String?
+  structured_state       Json?
+  rental                 rental    @relation(fields: [rental_id], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@index([rental_id])
 }
-
-// === Lost Revenue Tracking ===
 
 model lost_revenue_record {
   id              String   @id @default(uuid())
@@ -575,11 +543,11 @@ model lost_revenue_record {
   items_requested Json
   stock_blocked   Boolean
   blocked_items   String[]
-  unmatched_items String[]
-  denial_type     String?   // 'owner_denied' | 'unavailable' | 'verification_failed' | 'unmatched'
-  active_step     String?   // Hygglo step where active=true when rental went obsolete
   synced_at       DateTime @default(now())
   created_at      DateTime @default(now())
+  unmatched_items String[]
+  active_step     String?
+  denial_type     String?
 
   @@index([account])
   @@index([start_date])
@@ -588,35 +556,33 @@ model lost_revenue_record {
 }
 
 model revenue_loss_monthly {
-  id                    String   @id @default(uuid())
-  period_start          DateTime
-  period_end            DateTime
-  account               String   @default("")  // empty string = global aggregate
-  denied_revenue        Float
-  denied_count          Int
-  denied_items          String[]
-  lost_revenue          Float
-  lost_count            Int
-  lost_items            String[]
-  created_at            DateTime @default(now())
+  id             String   @id @default(uuid())
+  period_start   DateTime
+  period_end     DateTime
+  account        String   @default("")
+  denied_revenue Float
+  denied_count   Int
+  denied_items   String[]
+  lost_revenue   Float
+  lost_count     Int
+  lost_items     String[]
+  created_at     DateTime @default(now())
+
   @@unique([period_start, account])
   @@index([period_start])
 }
 
-// === Competitor Intelligence (dashboard-only, separate from rental bot) ===
-
 model competitor_profile {
-  id             String   @id @default(uuid())
+  id             String               @id @default(uuid())
   name           String
-  slug           String   @unique
+  slug           String               @unique
   profile_url    String?
-  total_reviews  Int      @default(0)
+  total_reviews  Int                  @default(0)
   avg_rating     Float?
-  total_listings Int      @default(0)
+  total_listings Int                  @default(0)
   last_scraped   DateTime?
-  created_at     DateTime @default(now())
-  updated_at     DateTime @updatedAt
-
+  created_at     DateTime             @default(now())
+  updated_at     DateTime             @updatedAt
   listings       competitor_listing[]
   reviews        competitor_review[]
 
@@ -624,18 +590,18 @@ model competitor_profile {
 }
 
 model competitor_listing {
-  id              String   @id @default(uuid())
-  competitor_id   String
-  competitor      competitor_profile @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
-  title           String
-  item_category   String?
-  daily_price     Float?
-  owner_earnings  Float?
-  listing_url     String?
-  listing_slug    String?
-  is_active       Boolean  @default(true)
-  first_seen      DateTime @default(now())
-  last_seen       DateTime @default(now())
+  id             String             @id @default(uuid())
+  competitor_id  String
+  title          String
+  item_category  String?
+  daily_price    Float?
+  owner_earnings Float?
+  listing_url    String?
+  listing_slug   String?
+  is_active      Boolean            @default(true)
+  first_seen     DateTime           @default(now())
+  last_seen      DateTime           @default(now())
+  competitor     competitor_profile @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
 
   @@unique([competitor_id, title])
   @@index([competitor_id])
@@ -644,15 +610,15 @@ model competitor_listing {
 }
 
 model competitor_review {
-  id              String   @id @default(uuid())
-  competitor_id   String
-  competitor      competitor_profile @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
-  reviewer_name   String?
-  rating          Float?
-  content         String?  @db.Text
-  item_rented     String?
-  review_date     DateTime?
-  scraped_at      DateTime @default(now())
+  id            String             @id @default(uuid())
+  competitor_id String
+  reviewer_name String?
+  rating        Float?
+  content       String?
+  item_rented   String?
+  review_date   DateTime?
+  scraped_at    DateTime           @default(now())
+  competitor    competitor_profile @relation(fields: [competitor_id], references: [id], onDelete: Cascade)
 
   @@index([competitor_id])
   @@index([scraped_at])
@@ -662,7 +628,7 @@ model competitor_review {
 model competitor_insight {
   id              String   @id @default(uuid())
   insight_type    String
-  content         String   @db.Text
+  content         String
   recommendations Json?
   data_snapshot   Json?
   created_at      DateTime @default(now())
@@ -671,13 +637,11 @@ model competitor_insight {
   @@index([created_at])
 }
 
-// === Owner Unavailability / Vacation Blocks ===
-
 model owner_unavailability {
   id         String    @id @default(uuid())
-  start_time DateTime           // full datetime — supports "Saturday from 10:30"
-  end_time   DateTime?          // null = rest of day / open-ended
-  reason     String?            // "vacation", "personal", etc.
+  start_time DateTime
+  end_time   DateTime?
+  reason     String?
   all_day    Boolean   @default(false)
   active     Boolean   @default(true)
   created_at DateTime  @default(now())
@@ -687,61 +651,56 @@ model owner_unavailability {
   @@index([active])
 }
 
-// === Coupon Codes ===
-
 model coupon_code {
-  id                String    @id @default(uuid())
-  code              String    @unique
-  discount_percent  Float
-  description       String?
-  active            Boolean   @default(true)
-  account           String?   // null = all accounts
-  max_uses          Int?
-  times_used        Int       @default(0)
-  created_at        DateTime  @default(now())
-  updated_at        DateTime  @updatedAt
+  id               String    @id @default(uuid())
+  code             String    @unique
+  discount_percent Float
+  description      String?
+  active           Boolean   @default(true)
+  account          String?
+  max_uses         Int?
+  times_used       Int       @default(0)
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+  expires_at       DateTime?
 
   @@index([code])
   @@index([active])
 }
 
 model loyalty_voucher {
-  id                String          @id @default(uuid())
-  code              String          @unique
-  renter_profile_id String          @unique  // One active voucher per renter (newest replaces old)
-  rental_id         String          // Rental that earned this voucher
-  issued_at         DateTime        @default(now())
+  id                String         @id @default(uuid())
+  code              String         @unique
+  renter_profile_id String         @unique
+  rental_id         String
+  issued_at         DateTime       @default(now())
   used_at           DateTime?
   used_rental_id    String?
-  expired           Boolean         @default(false)
-  created_at        DateTime        @default(now())
-  updated_at        DateTime        @updatedAt
-  renter_profile    renter_profile  @relation(fields: [renter_profile_id], references: [id], onDelete: Cascade)
+  expired           Boolean        @default(false)
+  created_at        DateTime       @default(now())
+  updated_at        DateTime       @updatedAt
+  renter_profile    renter_profile @relation(fields: [renter_profile_id], references: [id], onDelete: Cascade)
 
   @@index([code])
   @@index([issued_at])
 }
 
-// === Return Processing ===
-
 model return_processing {
-  id              String    @id @default(uuid())
-  rental_id       String    @unique
-  outcome         String    // 'good' | 'issues'
-  blacklisted     Boolean   @default(false)
-  flagged         Boolean   @default(false)
-  review_left     Boolean   @default(false)
-  thank_you_sent  Boolean   @default(false)
-  thank_you_text  String?   @db.Text
-  earnings        Float?
-  processed_by    String    @default("dashboard")
-  processed_at    DateTime  @default(now())
-  notes           String?   @db.Text
+  id             String   @id @default(uuid())
+  rental_id      String   @unique
+  outcome        String
+  blacklisted    Boolean  @default(false)
+  flagged        Boolean  @default(false)
+  review_left    Boolean  @default(false)
+  thank_you_sent Boolean  @default(false)
+  thank_you_text String?
+  earnings       Float?
+  processed_by   String   @default("dashboard")
+  processed_at   DateTime @default(now())
+  notes          String?
 
   @@index([rental_id])
 }
-
-// === AI Item Matcher Cache ===
 
 model item_match_cache {
   id               Int      @id @default(autoincrement())
@@ -757,197 +716,150 @@ model item_match_cache {
   @@index([inventory_hash])
 }
 
-// === Monthly Funnel Snapshot Log ===
-
 model funnel_snapshot {
-  id               String   @id @default(uuid())
-  period_start     DateTime // 1st of month
-  period_end       DateTime // 1st of next month
-  account          String?  // null = all accounts, 'dbcinema', 'leo'
-
-  // Stage counts
-  total            Int
-  inquiry          Int
-  interested       Int
-  ready_to_book    Int
-  booked           Int
-  confirmed        Int
-  completed        Int
-  dead             Int
-  pending          Int      // verification pending
-
-  // Derived rates
-  conversion_rate  Float    // (confirmed + completed) / total
-  engagement_rate  Float    // (total - inquiry) / total
-  booking_rate     Float    // (booked+pending+confirmed+completed) / engaged
-  drop_off_rate    Float    // dead / total
-
-  // Revenue context
-  revenue          Float    // owner earnings for this period
-  rental_count     Int      // distinct rental visits
-
-  // AI context (from latest weekly evaluation at time of snapshot)
-  ai_boost_rate    Float?
+  id                   String   @id @default(uuid())
+  period_start         DateTime
+  period_end           DateTime
+  account              String?
+  total                Int
+  inquiry              Int
+  interested           Int
+  ready_to_book        Int
+  booked               Int
+  confirmed            Int
+  completed            Int
+  dead                 Int
+  pending              Int
+  conversion_rate      Float
+  engagement_rate      Float
+  booking_rate         Float
+  drop_off_rate        Float
+  revenue              Float
+  rental_count         Int
+  ai_boost_rate        Float?
   ai_response_coverage Float?
-
-  created_at       DateTime @default(now())
+  created_at           DateTime @default(now())
 
   @@unique([period_start, account])
   @@index([period_start])
 }
 
-// === Per-Item Monthly Earnings Snapshot ===
-
 model item_earnings_snapshot {
-  id              String   @id @default(uuid())
-  period_start    DateTime // 1st of month
-  period_end      DateTime // 1st of next month
-  item_name       String   // clean MASTER_INVENTORY name or retired item name
-  account         String?  // null = all accounts, 'dbcinema', 'leo'
-
-  revenue         Float    // owner earnings for this item in this period
-  rental_count    Int      // number of completed bookings
-  avg_per_rental  Float    // average revenue per rental
-  days_rented     Int      // total rental days in this period
-
-  // Lifecycle context
-  is_current      Boolean  // true = in current MASTER_INVENTORY, false = retired/sold
-  first_rental    DateTime? // earliest booking start_date ever
-  last_rental     DateTime? // most recent booking end_date
-
-  // Cumulative (all-time up to this period)
-  cumulative_revenue    Float
-  cumulative_rentals    Int
-
-  created_at      DateTime @default(now())
+  id                 String    @id @default(uuid())
+  period_start       DateTime
+  period_end         DateTime
+  item_name          String
+  account            String?
+  revenue            Float
+  rental_count       Int
+  avg_per_rental     Float
+  days_rented        Int
+  is_current         Boolean
+  first_rental       DateTime?
+  last_rental        DateTime?
+  cumulative_revenue Float
+  cumulative_rentals Int
+  created_at         DateTime  @default(now())
 
   @@unique([period_start, item_name, account])
   @@index([period_start])
   @@index([item_name])
 }
 
-// === Bundle/Set Monthly Revenue Snapshot ===
-
 model bundle_revenue_snapshot {
-  id              String   @id @default(uuid())
-  period_start    DateTime // 1st of month
-  period_end      DateTime // 1st of next month
-
-  bundle_key      String   // sorted item names joined with ' + '
-  bundle_label    String   // human-readable label (e.g. "Sony FX3 + 24-70mm GM Kit")
-  items           String[] // individual item names in the bundle
-  listing_title   String?  // representative Hygglo listing title
-
-  revenue         Float    // total owner earnings for this bundle combo in this period
-  rental_count    Int      // number of completed rentals
-  avg_per_rental  Float    // average revenue per rental
-  days_rented     Int      // total rental days
-
-  // Cumulative
-  cumulative_revenue  Float
-  cumulative_rentals  Int
-  first_rental        DateTime?
-  last_rental         DateTime?
-
-  created_at      DateTime @default(now())
+  id                 String    @id @default(uuid())
+  period_start       DateTime
+  period_end         DateTime
+  bundle_key         String
+  bundle_label       String
+  items              String[]
+  listing_title      String?
+  revenue            Float
+  rental_count       Int
+  avg_per_rental     Float
+  days_rented        Int
+  cumulative_revenue Float
+  cumulative_rentals Int
+  first_rental       DateTime?
+  last_rental        DateTime?
+  created_at         DateTime  @default(now())
 
   @@unique([period_start, bundle_key])
   @@index([period_start])
   @@index([bundle_key])
 }
 
-// === Insurance Claims ===
-
 model insurance_claim {
-  id          String   @id @default(uuid())
-  amount      Float                        // payout amount in GBP
-  item        String                        // what item was damaged
-  damage      String   @db.Text            // damage description
-  notes       String?  @db.Text            // optional extra notes
-  is_new      Boolean  @default(true)      // new=count in revenue, old=log only
-  claim_date  DateTime @default(now())     // when the claim was made
-  created_at  DateTime @default(now())
+  id         String   @id @default(uuid())
+  amount     Float
+  item       String
+  damage     String
+  is_new     Boolean  @default(true)
+  claim_date DateTime @default(now())
+  created_at DateTime @default(now())
+  notes      String?
+
   @@index([is_new])
   @@index([claim_date])
 }
 
-// === Inventory Contention (Yield-Optimized Conflict Resolution) ===
-
 model inventory_contention {
-  id                     String    @id @default(uuid())
-
-  // Scarce resource
-  item_name              String    // MASTER_INVENTORY canonical name
-  date_start             DateTime  // Overlap window start
-  date_end               DateTime  // Overlap window end
-
-  // Competing rentals
-  favored_rental_id      String    // Highest revenue (PUSHED with urgency)
-  held_rental_ids        String[]  // Lower revenue (HELD, paused)
-
-  // Revenue snapshot (immutable at detection time)
-  favored_revenue        Float     // rental_price of favored
-  held_revenues          Float[]   // rental_price of each held (parallel to held_rental_ids)
-
-  // Urgency tracking for favored rental
-  urgency_count          Int       @default(0)
-  last_urgency_at        DateTime?
-
-  // Hold tracking for held rentals
-  hold_message_sent_to   String[]  @default([]) // rental IDs that got the one-time hold message
-
-  // Lifecycle
-  status                 String    @default("active") // active | resolved_booked | resolved_timeout | resolved_cancelled
-  resolution_reason      String?
-  resolved_at            DateTime?
-
-  created_at             DateTime  @default(now())
-  updated_at             DateTime  @updatedAt
+  id                   String    @id @default(uuid())
+  item_name            String
+  date_start           DateTime
+  date_end             DateTime
+  favored_rental_id    String
+  held_rental_ids      String[]
+  favored_revenue      Float
+  held_revenues        Float[]
+  urgency_count        Int       @default(0)
+  last_urgency_at      DateTime?
+  hold_message_sent_to String[]  @default([])
+  status               String    @default("active")
+  resolution_reason    String?
+  resolved_at          DateTime?
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
 
   @@index([status])
   @@index([favored_rental_id])
   @@index([item_name, status])
 }
 
-// === eBay Price Cache (Sell Recommender) ===
-
 model ebay_price_cache {
-  id            String   @id @default(uuid())
-  item_name     String   @unique
-  search_query  String
-  sold_prices   Json     // number[] of recent sold prices (GBP)
-  median_price  Float?
-  avg_price     Float?
-  min_price     Float?
-  max_price     Float?
-  sample_count  Int      @default(0)
-  scraped_at    DateTime @default(now())
+  id           String   @id @default(uuid())
+  item_name    String   @unique
+  search_query String
+  sold_prices  Json
+  median_price Float?
+  avg_price    Float?
+  min_price    Float?
+  max_price    Float?
+  sample_count Int      @default(0)
+  scraped_at   DateTime @default(now())
 
   @@index([scraped_at])
 }
 
-// === Conversation Archival & Insight Extraction ===
-
 model conversation_archive {
-  id                String    @id @default(uuid())
-  rental_id         String
-  chat_id           String
-  message_count     Int
-  renter_name       String?
-  items_requested   String[]
-  use_cases         String[]
-  renter_tone       String?   // professional, casual, urgent, frustrated
-  pricing_sensitivity String? // budget, moderate, premium
-  engagement_level  String?   // low, medium, high
-  first_message_at  DateTime?
-  last_message_at   DateTime?
-  final_outcome     String?   // converted, lost, cancelled, ongoing
-  final_rental_value Float?
-  compressed_summary String?  @db.Text
-  key_decisions     Json?     // [{decision, reason, timestamp}]
-  archived_at       DateTime  @default(now())
-
-  insights          conversation_insight[]
+  id                  String                 @id @default(uuid())
+  rental_id           String
+  chat_id             String
+  message_count       Int
+  renter_name         String?
+  items_requested     String[]
+  use_cases           String[]
+  renter_tone         String?
+  pricing_sensitivity String?
+  engagement_level    String?
+  first_message_at    DateTime?
+  last_message_at     DateTime?
+  final_outcome       String?
+  final_rental_value  Float?
+  compressed_summary  String?
+  key_decisions       Json?
+  archived_at         DateTime               @default(now())
+  insights            conversation_insight[]
 
   @@index([rental_id])
   @@index([chat_id])
@@ -956,18 +868,18 @@ model conversation_archive {
 }
 
 model conversation_insight {
-  id                String    @id @default(uuid())
-  rental_id         String
-  archive_id        String
-  archive           conversation_archive @relation(fields: [archive_id], references: [id], onDelete: Cascade)
-  insight_type      String    // item_demand, marketing_angle, renter_behavior, objection_pattern
-  category          String?   // sub-category within the type
-  content           String    @db.Text
-  confidence        Float     @default(0.8)
-  occurrence_count  Int       @default(1)
-  is_actionable     Boolean   @default(false)
-  suggested_action  String?   @db.Text
-  created_at        DateTime  @default(now())
+  id               String               @id @default(uuid())
+  rental_id        String
+  archive_id       String
+  insight_type     String
+  category         String?
+  content          String
+  confidence       Float                @default(0.8)
+  occurrence_count Int                  @default(1)
+  is_actionable    Boolean              @default(false)
+  suggested_action String?
+  created_at       DateTime             @default(now())
+  archive          conversation_archive @relation(fields: [archive_id], references: [id], onDelete: Cascade)
 
   @@index([rental_id])
   @@index([archive_id])
@@ -976,51 +888,75 @@ model conversation_insight {
   @@index([created_at])
 }
 
-// === Marketing Listings (demand testing via Hygglo — NOT real inventory) ===
-
 model marketing_listing {
-  id                String    @id @default(uuid())
-  title             String                           // Listing title for Hygglo
-  seo_tag           String?                          // SEO-optimized tag
-  items             Json                             // [{item: "Sony A7 IV", qty: 1}, ...]
-  accessories       Json?                            // Correct accessories based on item-compatibility
-  account           String                           // 'dbcinema' | 'leo'
-  source            String                           // 'competitor_review' | 'competitor_listing' | 'manual'
-  source_competitor String?                          // Which competitor inspired this
-  source_listing_id String?                          // competitor_listing.id reference
-
-  // Image pipeline
-  image_status      String    @default("pending")    // pending | images_found | bg_removed | composed | ready | uploaded
-  product_images    String[]                         // URLs/paths of source product images
-  composed_image    String?                          // Path to final composed listing image
-  image_width       Int?
-  image_height      Int?
-
-  // Pricing (from competitor data + our pricing logic)
-  price_1day        Float?                           // Renter-facing 1-day price
-  price_3day        Float?                           // Renter-facing 3-day price
-  price_7day        Float?                           // Renter-facing 7-day price
-  estimated_value   Float?                           // Item value for Hygglo insurance disclosure
-  description       String?   @db.Text               // Listing description matching account template
-
-  // Revenue estimation
-  est_monthly_rev_low   Float?                       // Conservative monthly revenue estimate (owner earnings)
-  est_monthly_rev_high  Float?                       // Optimistic estimate
-  estimation_basis      String?  @db.Text            // How the estimate was calculated
-
-  // Upload tracking
-  hygglo_listing_id     String?                      // Once uploaded to Hygglo
-  hygglo_url            String?
-  uploaded_at           DateTime?
-  upload_status         String    @default("draft")  // draft | pending_upload | uploaded | paused | removed
-
-  // Lifecycle
-  approved_by           String?                      // 'owner' when Daniel approves
-  approved_at           DateTime?
-  created_at            DateTime  @default(now())
-  updated_at            DateTime  @updatedAt
+  id                   String    @id @default(uuid())
+  title                String
+  seo_tag              String?
+  items                Json
+  accessories          Json?
+  account              String
+  source               String
+  source_competitor    String?
+  source_listing_id    String?
+  image_status         String    @default("pending")
+  product_images       String[]
+  composed_image       String?
+  image_width          Int?
+  image_height         Int?
+  price_1day           Float?
+  price_3day           Float?
+  price_7day           Float?
+  estimated_value      Float?
+  description          String?
+  est_monthly_rev_low  Float?
+  est_monthly_rev_high Float?
+  estimation_basis     String?
+  hygglo_listing_id    String?
+  hygglo_url           String?
+  uploaded_at          DateTime?
+  upload_status        String    @default("draft")
+  approved_by          String?
+  approved_at          DateTime?
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+  hygglo_listing_url   String?
 
   @@index([account])
   @@index([upload_status])
   @@index([image_status])
+}
+
+model winback_campaign {
+  id                String    @id @default(uuid())
+  renter_profile_id String    @unique
+  rental_id         String
+  listing_id        String
+  account           String
+  coupon_code       String
+  sent_at           DateTime?
+  campaign_month    DateTime
+  created_at        DateTime  @default(now())
+
+  @@index([campaign_month])
+  @@index([coupon_code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ground_truth {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  item_name        String
+  fact_type        String
+  verified_value   String
+  numeric_value    Decimal?  @db.Decimal
+  source           String
+  source_detail    String?
+  last_verified_at DateTime? @default(now()) @db.Timestamp(6)
+  confidence       Int?      @default(5)
+  needs_review     Boolean?  @default(false)
+  notes            String?
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  updated_at       DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([item_name], map: "idx_ground_truth_item")
+  @@index([fact_type], map: "idx_ground_truth_type")
 }

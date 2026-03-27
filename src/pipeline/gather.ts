@@ -8,15 +8,15 @@
 
 import { Logger } from '@nestjs/common';
 import { FactPack, MessageClassification, InnerMonologue, Intent, ItemPricing } from './types';
-import { formatFilteredPricingForAI, getItemPrice, PRICING_CATALOG } from '../data/pricing-catalog';
+import { getItemPrice, PRICING_CATALOG, getPricesWithDbPreference } from '../data/pricing-catalog';
 import { checkCompatibilityConflicts, detectMissingEssentials, formatCompatibilityForAI } from '../data/item-compatibility';
-import { findBestMatch, getInventoryItemNames, validateListingItems, extractListingQuantity, MASTER_INVENTORY } from '../utils/item-matcher';
+import { findBestMatch, getInventoryItemNames, validateListingItems, extractListingQuantity, MASTER_INVENTORY, detectBrandMismatch } from '../utils/item-matcher';
 
 const logger = new Logger('PipelineGather');
 
 /** Services needed by the gather layer — injected from pipeline.service */
 export interface GatherServices {
-  rulesService: { getFormattedRules(): Promise<string>; getCompactRules(): Promise<string> };
+  rulesService: { getFormattedRules(): Promise<string>; getCompactRules(): Promise<string>; getFormattedRulesForIntent(intent: string): Promise<string> };
   memoryService: {
     getRelevantMemories(keywords: string[], limit: number): Promise<string>;
     getPricingMemories(): Promise<string>;
@@ -31,7 +31,7 @@ export interface GatherServices {
   calendarService: {
     getCompactInventoryContext(): Promise<string>;
     getFormattedSchedule(date: Date): Promise<string | null>;
-    checkAvailability(item: string, start: Date, end: Date): Promise<any>;
+    checkAvailability(item: string, start: Date, end: Date, excludeRentalId?: string): Promise<any>;
   };
   deliveryService: {
     calculateQuote(postcode: string, items: string[]): Promise<any>;
@@ -148,6 +148,7 @@ export async function gatherFacts(
   // Resolve items from rental extracteditem records or classification
   // Use pre-loaded items from pipeline orchestrator when available (saves 1 DB call)
   let resolvedItems = classification.mentionedItems;
+  let brandMismatchWarning: string | undefined;
   if (input.preloadedExtractedItems && input.preloadedExtractedItems.length > 0) {
     resolvedItems = [...new Set([...input.preloadedExtractedItems, ...classification.mentionedItems])];
   } else if (rental) {
@@ -170,15 +171,42 @@ export async function gatherFacts(
     } catch { /* non-critical */ }
   }
 
-  // Also scan history for previously mentioned items
+  // BRAND INTEGRITY CHECK: detect cross-brand mismatches between listing title and resolved items
+  if (rental?.title && resolvedItems.length > 0) {
+    const mismatches: string[] = [];
+    for (const item of resolvedItems) {
+      const brandCheck = detectBrandMismatch(rental.title, item);
+      if (brandCheck.isMismatch) {
+        mismatches.push(brandCheck.explanation);
+      }
+    }
+    if (mismatches.length > 0) {
+      brandMismatchWarning = mismatches.join('\n');
+      logger.warn(`Brand mismatch detected for rental "${rental.title}": ${mismatches.length} item(s)`);
+    }
+  }
+
+  // Also scan history for previously mentioned items (n-gram matching)
   const historyItems: string[] = [];
   const inventoryNames = getInventoryItemNames();
   for (const msg of conversationHistory.slice(-6)) {
-    const words = msg.content.split(/[\s,.\-!?;:()]+/).filter(w => w.length > 2);
-    for (const w of words) {
-      const match = findBestMatch(w, inventoryNames);
-      if (match && !resolvedItems.includes(match) && !historyItems.includes(match)) {
-        historyItems.push(match);
+    const msgLower = msg.content.toLowerCase();
+    // Direct substring match for full inventory names
+    for (const itemName of inventoryNames) {
+      if (msgLower.includes(itemName.toLowerCase()) && !resolvedItems.includes(itemName) && !historyItems.includes(itemName)) {
+        historyItems.push(itemName);
+      }
+    }
+    // N-gram matching (2-4 word combos) for partial references
+    const words = msg.content.split(/[\s,.\-!?;:()]+/).filter(w => w.length > 1);
+    for (let n = Math.min(4, words.length); n >= 1; n--) {
+      for (let i = 0; i <= words.length - n; i++) {
+        const phrase = n === 1 ? words[i] : words.slice(i, i + n).join(' ');
+        if (n === 1 && phrase.length < 3) continue;
+        const match = findBestMatch(phrase, inventoryNames);
+        if (match && !resolvedItems.includes(match) && !historyItems.includes(match)) {
+          historyItems.push(match);
+        }
       }
     }
   }
@@ -243,7 +271,7 @@ export async function gatherFacts(
     || missingLower.includes('time')
     || missingLower.includes('schedule');
 
-  const needsCompatibility = allRelevantItems.length >= 2;
+  const needsCompatibility = allRelevantItems.length >= 2 || classification.intent === 'equipment_question';
 
   const isEarlyStage = isFirstMessage || historyLength <= 6;
 
@@ -255,9 +283,9 @@ export async function gatherFacts(
   fetchPromises.push(
     (async () => {
       try {
-        facts.rules = classification.contextLevel === 'minimal'
+        facts.rules = (classification.contextLevel === 'minimal' || classification.complexity === 'low')
           ? await services.rulesService.getCompactRules()
-          : await services.rulesService.getFormattedRules();
+          : await services.rulesService.getFormattedRulesForIntent(classification.intent);
       } catch { facts.rules = ''; }
     })(),
   );
@@ -278,24 +306,73 @@ export async function gatherFacts(
     );
   }
 
-  // Pricing (on-demand)
+  // Availability — populate facts.availability so GROUND + CHECK can verify AI claims
+  // Pass rental.id to exclude the renter's own bookings from the count (prevents self-blocking)
+  if (needsInventory && allRelevantItems.length > 0 && rental?.start_date && rental?.end_date) {
+    fetchPromises.push(
+      (async () => {
+        try {
+          const items: import('./types').ItemAvailability[] = [];
+          for (const itemName of allRelevantItems) {
+            const result = await services.calendarService.checkAvailability(
+              itemName, new Date(rental.start_date!), new Date(rental.end_date!), rental?.id,
+            );
+            if (result.matchedItem) {
+              items.push({
+                item: result.matchedItem,
+                available: result.available,
+                booked: result.booked,
+                maxQuantity: result.maxQuantity,
+                availableFrom: result.availableFrom,
+                unavailableAfter: result.unavailableAfter,
+              });
+            }
+          }
+          if (items.length > 0) facts.availability = { items };
+        } catch (e) {
+          logger.warn('Availability check failed: ' + e);
+        }
+      })(),
+    );
+  }
+
+  // Pricing (on-demand) - prefer database prices over catalog
   if (needsPrice && allRelevantItems.length > 0) {
     fetchPromises.push(
       (async () => {
         try {
           const itemPrices: ItemPricing[] = [];
+          
+          // First try to get prices from database (actual Hygglo listing prices)
+          const dbPrices = await getPricesWithDbPreference(services.prisma, allRelevantItems);
+          
           for (const item of allRelevantItems) {
-            const entry = getItemPrice(item);
-            if (entry) {
+            const dbPrice = dbPrices.get(item);
+            if (dbPrice) {
+              // Use database price
               itemPrices.push({
-                itemName: entry.item_name,
-                dailyMin: entry.daily_price_min,
-                dailyMax: entry.daily_price_max,
-                renterPays: entry.daily_price_max,
+                itemName: item,
+                dailyMin: dbPrice.daily_price,
+                dailyMax: dbPrice.daily_price,
+                renterPays: dbPrice.daily_price,
+                source: dbPrice.source,
               });
+            } else {
+              // Fall back to catalog price
+              const entry = getItemPrice(item);
+              if (entry) {
+                itemPrices.push({
+                  itemName: entry.item_name,
+                  dailyMin: entry.daily_price_min,
+                  dailyMax: entry.daily_price_max,
+                  renterPays: entry.daily_price_max,
+                  source: 'catalog' as const,
+                });
+              }
             }
           }
-          // Also get bundle prices
+          
+          // Also get bundle prices from catalog (bundles aren't in DB as single items)
           const bundlePrices: ItemPricing[] = [];
           for (const entry of PRICING_CATALOG) {
             if (entry.is_bundle && entry.bundle_items?.some((bi: string) =>
@@ -306,13 +383,15 @@ export async function gatherFacts(
                 dailyMin: entry.daily_price_min,
                 dailyMax: entry.daily_price_max,
                 renterPays: entry.daily_price_max,
+                source: 'catalog' as const,
               });
             }
           }
+          
           facts.pricing = {
             itemPrices,
             bundlePrices: bundlePrices.length > 0 ? bundlePrices : undefined,
-            multiDayNote: 'Multi-day: 3d ~2.5x, 7d ~5x daily rate.',
+            multiDayNote: 'Multi-day discounts: 3 days = 2.5x daily rate, 7+ days = 5x daily rate. All other durations (1,2,4,5,6 days) = full daily rate × days. Database prices preferred over catalog.',
           };
         } catch { /* non-critical */ }
       })(),
@@ -471,7 +550,7 @@ export async function gatherFacts(
       (async () => {
         try {
           const statusLower = (rental.status || '').toLowerCase();
-          const isAccepted = ['upcoming', 'ongoing', 'completed'].some(s => statusLower.includes(s));
+          const isAccepted = ['pending', 'upcoming', 'ongoing', 'completed'].some(s => statusLower.includes(s));
           if (!isAccepted) {
             const validation = validateListingItems(rental.title);
             const listingQty = extractListingQuantity(rental.title);
@@ -498,7 +577,16 @@ export async function gatherFacts(
 
     // Verified listing item context — reuse resolvedItems (already fetched above, no extra DB call)
     if (resolvedItems.length > 0) {
-      facts.verifiedListingItem = `Actual item(s): ${resolvedItems.join(', ')}. Ignore SEO keywords in listing title.`;
+      if (brandMismatchWarning) {
+        // Cross-brand mismatch: override listing context with strong warning
+        facts.verifiedListingItem = brandMismatchWarning;
+        // Also override listingInventoryContext if not already set
+        if (!facts.listingInventoryContext) {
+          facts.listingInventoryContext = brandMismatchWarning;
+        }
+      } else {
+        facts.verifiedListingItem = `Actual item(s): ${resolvedItems.join(', ')}. Ignore SEO keywords in listing title.`;
+      }
     }
 
     // Renter profile — cross-rental memory for returning renters
@@ -522,12 +610,43 @@ export async function gatherFacts(
 
   // Conversation history — smart truncation with AI summary (preferred) or regex fallback
   if (conversationHistory.length > 0) {
-    if (conversationHistory.length <= 10) {
-      facts.conversationHistory = conversationHistory;
+    // Compress long assistant messages to key-fact summaries before truncation.
+    // A 400-token bot response becomes ~80 tokens of key facts, fitting more turns in fewer tokens.
+    const compressedHistory = conversationHistory.map(m => {
+      if (m.role === 'assistant' && m.content.length > 300) {
+        const kf: string[] = [];
+        const prices = m.content.match(/\u00a3\d[\d,]*(?:\.\d{2})?/g);
+        if (prices) kf.push(prices.join(', '));
+        const avail = m.content.match(/[^.!?]*\b(?:available|unavailable|out of stock|not available|booked)\b[^.!?]*/i);
+        if (avail) kf.push(avail[0].trim().substring(0, 80));
+        const logistics = m.content.match(/[^.!?]*\b(?:pickup|deliver|collect|return|morning|evening|\d{1,2}(?:am|pm))\b[^.!?]*/i);
+        if (logistics) kf.push(logistics[0].trim().substring(0, 80));
+        const firstLine = m.content.split(/[.!?\n]/)[0]?.trim() || '';
+        return { role: m.role, content: '[' + firstLine.substring(0, 60) + (kf.length ? '. ' + kf.join('. ') : '') + ']' };
+      }
+      return m;
+    });
+
+    // Token budget: keep messages within ~2000 tokens (8000 chars)
+    const HISTORY_CHAR_BUDGET = 8000;
+    let charCount = 0;
+    const budgeted: typeof compressedHistory = [];
+    if (compressedHistory.length >= 2) {
+      budgeted.push(compressedHistory[0], compressedHistory[1]);
+      charCount = compressedHistory[0].content.length + compressedHistory[1].content.length;
+    }
+    for (let i = compressedHistory.length - 1; i >= 2; i--) {
+      if (charCount + compressedHistory[i].content.length > HISTORY_CHAR_BUDGET) break;
+      budgeted.splice(2, 0, compressedHistory[i]);
+      charCount += compressedHistory[i].content.length;
+    }
+
+    if (budgeted.length <= 8) {
+      facts.conversationHistory = budgeted;
     } else {
-      const first2 = conversationHistory.slice(0, 2);
-      const last8 = conversationHistory.slice(-8);
-      const droppedMessages = conversationHistory.slice(2, -8);
+      const first2 = budgeted.slice(0, 2);
+      const last8 = budgeted.slice(-4);
+      const droppedMessages = budgeted.slice(2, -4);
 
       // Prefer AI-built summary from DB (zero extra AI cost, better quality)
       let summaryText: string | null = null;

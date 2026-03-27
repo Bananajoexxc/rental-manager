@@ -249,10 +249,10 @@ export class LostRevenueService {
 
         // Calculate rental days
         const msPerDay = 86400000;
-        let rentalDays = Math.max(1, Math.round((rental.endDate.getTime() - rental.startDate.getTime()) / msPerDay));
+        let rentalDays = Math.max(1, Math.round((rental.endDate.getTime() - rental.startDate.getTime()) / msPerDay) + 1);
 
         // Determine blocked and unmatched items
-        const blockedItems = itemsAnalysis.filter(i => i.blocked).map(i => i.matched!);
+        const blockedItems = itemsAnalysis.filter(i => i.blocked && i.matched !== null).map(i => i.matched!).filter((x): x is string => x !== null && x !== undefined);
         const unmatchedItems = itemsAnalysis.filter(i => !i.matched).map(i => i.item);
         const stockBlocked = blockedItems.length > 0;
 
@@ -389,7 +389,7 @@ export class LostRevenueService {
       const matched = findBestMatch(item.name, inventoryNames);
       const maxQty = matched ? (MASTER_INVENTORY[matched] || 1) : 0;
       const bookedQty = matched ? (bookedByItem.get(matched) || 0) : 0;
-      const blocked = bookedQty >= maxQty;
+      const blocked = matched !== null && bookedQty >= maxQty;
 
       results.push({ item: item.name, matched, blocked, bookedQty, maxQty });
     }
@@ -861,7 +861,462 @@ export class LostRevenueService {
   /**
    * Build a context string for the dashboard AI with all revenue intelligence.
    */
-  async buildAIContext(): Promise<string> {
+  // ─── BUSINESS INTELLIGENCE ANALYTICS ─────────────────────────────────
+
+  /**
+   * Time gap analysis: demand by hour vs opening hours (10am-12pm, 7pm-9pm).
+   * Shows what revenue is lost because renters want times outside your availability.
+   */
+  async getTimeGapAnalysis(): Promise<{
+    demandByHour: { hour: number; count: number; revenue: number; isOpeningHour: boolean }[];
+    openingHourRevenue: number;
+    outsideHourRevenue: number;
+    outsideHourCount: number;
+    timeoutRevenue: number;
+    timeoutCount: number;
+    peakDemandHours: number[];
+    recommendation: string;
+  }> {
+    const OPENING_HOURS = [10, 11, 19, 20]; // 10am-12pm, 7pm-9pm
+
+    // Distribution of confirmed booking pickup times by hour
+    const pickupHours: any[] = await this.prisma.$queryRaw`
+      SELECT EXTRACT(HOUR FROM pickup_time::time)::int as hour,
+             COUNT(*)::int as count,
+             COALESCE(SUM(revenue), 0)::float as revenue
+      FROM booking
+      WHERE pickup_time IS NOT NULL
+        AND status IN ('confirmed', 'completed')
+        AND created_at > NOW() - INTERVAL '6 months'
+      GROUP BY EXTRACT(HOUR FROM pickup_time::time)
+      ORDER BY hour
+    `;
+
+    // Timeouts — requests that expired (some from time mismatches)
+    const timeouts = await this.prisma.lost_revenue_record.aggregate({
+      where: {
+        denial_type: 'timeout',
+        synced_at: { gte: new Date(Date.now() - 180 * 86400000) },
+        estimated_price: { gte: MIN_REVENUE_THRESHOLD },
+      },
+      _count: true,
+      _sum: { estimated_price: true },
+    });
+
+    const demandByHour = [];
+    let openingHourRevenue = 0;
+    let outsideHourRevenue = 0;
+    let outsideHourCount = 0;
+
+    for (let h = 7; h <= 22; h++) {
+      const entry = pickupHours.find(p => p.hour === h);
+      const count = entry?.count || 0;
+      const revenue = Math.round((entry?.revenue || 0) * 100) / 100;
+      const isOpeningHour = OPENING_HOURS.includes(h);
+
+      demandByHour.push({ hour: h, count, revenue, isOpeningHour });
+
+      if (isOpeningHour) openingHourRevenue += revenue;
+      else outsideHourRevenue += revenue;
+      if (!isOpeningHour) outsideHourCount += count;
+    }
+
+    // Find peak demand hours (top 3 by count)
+    const sorted = [...demandByHour].sort((a, b) => b.count - a.count);
+    const peakDemandHours = sorted.slice(0, 3).map(d => d.hour);
+
+    // Generate recommendation
+    const outsidePct = openingHourRevenue + outsideHourRevenue > 0
+      ? Math.round(outsideHourRevenue / (openingHourRevenue + outsideHourRevenue) * 100)
+      : 0;
+
+    let recommendation = '';
+    if (outsidePct > 30) {
+      const peakStr = peakDemandHours.filter(h => !OPENING_HOURS.includes(h)).map(h => `${h}:00`).join(', ');
+      recommendation = `${outsidePct}% of booking revenue comes from outside opening hours. Consider extending to cover peak demand at ${peakStr}.`;
+    } else if (outsidePct > 15) {
+      recommendation = `${outsidePct}% of revenue from outside opening hours. Worth monitoring — potential to capture more with flexible scheduling.`;
+    } else {
+      recommendation = `Current opening hours capture ${100 - outsidePct}% of demand. Schedule is well-optimized.`;
+    }
+
+    return {
+      demandByHour,
+      openingHourRevenue: Math.round(openingHourRevenue),
+      outsideHourRevenue: Math.round(outsideHourRevenue),
+      outsideHourCount,
+      timeoutRevenue: Math.round(timeouts._sum.estimated_price || 0),
+      timeoutCount: timeouts._count || 0,
+      peakDemandHours,
+      recommendation,
+    };
+  }
+
+  /**
+   * Substitution analysis: items that were requested but the renter ended up renting something else.
+   * Shows which items drive demand even when unavailable — they act as "gateway" items.
+   */
+  async getSubstitutionAnalysis(period: string = '6m'): Promise<{
+    substitutions: {
+      requestedItem: string;
+      actualItem: string;
+      count: number;
+      requestedRevenue: number;
+      actualRevenue: number;
+      conversionRate: string;
+    }[];
+    topRequestedNotOwned: { item: string; requests: number; revenue: number }[];
+    totalSubstitutedRevenue: number;
+  }> {
+    const { start } = this.getFlexiblePeriodRange(period);
+
+    // Find cases where a renter had a denied/unavailable request BUT also has a completed rental nearby
+    const sixMonthsAgoSub = start || new Date(Date.now() - 180 * 86400000);
+    const subs: any[] = await this.prisma.$queryRaw`
+      SELECT lr.title as requested_listing,
+             lr.items_requested,
+             lr.blocked_items,
+             lr.unmatched_items,
+             lr.estimated_price as requested_price,
+             lr.denial_type,
+             r.title as actual_rental_title,
+             r.parsed_items,
+             r.rental_price as actual_price,
+             r.renter_info
+      FROM lost_revenue_record lr
+      JOIN rental r ON LOWER(TRIM(r.renter_info)) = LOWER(TRIM(lr.renter_info))
+        AND r.status IN ('completed', 'ongoing', 'upcoming')
+        AND ABS(EXTRACT(EPOCH FROM r.start_date - lr.start_date)) < 14 * 86400
+      WHERE lr.denial_type IN ('unavailable', 'owner_denied', 'timeout')
+        AND lr.estimated_price >= ${MIN_REVENUE_THRESHOLD}
+        AND lr.synced_at >= ${sixMonthsAgoSub}
+      ORDER BY lr.synced_at DESC
+      LIMIT 200
+    `;
+
+    // Build substitution pairs
+    const subMap = new Map<string, { count: number; requestedRevenue: number; actualRevenue: number }>();
+    let totalSubstitutedRevenue = 0;
+
+    for (const row of subs) {
+      const requestedItems = row.blocked_items?.length > 0
+        ? row.blocked_items
+        : (row.unmatched_items?.length > 0 ? row.unmatched_items : [normalizeItemTitle(row.requested_listing)]);
+      const actualItems = (row.parsed_items as any[])?.map((p: any) => p.item) || [normalizeItemTitle(row.actual_rental_title)];
+
+      for (const req of requestedItems) {
+        for (const act of actualItems) {
+          if (req.toLowerCase() === act.toLowerCase()) continue; // Same item, not a substitution
+          const key = `${req}|||${act}`;
+          const existing = subMap.get(key) || { count: 0, requestedRevenue: 0, actualRevenue: 0 };
+          existing.count++;
+          existing.requestedRevenue += (row.requested_price || 0) / Math.max(requestedItems.length, 1);
+          existing.actualRevenue += (row.actual_price || 0) / Math.max(actualItems.length, 1);
+          subMap.set(key, existing);
+          totalSubstitutedRevenue += (row.actual_price || 0) / Math.max(actualItems.length, 1);
+        }
+      }
+    }
+
+    const substitutions = Array.from(subMap.entries())
+      .map(([key, data]) => {
+        const [requestedItem, actualItem] = key.split('|||');
+        return {
+          requestedItem,
+          actualItem,
+          count: data.count,
+          requestedRevenue: Math.round(data.requestedRevenue),
+          actualRevenue: Math.round(data.actualRevenue),
+          conversionRate: data.count > 0 ? `${Math.round(data.actualRevenue / Math.max(data.requestedRevenue, 1) * 100)}%` : '0%',
+        };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
+
+    // Top requested items not in inventory
+    const notOwned = new Map<string, { requests: number; revenue: number }>();
+    for (const row of subs) {
+      const unmatchedItems = row.unmatched_items || [];
+      for (const item of unmatchedItems) {
+        const existing = notOwned.get(item) || { requests: 0, revenue: 0 };
+        existing.requests++;
+        existing.revenue += (row.requested_price || 0) / Math.max(unmatchedItems.length, 1);
+        notOwned.set(item, existing);
+      }
+    }
+    const topRequestedNotOwned = Array.from(notOwned.entries())
+      .map(([item, data]) => ({ item, ...data, revenue: Math.round(data.revenue) }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    return { substitutions, topRequestedNotOwned, totalSubstitutedRevenue: Math.round(totalSubstitutedRevenue) };
+  }
+
+  /**
+   * Marketing-only demand: items listed for SEO/visibility that renters actually requested.
+   * Shows which marketing items should be purchased based on real demand signals.
+   */
+  async getMarketingOnlyDemand(period: string = '6m'): Promise<{
+    items: {
+      item: string;
+      requestCount: number;
+      estimatedRevenue: number;
+      avgRentalDays: number;
+      dailyPrice: number | null;
+      monthlyPotential: number;
+      buyRecommendation: 'strong' | 'moderate' | 'watch';
+    }[];
+    totalPotentialRevenue: number;
+  }> {
+    const { start } = this.getFlexiblePeriodRange(period);
+    const marketingItems = PRICING_CATALOG.filter(p => p.marketing_only).map(p => p.item_name.toLowerCase());
+
+    if (marketingItems.length === 0) return { items: [], totalPotentialRevenue: 0 };
+
+    // Get all lost revenue records in period
+    const where: any = { estimated_price: { gte: MIN_REVENUE_THRESHOLD } };
+    if (start) where.synced_at = { gte: start };
+
+    const records = await this.prisma.lost_revenue_record.findMany({ where });
+
+    // Match requested items against marketing-only list
+    const demand = new Map<string, { count: number; revenue: number; totalDays: number }>();
+
+    for (const record of records) {
+      const requestedItems = record.items_requested as any[];
+      if (!requestedItems) continue;
+
+      for (const item of requestedItems) {
+        const itemName = typeof item === 'string' ? item : item?.item || item?.name || '';
+        const normalized = itemName.toLowerCase().trim();
+        // Check if this matches a marketing-only item
+        const match = marketingItems.find(m =>
+          normalized.includes(m) || m.includes(normalized) ||
+          findBestMatch(itemName, PRICING_CATALOG.filter(p => p.marketing_only).map(p => p.item_name))
+        );
+
+        if (match) {
+          const catalogItem = PRICING_CATALOG.find(p => p.item_name.toLowerCase() === match);
+          const realName = catalogItem?.item_name || itemName;
+          const existing = demand.get(realName) || { count: 0, revenue: 0, totalDays: 0 };
+          existing.count++;
+          existing.revenue += record.estimated_price || 0;
+          const days = record.start_date && record.end_date
+            ? Math.max(1, Math.round((record.end_date.getTime() - record.start_date.getTime()) / 86400000) + 1)
+            : 1;
+          existing.totalDays += days;
+          demand.set(realName, existing);
+        }
+      }
+    }
+
+    // Also check rentals that matched marketing items (renter requested, we couldn't fulfill)
+    // These show up as rentals with status 'obsolete' or 'cancelled'
+    const cancelledWithMarketing: any[] = await this.prisma.$queryRaw`
+      SELECT title, COUNT(*)::int as count, SUM(COALESCE(rental_price, 0))::float as revenue,
+             AVG(EXTRACT(EPOCH FROM (end_date - start_date)) / 86400 + 1)::float as avg_days
+      FROM rental
+      WHERE status IN ('obsolete', 'cancelled', 'consolidated')
+        AND created_at > NOW() - INTERVAL '6 months'
+      GROUP BY title
+    `;
+
+    for (const row of cancelledWithMarketing) {
+      const title = row.title || '';
+      const match = marketingItems.find(m => title.toLowerCase().includes(m));
+      if (match) {
+        const catalogItem = PRICING_CATALOG.find(p => p.item_name.toLowerCase() === match);
+        const realName = catalogItem?.item_name || title;
+        const existing = demand.get(realName) || { count: 0, revenue: 0, totalDays: 0 };
+        existing.count += row.count;
+        existing.revenue += row.revenue;
+        existing.totalDays += (row.avg_days || 1) * row.count;
+        demand.set(realName, existing);
+      }
+    }
+
+    const periodMonths = 6;
+    let totalPotentialRevenue = 0;
+
+    const items = Array.from(demand.entries())
+      .map(([item, data]) => {
+        const dailyPrice = getOneDayPrice(item);
+        const avgRentalDays = data.count > 0 ? Math.round(data.totalDays / data.count * 10) / 10 : 1;
+        // Monthly potential = (requests/month) * avgDays * dailyPrice * 0.64 (owner share)
+        const requestsPerMonth = data.count / periodMonths;
+        const monthlyPotential = Math.round(requestsPerMonth * avgRentalDays * (dailyPrice || 25) * 0.64);
+
+        totalPotentialRevenue += data.revenue * 0.64; // Owner share estimate
+
+        return {
+          item,
+          requestCount: data.count,
+          estimatedRevenue: Math.round(data.revenue * 0.64),
+          avgRentalDays,
+          dailyPrice,
+          monthlyPotential,
+          buyRecommendation: (monthlyPotential >= 80 ? 'strong' : monthlyPotential >= 30 ? 'moderate' : 'watch') as 'strong' | 'moderate' | 'watch',
+        };
+      })
+      .sort((a, b) => b.monthlyPotential - a.monthlyPotential);
+
+    return { items, totalPotentialRevenue: Math.round(totalPotentialRevenue) };
+  }
+
+  /**
+   * Enhanced purchase recommendations: aggregates ALL business intelligence signals.
+   * Scores items for buying based on: earned revenue, lost revenue, demand frequency,
+   * marketing-only demand, substitution patterns, time gap impact, and utilization.
+   */
+  async getPurchaseRecommendations(): Promise<{
+    buyNow: { item: string; score: number; reason: string; monthlyRevenuePotential: number; estimatedROI: string }[];
+    expandStock: { item: string; score: number; reason: string; currentStock: number; blockedRevenue: number }[];
+    convertMarketing: { item: string; score: number; reason: string; monthlyPotential: number; requestCount: number }[];
+    summary: string;
+  }> {
+    const [potential, marketingDemand, timeGap] = await Promise.all([
+      this.getRevenuePotential('6m'),
+      this.getMarketingOnlyDemand('6m'),
+      this.getTimeGapAnalysis(),
+    ]);
+
+    // BUY NOW: Items not in inventory but with proven demand
+    const buyNow = potential
+      .filter(p => p.currentStock === 0 && p.lostRevenue > 50)
+      .map(p => ({
+        item: p.item,
+        score: p.confidenceScore,
+        reason: `${p.deniedRequests} denied requests, £${p.lostRevenue} lost revenue in 6 months`,
+        monthlyRevenuePotential: Math.round(p.lostRevenue / 6),
+        estimatedROI: p.dailyPrice ? `${Math.round(p.lostRevenue / (p.dailyPrice * 30) * 100)}% over purchase cost` : 'N/A',
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    // EXPAND STOCK: Items we own but are frequently stock-blocked
+    const expandStock = potential
+      .filter(p => p.currentStock > 0 && p.lostRevenue > 30 && p.utilization > 40)
+      .map(p => ({
+        item: p.item,
+        score: p.confidenceScore,
+        reason: `${p.utilization}% utilized, ${p.deniedRequests} blocked requests, earning £${p.revenuePerUnit}/unit/month`,
+        currentStock: p.currentStock,
+        blockedRevenue: Math.round(p.lostRevenue),
+      }))
+      .sort((a, b) => b.blockedRevenue - a.blockedRevenue)
+      .slice(0, 10);
+
+    // CONVERT MARKETING: Marketing-only items with real demand
+    const convertMarketing = marketingDemand.items
+      .filter(m => m.requestCount >= 2)
+      .map(m => ({
+        item: m.item,
+        score: m.buyRecommendation === 'strong' ? 90 : m.buyRecommendation === 'moderate' ? 60 : 30,
+        reason: `${m.requestCount} rental requests, £${m.estimatedRevenue} potential revenue`,
+        monthlyPotential: m.monthlyPotential,
+        requestCount: m.requestCount,
+      }))
+      .slice(0, 10);
+
+    // Summary
+    const totalBuyRevenue = buyNow.reduce((s, b) => s + b.monthlyRevenuePotential, 0);
+    const totalExpandRevenue = expandStock.reduce((s, e) => s + e.blockedRevenue, 0);
+    const totalMarketingRevenue = convertMarketing.reduce((s, m) => s + m.monthlyPotential, 0);
+
+    const summary = [
+      `Purchase recommendations based on 6-month data analysis:`,
+      buyNow.length > 0 ? `- ${buyNow.length} items to BUY (£${totalBuyRevenue}/month potential)` : null,
+      expandStock.length > 0 ? `- ${expandStock.length} items to EXPAND stock (£${totalExpandRevenue} blocked revenue)` : null,
+      convertMarketing.length > 0 ? `- ${convertMarketing.length} marketing items to CONVERT to real stock (£${totalMarketingRevenue}/month potential)` : null,
+      timeGap.outsideHourRevenue > 0 ? `- Time gap: £${timeGap.outsideHourRevenue} earned outside opening hours (${timeGap.recommendation})` : null,
+    ].filter(Boolean).join('\n');
+
+    return { buyNow, expandStock, convertMarketing, summary };
+  }
+
+  /**
+   * Build comprehensive BI context for the dashboard AI assistant.
+   * Includes all advanced metrics for intelligent business recommendations.
+   */
+  async buildBIContext(): Promise<string> {
+    const parts: string[] = [];
+
+    try {
+      const recs = await this.getPurchaseRecommendations();
+      parts.push('=== PURCHASE RECOMMENDATIONS ===');
+      parts.push(recs.summary);
+
+      if (recs.buyNow.length > 0) {
+        parts.push('\nBUY NOW (items not in stock with proven demand):');
+        for (const b of recs.buyNow) {
+          parts.push(`- ${b.item}: score ${b.score}, £${b.monthlyRevenuePotential}/month potential. ${b.reason}`);
+        }
+      }
+      if (recs.expandStock.length > 0) {
+        parts.push('\nEXPAND STOCK (own but frequently blocked):');
+        for (const e of recs.expandStock) {
+          parts.push(`- ${e.item}: stock ${e.currentStock}, £${e.blockedRevenue} blocked. ${e.reason}`);
+        }
+      }
+      if (recs.convertMarketing.length > 0) {
+        parts.push('\nCONVERT MARKETING TO REAL STOCK:');
+        for (const m of recs.convertMarketing) {
+          parts.push(`- ${m.item}: ${m.requestCount} requests, £${m.monthlyPotential}/month potential. ${m.reason}`);
+        }
+      }
+    } catch (e) {
+      this.logger.debug(`BI purchase recommendations failed: ${e.message}`);
+    }
+
+    try {
+      const timeGap = await this.getTimeGapAnalysis();
+      parts.push('\n=== TIME GAP ANALYSIS ===');
+      parts.push(`Opening hours revenue: £${timeGap.openingHourRevenue} | Outside hours: £${timeGap.outsideHourRevenue}`);
+      parts.push(`Timed-out requests: ${timeGap.timeoutCount} (£${timeGap.timeoutRevenue} potential)`);
+      parts.push(`Peak demand hours: ${timeGap.peakDemandHours.map(h => h + ':00').join(', ')}`);
+      parts.push(timeGap.recommendation);
+    } catch (e) {
+      this.logger.debug(`BI time gap analysis failed: ${e.message}`);
+    }
+
+    try {
+      const subs = await this.getSubstitutionAnalysis('6m');
+      if (subs.substitutions.length > 0) {
+        parts.push('\n=== SUBSTITUTION PATTERNS ===');
+        parts.push(`Total revenue from substituted items: £${subs.totalSubstitutedRevenue}`);
+        for (const s of subs.substitutions.slice(0, 10)) {
+          parts.push(`- Requested "${s.requestedItem}" → rented "${s.actualItem}" (${s.count}x, ${s.conversionRate} revenue capture)`);
+        }
+      }
+      if (subs.topRequestedNotOwned.length > 0) {
+        parts.push('\nTOP REQUESTED ITEMS NOT IN INVENTORY:');
+        for (const t of subs.topRequestedNotOwned.slice(0, 5)) {
+          parts.push(`- "${t.item}": ${t.requests} requests, £${t.revenue} lost`);
+        }
+      }
+    } catch (e) {
+      this.logger.debug(`BI substitution analysis failed: ${e.message}`);
+    }
+
+    try {
+      const marketing = await this.getMarketingOnlyDemand('6m');
+      if (marketing.items.length > 0) {
+        parts.push('\n=== MARKETING-ONLY ITEMS WITH REAL DEMAND ===');
+        parts.push(`Total potential if converted: £${marketing.totalPotentialRevenue}`);
+        for (const m of marketing.items.slice(0, 10)) {
+          const signal = m.buyRecommendation === 'strong' ? '🟢 STRONG BUY' : m.buyRecommendation === 'moderate' ? '🟡 MODERATE' : '⚪ WATCH';
+          parts.push(`- ${m.item}: ${m.requestCount} requests, £${m.monthlyPotential}/month potential [${signal}]`);
+        }
+      }
+    } catch (e) {
+      this.logger.debug(`BI marketing demand failed: ${e.message}`);
+    }
+
+    return parts.join('\n');
+  }
+
+
+    async buildAIContext(): Promise<string> {
     const parts: string[] = [];
 
     // Denied revenue (owner didn't accept, 3m)
@@ -930,6 +1385,7 @@ export class LostRevenueService {
     item: string;
     totalStock: number;
     bookedUntil: string;
+    returnTime: string | null;
     currentRenters: string[];
     imageUrl?: string;
   }[]> {
@@ -938,7 +1394,7 @@ export class LostRevenueService {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const results: { item: string; totalStock: number; bookedUntil: string; currentRenters: string[]; imageUrl?: string }[] = [];
+    const results: { item: string; totalStock: number; bookedUntil: string; returnTime: string | null; currentRenters: string[]; imageUrl?: string }[] = [];
 
     for (const [item, maxQty] of Object.entries(MASTER_INVENTORY)) {
       if (maxQty <= 0) continue;
@@ -949,9 +1405,9 @@ export class LostRevenueService {
           item_name: item,
           status: 'confirmed',
           start_date: { lt: tomorrow },
-          end_date: { gt: today },
+          end_date: { gte: today },
         },
-        select: { quantity: true, end_date: true, renter_name: true, rental_id: true },
+        select: { quantity: true, end_date: true, return_time: true, renter_name: true, rental_id: true },
       });
 
       const bookedQty = overlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
@@ -961,32 +1417,114 @@ export class LostRevenueService {
           b.end_date < min ? b.end_date : min, overlapping[0].end_date);
         const renters = [...new Set(overlapping.map(b => b.renter_name).filter(Boolean))];
 
-        // Get item image from the first booking's rental photos
+        // Get item image — prefer item's own individual listing photo over bundle photo
         let imageUrl: string | undefined;
+        // First try: find a rental where this item is the ONLY parsed item (= dedicated listing)
         const rentalIds = [...new Set(overlapping.map(b => b.rental_id).filter((id): id is string => !!id))];
         if (rentalIds.length > 0) {
-          const rental = await this.prisma.rental.findFirst({
+          const rentals = await this.prisma.rental.findMany({
             where: { id: { in: rentalIds }, photos_urls: { isEmpty: false } },
-            select: { photos_urls: true },
+            select: { photos_urls: true, parsed_items: true },
           });
-          if (rental && rental.photos_urls.length > 0) {
-            // Filter to product photos only (exclude renter profile avatars which contain /profiles/)
+          // Prefer rental with fewest parsed_items (closest to a single-item listing)
+          const sorted = rentals
+            .filter(r => r.photos_urls.length > 0 && ((r.parsed_items as any[])?.length || 99) <= 3)
+            .sort((a, b) => ((a.parsed_items as any[])?.length || 99) - ((b.parsed_items as any[])?.length || 99));
+          for (const rental of sorted) {
             const productPhoto = rental.photos_urls.find(u => u.includes('/products/'));
-            if (productPhoto) imageUrl = productPhoto;
+            // Only use this photo if the URL or rental data suggests it's actually this item
+            // Avoid showing FX3 bundle photo for an A7 III booking
+            const itemShort = item.replace(/Sony |Canon |DJI /g, '').split(' ')[0].toLowerCase();
+            const photoUrl = (productPhoto || '').toLowerCase();
+            const isRelevantPhoto = photoUrl.includes(itemShort) || !photoUrl.includes('fx') || itemShort.includes('fx');
+            if (productPhoto && isRelevantPhoto) { imageUrl = productPhoto; break; }
           }
         }
+        // Fallback: try to find image from any rental that has this item as a standalone listing
+        if (!imageUrl) {
+          const standaloneRental = await this.prisma.rental.findFirst({
+            where: {
+              photos_urls: { isEmpty: false },
+              title: { contains: item.split(' ').slice(0, 2).join(' '), mode: 'insensitive' },
+            },
+            select: { photos_urls: true, parsed_items: true },
+            orderBy: { created_at: 'desc' },
+          });
+          if (standaloneRental) {
+            const pi = (standaloneRental.parsed_items as any[]) || [];
+            if (pi.length <= 2 && !standaloneRental.photos_urls[0]?.toLowerCase().includes("fx")) {
+              const photo = standaloneRental.photos_urls.find(u => u.includes('/products/'));
+              if (photo) imageUrl = photo;
+            }
+          }
+        }
+
+        // Get return_time for the earliest-ending booking
+        const earliestBooking = overlapping.find(b => b.end_date.getTime() === earliestEnd.getTime());
+        const returnTime = earliestBooking?.return_time || null;
 
         results.push({
           item,
           totalStock: maxQty,
           bookedUntil: earliestEnd.toISOString().split('T')[0],
+          returnTime,
           currentRenters: renters,
           imageUrl,
         });
       }
     }
 
-    return results.sort((a, b) => a.bookedUntil.localeCompare(b.bookedUntil));
+    // Merge items into sets only when they share a common prefix (2+ words) AND same renters
+    // e.g. 4 "Anamorphic Blazar Remus *" lenses -> "Anamorphic Blazar Remus set (4)"
+    // Individual items (Camera flash, DJI Wireless Mics, etc.) stay separate
+    const merged: typeof results = [];
+    const used = new Set<number>();
+
+    for (let i = 0; i < results.length; i++) {
+      if (used.has(i)) continue;
+      const r = results[i];
+      const renterKey = r.currentRenters.sort().join(',');
+      const words = r.item.split(' ');
+
+      // Try to find other items with same renters and a shared 2+ word prefix
+      if (words.length >= 2) {
+        const prefix2 = words.slice(0, 2).join(' ');
+        const group = [i];
+        for (let j = i + 1; j < results.length; j++) {
+          if (used.has(j)) continue;
+          const other = results[j];
+          const otherKey = other.currentRenters.sort().join(',');
+          if (otherKey === renterKey && other.item.startsWith(prefix2)) {
+            group.push(j);
+          }
+        }
+        if (group.length > 1) {
+          // Find longest common prefix
+          const groupItems = group.map(idx => results[idx]);
+          const names = groupItems.map(g => g.item);
+          const w0 = names[0].split(' ');
+          let prefix = '';
+          for (let k = 0; k < w0.length; k++) {
+            if (names.every(n => n.split(' ')[k] === w0[k])) {
+              prefix += (prefix ? ' ' : '') + w0[k];
+            } else break;
+          }
+          for (const idx of group) used.add(idx);
+          merged.push({
+            item: prefix + ' set (' + group.length + ')',
+            totalStock: groupItems.reduce((s, g) => s + g.totalStock, 0),
+            bookedUntil: groupItems.reduce((latest, g) => g.bookedUntil > latest ? g.bookedUntil : latest, groupItems[0].bookedUntil),
+            returnTime: groupItems[0].returnTime,
+            currentRenters: r.currentRenters,
+            imageUrl: groupItems.find(g => g.imageUrl)?.imageUrl,
+          });
+          continue;
+        }
+      }
+      merged.push(r);
+    }
+
+    return merged.sort((a, b) => a.bookedUntil.localeCompare(b.bookedUntil));
   }
 
   // ────────────── CRON ──────────────
@@ -1157,7 +1695,7 @@ export class LostRevenueService {
     }
 
     let monthsBack = 3;
-    if (period === 'month') monthsBack = 1;
+    if (period === 'month' || period === '1m') monthsBack = 1;
     else if (period === '3m') monthsBack = 3;
     else if (period === '6m') monthsBack = 6;
     else if (period === '12m') monthsBack = 12;

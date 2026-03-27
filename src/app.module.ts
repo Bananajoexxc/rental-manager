@@ -44,6 +44,8 @@ import { PipelineModule } from './pipeline/pipeline.module';
 import { ContentionModule } from './contention/contention.module';
 import { ListingCreatorModule } from './listing-creator/listing-creator.module';
 import { ConversationArchiveModule } from './conversation-archive/conversation-archive.module';
+import { WinbackModule } from './winback/winback.module';
+import { ItemResolverModule } from "./item-resolver/item-resolver.module";
 
 @Module({
   imports: [
@@ -92,6 +94,8 @@ import { ConversationArchiveModule } from './conversation-archive/conversation-a
     ContentionModule,
     ListingCreatorModule,
     ConversationArchiveModule,
+    WinbackModule,
+    ItemResolverModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -12,8 +12,9 @@ import { FollowUpService } from '../follow-up/follow-up.service';
 import { VerificationService } from '../verification/verification.service';
 import { TitleParserService } from '../revenue/title-parser.service';
 import { ContentionService } from '../contention/contention.service';
+import { ItemResolverService } from '../item-resolver/item-resolver.service';
 import { DiagnosticService } from '../monitoring/diagnostic.service';
-import { findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
+import { detectBrandMismatch } from '../utils/item-matcher';
 
 @Injectable()
 export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
@@ -50,6 +51,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     private verificationService: VerificationService,
     @Optional() @Inject(forwardRef(() => TitleParserService)) private titleParserService: TitleParserService,
     private contentionService: ContentionService,
+    private itemResolverService: ItemResolverService,
     @Optional() private diagnosticService?: DiagnosticService,
   ) {
     // Load configuration from environment variables
@@ -79,6 +81,32 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (e) {
       this.logger.debug(`Failed to restore backfill failures: ${e.message}`);
+    }
+
+    // POST-RESTART DEDUP SEED: Restore lastMessageCheckTime from DB so the first scan
+    // after a restart doesn't re-process messages that were already handled.
+    // Prevents duplicate AI decisions when a service restart happens within the startup window.
+    try {
+      const recentDecisions = await this.prisma.ai_decision.findMany({
+        where: {
+          decision_type: 'message',
+          created_at: { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) }, // last 2 hours
+        },
+        include: { rental: { select: { listing_id: true } } },
+        orderBy: { created_at: 'desc' },
+      });
+      let seeded = 0;
+      for (const decision of recentDecisions) {
+        if (decision.rental?.listing_id) {
+          this.hyggloService.seedLastCheckTime(decision.rental.listing_id, decision.created_at.getTime());
+          seeded++;
+        }
+      }
+      if (seeded > 0) {
+        this.logger.log(`Seeded lastMessageCheckTime for ${seeded} rental(s) from DB — prevents post-restart duplicate processing`);
+      }
+    } catch (e) {
+      this.logger.debug(`Failed to seed lastMessageCheckTime from DB: ${e.message}`);
     }
 
     // Wait a bit before starting the scanner to allow other services to initialize
@@ -165,7 +193,7 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       // 90s timeout prevents scanner from hanging indefinitely on Hygglo API or processing
       await Promise.race([
         this.executeScanBody(scanStartTime),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Scan timeout (90s)')), 90_000)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Scan timeout (150s)')), 150_000)),
       ]);
     } catch (error) {
       this.logger.error('Error during scan: ' + error.message);
@@ -325,71 +353,107 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       // Auto-detect rentals completed on Hygglo (returned by owner outside our app)
       // If a rental is 'ongoing' in our DB but missing from the Hygglo active scan AND overdue,
       // it was returned on Hygglo directly. Mark as completed so it drops from the return hub.
-      try {
-        const scannedListingIds = new Set(allRentals.map(r => r.listingId));
+        // ── Rental lifecycle reconciliation ──
+        // Completes/cancels rentals that Hygglo no longer returns in scan results.
+        // IMPORTANT: Only the Hygglo scan promotes rentals (pending→upcoming→ongoing).
+        // This reconciliation only handles the END of lifecycle:
+        //   ongoing + RETURNED → completed (items returned, rental done)
+        //   ongoing + end_date passed + not in scan → completed
+        //   upcoming + end_date passed + not in scan → completed
+        //   pending + end_date passed → completed/cancelled based on order_step
+        const lifecycleNow = new Date();
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
+        const scannedListingIds = new Set(allRentals.map(r => r.listingId));
 
-        const missingOngoing = await this.prisma.rental.findMany({
+        // 1. Complete all RETURNED rentals (items returned = rental done, period)
+        const returnedRentals = await this.prisma.rental.findMany({
           where: {
-            status: 'ongoing',
-            end_date: { lt: todayStart }, // overdue — end date has passed
+            status: { in: ['ongoing', 'upcoming'] },
+            order_step: 'RETURNED',
           },
-          select: { id: true, listing_id: true, title: true, renter_info: true, account: true },
+          select: { id: true, renter_info: true, title: true, status: true, listing_id: true },
         });
-
-        // Only complete those missing from the Hygglo scan results
-        const toComplete = missingOngoing.filter(r => !scannedListingIds.has(r.listing_id));
-
-        for (const rental of toComplete) {
-          if (this.recentlyCompletedRentals.length >= 100) {
-            this.recentlyCompletedRentals.splice(0, this.recentlyCompletedRentals.length - 50);
-          }
-          this.recentlyCompletedRentals.push(rental);
-          this.logger.log(`✅ Auto-completing rental (returned on Hygglo): ${rental.title} [${rental.listing_id}]`);
+        let completed = 0, cancelled = 0;
+        for (const rental of returnedRentals) {
           await this.prisma.rental.update({
             where: { id: rental.id },
-            data: { status: 'completed' },
+            data: { status: 'completed', updated_at: new Date() },
           });
-          // Cascade to bookings
-          try {
-            await this.calendarService.cascadeRentalStatusToBookings(rental.id, 'completed', 'ongoing');
-            try { await this.contentionService.onRentalStatusChange(rental.id, 'completed'); } catch { /* non-critical */ }
-          } catch (err) {
-            this.logger.warn(`Cascade failed for auto-completed rental ${rental.id}: ${err.message}`);
-          }
+          try { await this.calendarService.cascadeRentalStatusToBookings(rental.id, 'completed', rental.status); } catch {}
+          try { await this.contentionService.onRentalStatusChange(rental.id, 'completed'); } catch {}
+          completed++;
+          this.logger.log(`Lifecycle: ${rental.renter_info || rental.title} ${rental.status}+RETURNED → completed`);
         }
 
-        if (toComplete.length > 0) {
-          this.logger.log(`✅ Auto-completed ${toComplete.length} rental(s) returned on Hygglo`);
+        // 2. Complete ongoing/upcoming rentals NOT in Hygglo scan with past end_date
+        const staleActive = await this.prisma.rental.findMany({
+          where: {
+            status: { in: ['ongoing', 'upcoming'] },
+            end_date: { lt: todayStart },
+          },
+          select: { id: true, renter_info: true, title: true, status: true, listing_id: true },
+        });
+        for (const rental of staleActive) {
+          if (scannedListingIds.has(rental.listing_id)) continue; // still on Hygglo, skip
+          await this.prisma.rental.update({
+            where: { id: rental.id },
+            data: { status: 'completed', updated_at: new Date() },
+          });
+          try { await this.calendarService.cascadeRentalStatusToBookings(rental.id, 'completed', rental.status); } catch {}
+          try { await this.contentionService.onRentalStatusChange(rental.id, 'completed'); } catch {}
+          completed++;
+          this.logger.log(`Lifecycle: ${rental.renter_info || rental.title} ${rental.status} (past end_date, not in scan) → completed`);
         }
-      } catch (err) {
-        this.logger.warn(`Auto-complete check failed: ${err.message}`);
-      }
 
-      // Stale pending_review cleanup — every 10th scan (~10 min)
-      if (this.scanCount % 10 === 0) {
-        try {
-          const staleBookings: { id: string }[] = await this.prisma.$queryRaw`
-            SELECT b.id FROM booking b
-            JOIN rental r ON b.rental_id = r.id
-            WHERE b.status = 'pending_review'
-              AND (r.status IN ('cancelled', 'obsolete')
-                OR r.end_date < NOW() - INTERVAL '7 days')
-          `;
-          if (staleBookings.length > 0) {
-            const ids = staleBookings.map(b => b.id);
-            await this.prisma.booking.updateMany({
-              where: { id: { in: ids }, status: 'pending_review' },
-              data: { status: 'cancelled' },
-            });
-            this.logger.log(`🧹 Cleaned ${staleBookings.length} stale pending_review bookings`);
-            this.diagnosticService?.log('scan_cycle', 'stale_cleanup', `Cleaned ${staleBookings.length} stale pending_review bookings`, { count: staleBookings.length, ids: staleBookings.map(b => b.id).slice(0, 10) });
-          }
-        } catch (err) {
-          this.logger.warn(`Stale booking cleanup failed: ${err.message}`);
+        // 3. Clean up pending rentals with past end_date
+        const stalePending = await this.prisma.rental.findMany({
+          where: {
+            status: 'pending',
+            end_date: { lt: todayStart },
+          },
+          select: { id: true, renter_info: true, title: true, order_step: true },
+        });
+        for (const rental of stalePending) {
+          // APPROVED = renter never paid — mark cancelled so confirmed bookings get cleaned up.
+          // Do NOT mark as 'completed' for APPROVED: that leaves confirmed bookings in calendar as phantoms.
+          const newStatus = 'cancelled';
+          await this.prisma.rental.update({
+            where: { id: rental.id },
+            data: { status: newStatus, updated_at: new Date() },
+          });
+          try { await this.calendarService.cascadeRentalStatusToBookings(rental.id, newStatus, 'pending'); } catch {}
+          cancelled++;
         }
-      }
+
+        // 4. Cancel pending rentals that disappeared from Hygglo scan
+        // When a renter cancels their request, Hygglo stops returning it.
+        // Without this, stale pending rentals show on dashboard indefinitely.
+        const stalePendingNotInScan = await this.prisma.rental.findMany({
+          where: {
+            status: 'pending',
+            order_step: { in: ['REQUEST', 'FUNDS_RESERVED', 'VERIFIED'] },
+            start_date: { gte: todayStart }, // future only (past handled above)
+          },
+          select: { id: true, listing_id: true, renter_info: true, title: true, order_step: true },
+        });
+        for (const rental of stalePendingNotInScan) {
+          if (scannedListingIds.has(rental.listing_id)) continue; // still on Hygglo, keep
+          await this.prisma.rental.update({
+            where: { id: rental.id },
+            data: { status: 'cancelled', updated_at: new Date() },
+          });
+          try { await this.calendarService.cascadeRentalStatusToBookings(rental.id, 'cancelled', 'pending'); } catch {}
+          cancelled++;
+          this.logger.log(`Lifecycle: ${rental.renter_info || rental.title} pending+${rental.order_step} (not in scan) → cancelled`);
+        }
+
+        if (completed + cancelled > 0) {
+          this.logger.log(`Lifecycle: ${completed} completed, ${cancelled} cancelled`);
+        }
+
+      // Declarative consistency enforcer — runs every scan, self-heals the entire system
+      await this.enforceConsistency();
 
       const scanDuration = Date.now() - scanStartTime;
       this.scanCount++;
@@ -400,6 +464,9 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processRental(rental: any): Promise<{ isNew: boolean; savedRental?: any; rawRental?: any }> {
+    // Order steps where the renter has actually paid/committed (not just owner-approved)
+    const PAID_ORDER_STEPS = ['FUNDS_RESERVED', 'VERIFIED', 'BOOKED_AFTER_VERIFIED', 'DELIVERED', 'RETURNED'];
+
     try {
       // Check if rental already exists
       const existingRental = await this.prisma.rental.findUnique({
@@ -410,9 +477,10 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         // Parse items if title changed or never parsed
         const titleChanged = rental.title !== existingRental.title;
         let parsedItems = existingRental.parsed_items;
-        if ((titleChanged || !parsedItems) && this.titleParserService) {
+        if (titleChanged || !parsedItems) {
           try {
-            parsedItems = await this.titleParserService.parseTitleWithAI(rental.title) as any;
+            const resolved = await this.itemResolverService.resolveItems(rental.listingId, rental.title, rental._detail);
+            parsedItems = resolved.map(r => ({ item: r.item, qty: r.qty })) as any;
           } catch { /* non-critical */ }
         }
 
@@ -422,11 +490,26 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         // Reconcile status with order_step: if DELIVERED and rental period has started,
         // force 'ongoing' regardless of which API endpoint returned it
         let reconciledStatus = rental.status;
-        if (orderStep === 'DELIVERED' && rental.startDate && rental.startDate <= new Date()) {
+
+        // Never downgrade a completed/cancelled rental back to active
+        if (['completed', 'cancelled', 'consolidated', 'obsolete'].includes(existingRental.status)) {
+          reconciledStatus = existingRental.status;
+        }
+        // If order_step is RETURNED, rental is done regardless of Hygglo status
+        else if (orderStep === 'RETURNED') {
+          reconciledStatus = 'completed';
+        }
+        else if (orderStep === 'DELIVERED' && rental.startDate && rental.startDate <= new Date()) {
           if (reconciledStatus !== 'ongoing') {
             this.logger.log(`🔄 Status reconciled: ${reconciledStatus} → ongoing (order_step=${orderStep}, rental period started)`);
             reconciledStatus = 'ongoing';
           }
+        }
+
+        // Only treat as 'upcoming' when renter has paid (FUNDS_RESERVED+) or items are handed over.
+        // APPROVED = owner said yes, but renter hasn't paid yet → keep as pending.
+        if (reconciledStatus === 'upcoming' && orderStep && !PAID_ORDER_STEPS.includes(orderStep)) {
+          reconciledStatus = 'pending';
         }
 
         const updatedRental = await this.prisma.rental.update({
@@ -554,21 +637,43 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           // Rental just became confirmed (pending → upcoming/ongoing)
           const wasUnconfirmed = ['pending', 'requested'].includes(existingRental.status);
           const isNowConfirmed = ['upcoming', 'ongoing'].includes(reconciledStatus);
-          if (wasUnconfirmed && isNowConfirmed) {
+          // Only treat as truly booked when renter has actually paid (FUNDS_RESERVED+)
+          const isPaidConfirmed = !orderStep || PAID_ORDER_STEPS.includes(orderStep);
+          if (wasUnconfirmed && isNowConfirmed && isPaidConfirmed) {
             // Send happy Telegram notification
             const earnings = rental.rentalPrice || updatedRental.rental_price || 0;
             const renter = rental.renterInfo || updatedRental.renter_info || 'Someone';
-            const items = updatedRental.title || rental.title || 'gear';
+            const rawTitle = updatedRental.title || rental.title || 'gear';
+            // Strip SEO noise: take only part before | or – separators, then strip (like X) suffixes
+            const cleanItem = rawTitle
+              .split(/\s*[|–—]\s*/)[0]
+              .replace(/\s*\((?:like|similar to|comparable to|replaces|vs|or)\s[^)]+\)/gi, '')
+              .trim();
+            const accountRaw = updatedRental.account || existingRental.account || '';
+            const accountLabel = accountRaw === 'leo' ? 'Leo' : accountRaw === 'dbcinema' ? 'DB Cinema' : accountRaw;
             try {
               await this.telegramService.sendProactiveMessage(
-                `🎉 Woohoo! You just booked £${Math.round(earnings)}!\n` +
-                `${renter} confirmed their rental of ${items}`,
+                `🎉 Woohoo! You just booked £${Math.round(earnings)} on ${accountLabel}!\n` +
+                `${renter} — ${cleanItem}`,
                 'Markdown',
                 { force: true },
               );
             } catch (err) {
               this.logger.warn(`Failed to send booking confirmation notification: ${err.message}`);
             }
+
+            // Push to dashboard activity feed so pending->confirmed is visible
+            try {
+              this.telegramService.sendRentalUpdate(existingRental.id, {
+                type: 'info',
+                priority: 'normal',
+                data: { text: `Booking confirmed — £${Math.round(earnings)} revenue locked in` },
+              }, {
+                rentalTitle: rawTitle,
+                renterName: typeof renter === 'string' ? renter : undefined,
+                account: updatedRental.account || existingRental.account || undefined,
+              });
+            } catch { /* non-critical */ }
 
             // Auto-send confirmation info + time request to renter
             try {
@@ -602,10 +707,9 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
                 // Merge confirmation + time request into single message
                 let infoMessage =
                   `Your booking is confirmed! Here are the details:\n` +
-                  `\nItems: ${items}${dateRange}` +
+                  `\nItems: ${cleanItem}${dateRange}` +
                   `\nPickup address: ${pickupAddress}${mapsLink}` +
                   `\nOpening times: 10am–12pm & 7–9pm` +
-                  `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
                   `\nDelivery available (separate charge) — let us know if needed.`;
 
                 if (!hasAllTimes) {
@@ -727,25 +831,20 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         // Backfill: create bookings if this rental has dates/price but no bookings yet
         // Check ALL statuses (confirmed + pending_review) to prevent re-creating overbooked items every scan
         const hasBookings = await this.prisma.booking.count({
-          where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review'] } },
+          where: { rental_id: existingRental.id, status: { in: ['confirmed', 'pending_review', 'completed'] } },
         });
 
         // Check if this rental was previously unmatchable but now has valid parsed_items
         const wasUnmatchable = this.failedBackfillRentals.has(existingRental.id);
-        const validParsedItems = this.extractValidItemsFromParsedItems(updatedRental.parsed_items);
-        const hasParsedItemsForRetry = wasUnmatchable && validParsedItems.length > 0;
 
         if (hasBookings === 0 && updatedRental.start_date && updatedRental.end_date
-            && (!wasUnmatchable || hasParsedItemsForRetry)) {
+            && !wasUnmatchable) {
           try {
-            // Prefer parsed_items (AI-parsed from title + photos, persisted in DB)
-            // Fall back to _detail extraction (transient Hygglo API data)
-            let itemNames: string[];
-            if (validParsedItems.length > 0) {
-              itemNames = validParsedItems;
-            } else {
-              itemNames = this.extractItemNamesFromDetail(rental._detail, rental.title);
-            }
+            // Use item resolver cascade (catalog -> photo ref -> pattern -> detail -> AI)
+            const resolved = await this.itemResolverService.resolveItems(
+              rental.listingId, rental.title, rental._detail,
+            );
+            const itemNames = this.itemResolverService.toItemNames(resolved);
 
             const ownerEarnings = rental._detail?.price?.ownerEarnings;
             const rentalForBooking = {
@@ -759,21 +858,12 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             );
 
             if (createdBookings.length > 0) {
-              this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}${hasParsedItemsForRetry ? ' [RECOVERED from unmatchable via parsed_items]' : ''}`);
-
-              // If this was a retry after unmatchable, clean up the failure markers
-              if (hasParsedItemsForRetry) {
-                this.failedBackfillRentals.delete(existingRental.id);
-                await this.prisma.ai_decision.deleteMany({
-                  where: { rental_id: existingRental.id, decision_type: 'backfill_unmatchable' },
-                }).catch(() => {});
-                this.logger.log(`🔓 Cleared unmatchable flag for rental ${rental.title} (parsed_items matched inventory)`);
-              }
+              this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}`);
             } else {
               // No bookings created — items don't match inventory. Stop retrying.
               this.failedBackfillRentals.add(existingRental.id);
               // Only persist if not already persisted (avoid duplicate records)
-              if (!hasParsedItemsForRetry) {
+              if (true) {
                 await this.prisma.ai_decision.create({
                   data: {
                     rental_id: existingRental.id,
@@ -796,7 +886,8 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         // Auto-promote: if rental is accepted on Hygglo but bookings are still pending_review
         // (from auto-accepted detection on first scan), promote after 2 hours.
         // Uses booking.updated_at (not rental.created_at) so manually-demoted bookings get a fresh window.
-        const isAccepted = ['upcoming', 'ongoing', 'completed'].includes(reconciledStatus);
+        // Only promote bookings when renter has paid (FUNDS_RESERVED+) — not just owner-approved
+        const isAccepted = ['upcoming', 'ongoing', 'completed'].includes(reconciledStatus) && (!orderStep || PAID_ORDER_STEPS.includes(orderStep));
         if (isAccepted && hasBookings > 0) {
           const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
           try {
@@ -900,22 +991,27 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
 
       // Parse items from title using AI, then enhance with photo vision if needed
       let parsedItems: any = null;
-      if (this.titleParserService) {
-        try {
-          parsedItems = await this.titleParserService.parseTitleWithAI(rental.title);
-        } catch { /* non-critical */ }
-      }
+      try {
+        const resolved = await this.itemResolverService.resolveItems(rental.listingId, rental.title, rental._detail);
+        parsedItems = resolved.map(r => ({ item: r.item, qty: r.qty }));
+      } catch { /* non-critical */ }
 
       // Save new rental to database (including price data)
       const orderStep = this.extractActiveOrderStep(rental._detail);
 
       // Reconcile status with order_step for new rentals too
       let newRentalStatus = rental.status;
+// If order_step is RETURNED, rental is done — mark completed regardless of Hygglo status        if (orderStep === "RETURNED") {          reconciledStatus = "completed";        }
       if (orderStep === 'DELIVERED' && rental.startDate && rental.startDate <= new Date()) {
         if (newRentalStatus !== 'ongoing') {
           this.logger.log(`🔄 New rental status reconciled: ${newRentalStatus} → ongoing (order_step=${orderStep}, rental period started)`);
           newRentalStatus = 'ongoing';
         }
+      }
+
+      // Only treat as upcoming when renter has paid (FUNDS_RESERVED+). APPROVED = pending.
+      if (newRentalStatus === 'upcoming' && orderStep && !PAID_ORDER_STEPS.includes(orderStep)) {
+        newRentalStatus = 'pending';
       }
 
       const savedRental = await this.prisma.rental.create({
@@ -957,16 +1053,21 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             parsedItems = enhanced;
           }
           // Also store in extracteditem table for use by autonomous/telegram/follow-up
+          // Brand integrity gate: downgrade confidence for cross-brand photo matches
           for (const item of (parsedItems || [])) {
             try {
+              const brandCheck = detectBrandMismatch(rental.title, item.item);
               await this.prisma.extracteditem.create({
                 data: {
                   rental_id: savedRental.id,
                   item_name: item.item,
-                  source: 'photo',
-                  confidence_score: 0.9,
+                  source: brandCheck.isMismatch ? 'photo_cross_brand' : 'photo',
+                  confidence_score: brandCheck.isMismatch ? 0.3 : 0.9,
                 },
               });
+              if (brandCheck.isMismatch) {
+                this.logger.warn(`Brand mismatch: "${rental.title}" photo matched to "${item.item}" (${brandCheck.listingBrand} ≠ ${brandCheck.itemBrand})`);
+              }
             } catch { /* ignore dups */ }
           }
         } catch { /* non-critical */ }
@@ -987,18 +1088,13 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       // Note: Photo-based item extraction is handled above by enhanceWithPhotos (Claude Haiku vision)
       // Results are stored in both rental.parsed_items AND extracteditem table
 
-      // Auto-create calendar bookings from extracted items
+      // Auto-create calendar bookings from resolved items
       try {
-        // Combine items from detail, photo analysis, and description parsing
-        const allItemNames: string[] = this.extractItemNamesFromDetail(rental._detail, rental.title);
-        if (photosUrls.length > 0) {
-          const photoItems = await this.prisma.extracteditem.findMany({
-            where: { rental_id: savedRental.id },
-            select: { item_name: true },
-          });
-          allItemNames.push(...photoItems.map(i => i.item_name));
-        }
-        // catalogItems removed — description parsing now handled by enhanceWithPhotos
+        // Use item resolver (already ran above for parsed_items, reuse those results)
+        const resolvedForBooking = await this.itemResolverService.resolveItems(
+          rental.listingId, rental.title, rental._detail,
+        );
+        const allItemNames = this.itemResolverService.toItemNames(resolvedForBooking);
 
         // Use owner earnings as revenue (what the owner actually receives)
         const ownerEarnings = rental._detail?.price?.ownerEarnings;
@@ -1019,6 +1115,11 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           allItemNames,
           bookingOptions,
         );
+
+        // Sync bookings with extracted items — clean up stale item names
+        try {
+          await this.calendarService.syncBookingsWithExtractedItems(savedRental.id);
+        } catch { /* non-critical */ }
 
         if (createdBookings.length > 0) {
           const overbookedItems = createdBookings.filter(b => b.wasOverbooked && b.maxQuantity > 0);
@@ -1166,36 +1267,6 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
    * Extract item names from the order detail's items array.
    * Each item in the detail has a name field (the product title on Hygglo).
    */
-  private extractItemNamesFromDetail(detail: any, fallbackTitle: string): string[] {
-    if (!detail?.items || !Array.isArray(detail.items) || detail.items.length === 0) {
-      return [fallbackTitle];
-    }
-    return detail.items
-      .filter((item: any) => item.name && item.type === 'PRODUCT')
-      .map((item: any) => item.name.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
-  }
-
-  /**
-   * Extract validated item names from rental's parsed_items field.
-   * Returns only items that match MASTER_INVENTORY (prevents false retries).
-   * parsed_items structure: { item: string; qty: number }[]
-   */
-  private extractValidItemsFromParsedItems(parsedItems: any): string[] {
-    if (!parsedItems || !Array.isArray(parsedItems)) return [];
-    const inventoryNames = getInventoryItemNames();
-    const items: string[] = [];
-    for (const pi of parsedItems) {
-      const name = pi.item || pi.name;
-      if (!name) continue;
-      const matched = findBestMatch(name, inventoryNames);
-      if (matched) {
-        for (let i = 0; i < (pi.qty || 1); i++) {
-          items.push(matched);
-        }
-      }
-    }
-    return items;
-  }
 
   /**
    * Group new rentals by renter to detect multi-item requests.
@@ -1244,15 +1315,20 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     const renterName = primary.savedRental.renter_info || 'there';
     const firstName = renterName.split(' ')[0];
 
-    // Build item list
-    const allItems = sorted.map((entry, i) => `${i + 1}. ${entry.savedRental.title}`);
+    // Build item list with prices
+    const allItems = sorted.map((entry, i) => {
+      const price = entry.savedRental.rental_price ? ` (£${entry.savedRental.rental_price})` : '';
+      return `${i + 1}. ${entry.savedRental.title}${price}`;
+    });
+    const totalValue = sorted.reduce((sum, e) => sum + (e.savedRental.rental_price || 0), 0);
+    const totalLine = totalValue > 0 ? `\n\nTotal: £${totalValue.toFixed(2)}` : '';
 
-    // Send consolidation message in primary chat
+    // Send assertive consolidation message in primary chat — present the bundle, don't ask permission
     const primaryMessage =
-      `Hi ${firstName}! I can see you've sent ${sorted.length} separate rental requests:\n` +
-      allItems.join('\n') + '\n\n' +
-      `We can handle all of these right here — easier to coordinate and we might be able to offer a bundle deal. ` +
-      `Shall I put everything together in this chat?`;
+      `Hi ${firstName}! I can see you've sent ${sorted.length} separate requests — I've pulled them all together here:\n\n` +
+      allItems.join('\n') +
+      totalLine + '\n\n' +
+      `Everything looks good on my end. Just confirm you're happy with all of these and I'll get it all sorted at once.`;
 
     // sendMessage handles READ_ONLY_MODE gating internally (with per-rental exceptions)
     try {
@@ -1261,17 +1337,24 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Failed to send consolidation message for ${primary.savedRental.title}: ${err.message}`);
     }
 
-    // Send redirect message in each secondary chat and mark as consolidated
+    // Close secondary chats: send a brief note then decline the Hygglo listing via Playwright
     for (const secondary of secondaries) {
       const redirectMessage =
-        `Hi! I've got this request. Since you also have a request for ${primary.savedRental.title}, ` +
-        `I'll handle everything together in that chat to keep things simple. ` +
-        `Head over there and we'll sort out all the items at once!`;
+        `Hi! I've combined your request with your other enquiries — handling everything together in the ${primary.savedRental.title} chat. ` +
+        `I'll close this one and get it all sorted from there.`;
 
       try {
         await this.hyggloService.sendMessage(secondary.savedRental.listing_id, redirectMessage);
       } catch (err) {
         this.logger.warn(`Failed to send redirect message for ${secondary.savedRental.title}: ${err.message}`);
+      }
+
+      // Decline the secondary listing on Hygglo so the renter doesn't see it as open
+      try {
+        const account = secondary.savedRental.account || 'dbcinema';
+        await this.followUpService.declineSecondaryRental(secondary.savedRental.listing_id, account, secondary.savedRental.id);
+      } catch (err) {
+        this.logger.warn(`Failed to decline secondary listing on Hygglo for ${secondary.savedRental.title}: ${(err as Error).message}`);
       }
 
       // Store ai_decision for audit trail on each secondary
@@ -1299,6 +1382,13 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
         });
       } catch (statusErr) {
         this.logger.debug(`Failed to mark secondary as consolidated: ${statusErr.message}`);
+      }
+
+      // Cascade: cancel bookings on the consolidated rental
+      try {
+        await this.calendarService.cascadeRentalStatusToBookings(secondary.savedRental.id, 'consolidated');
+      } catch (cascErr) {
+        this.logger.debug(`Failed to cascade consolidated bookings: ${cascErr.message}`);
       }
 
       // Mark any follow-up state as completed for secondary
@@ -1358,58 +1448,54 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       if (r.savedRental.id === rental.id) return false;
       const otherRenter = (r.savedRental.renter_info || '').trim().toLowerCase();
       const otherAccount = r.savedRental.account as string;
-      return otherRenter === renterNorm && otherAccount !== rentalAccount;
+      return this.rentersMatch(otherRenter, renterNorm) && otherAccount !== rentalAccount;
     });
 
+    // Helper: compare prices to determine which rental should win.
+    // Winner = higher rental_price; DB Cinema wins ties.
+    const myPrice = Number(rental.rental_price) || 0;
+    const iAmLoser = (otherPrice: number, otherAccount: string) =>
+      otherPrice > myPrice || (otherPrice === myPrice && rentalAccount !== 'dbcinema' && otherAccount === 'dbcinema');
+
     if (otherAccountInBatch) {
-      // Both accounts in same batch — discard Leo's
-      if (rentalAccount === 'leo') {
-        await this.closeAsAccountDuplicate(rental, 'dbcinema');
+      // Both accounts in same batch — discard the less profitable one
+      const otherPrice = Number(otherAccountInBatch.savedRental.rental_price) || 0;
+      const otherAccount = otherAccountInBatch.savedRental.account as string;
+      if (iAmLoser(otherPrice, otherAccount)) {
+        await this.closeAsAccountDuplicate(rental, otherAccount);
         return true;
       }
-      // This is DB Cinema and Leo's is in the batch — Leo's will be discarded on its iteration
+      // I am the winner — the other account's iteration will discard itself
       return false;
     }
 
     // (2) Check existing rentals: same renter, other account, overlapping dates, active status
     if (rentalAccount === 'leo') {
-      const existingDbCinema = await this.prisma.rental.findFirst({
-        where: {
-          account: 'dbcinema',
-          status: { in: ['pending', 'upcoming', 'ongoing'] },
-          renter_info: { not: null },
-        },
-      });
-
-      // Filter in code for case-insensitive renter match + date overlap
-      if (existingDbCinema) {
-        const existingRenter = (existingDbCinema.renter_info || '').trim().toLowerCase();
-        if (existingRenter === renterNorm && this.datesOverlap(rental, existingDbCinema)) {
-          await this.closeAsAccountDuplicate(rental, 'dbcinema');
-          return true;
-        }
-      }
-
-      // Check all matching renters (case-insensitive query not available, so broader check)
+      // Check all DB Cinema rentals for same renter + date overlap
       const dbCinemaRentals = await this.prisma.rental.findMany({
         where: {
           account: 'dbcinema',
           status: { in: ['pending', 'upcoming', 'ongoing'] },
           renter_info: { not: null },
         },
-        select: { id: true, renter_info: true, start_date: true, end_date: true, listing_id: true, title: true },
+        select: { id: true, renter_info: true, start_date: true, end_date: true, listing_id: true, title: true, rental_price: true },
       });
 
       for (const dbRental of dbCinemaRentals) {
         const dbRenter = (dbRental.renter_info || '').trim().toLowerCase();
-        if (dbRenter === renterNorm && this.datesOverlap(rental, dbRental)) {
-          await this.closeAsAccountDuplicate(rental, 'dbcinema');
+        if (!this.rentersMatch(dbRenter, renterNorm) || !this.datesOverlap(rental, dbRental)) continue;
+        const dbPrice = Number(dbRental.rental_price) || 0;
+        if (iAmLoser(dbPrice, 'dbcinema')) {
+          await this.closeAsAccountDuplicate(rental, 'dbcinema', dbRental);
           return true;
         }
+        // Leo earns more — close the DB Cinema rental instead and keep Leo
+        await this.closeAsAccountDuplicate(dbRental, 'leo', rental);
+        return false; // Leo survives
       }
     }
 
-    // If this is DB Cinema and same renter already exists on Leo → close Leo's existing rental
+    // If this is DB Cinema and same renter already exists on Leo → close the less profitable
     if (rentalAccount === 'dbcinema') {
       const leoRentals = await this.prisma.rental.findMany({
         where: {
@@ -1417,15 +1503,20 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           status: { in: ['pending', 'upcoming', 'ongoing'] },
           renter_info: { not: null },
         },
-        select: { id: true, renter_info: true, start_date: true, end_date: true, listing_id: true, title: true },
+        select: { id: true, renter_info: true, start_date: true, end_date: true, listing_id: true, title: true, rental_price: true },
       });
 
       for (const leoRental of leoRentals) {
         const leoRenter = (leoRental.renter_info || '').trim().toLowerCase();
-        if (leoRenter === renterNorm && this.datesOverlap(rental, leoRental)) {
-          // Close Leo's existing rental — redirect to DB Cinema
-          await this.closeExistingLeoRental(leoRental, rental);
+        if (!this.rentersMatch(leoRenter, renterNorm) || !this.datesOverlap(rental, leoRental)) continue;
+        const leoPrice = Number(leoRental.rental_price) || 0;
+        if (leoPrice > myPrice) {
+          // Leo earns more — close DB Cinema (me), keep Leo
+          await this.closeAsAccountDuplicate(rental, 'leo', leoRental);
+          return true;
         }
+        // DB Cinema earns equal or more — close Leo
+        await this.closeExistingLeoRental(leoRental, rental);
       }
     }
 
@@ -1446,46 +1537,57 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     if (!aStart || !aEnd || !bStart || !bEnd) return true;
 
     // Standard overlap check: A starts before B ends AND A ends after B starts
-    return aStart < bEnd && aEnd > bStart;
+    // Use <= and >= so same-day rentals (start===end) correctly match each other
+    return aStart <= bEnd && aEnd >= bStart;
   }
 
   /**
-   * Close a Leo rental as a cross-account duplicate — redirect renter to DB Cinema.
+   * Close a losing rental as a cross-account duplicate — redirect renter to the winning account.
+   * Can close either Leo or DB Cinema depending on which earns more.
    */
-  private async closeAsAccountDuplicate(leoRental: any, preferredAccount: string) {
-    const renterName = leoRental.renter_info || 'there';
+  private async closeAsAccountDuplicate(loserRental: any, preferredAccount: string, winnerRental?: any) {
+    const renterName = loserRental.renter_info || 'there';
     const firstName = renterName.split(' ')[0];
+    const loserAccount = loserRental.account as string;
 
     this.logger.log(
-      `🔄 Cross-account duplicate: ${renterName} requested on both accounts. Closing Leo rental "${leoRental.title}", keeping ${preferredAccount}.`,
+      `🔄 Cross-account duplicate: ${renterName} requested on both accounts. Closing ${loserAccount} rental "${loserRental.title}", keeping ${preferredAccount}.`,
     );
 
-    // Send redirect message on Leo's chat
+    // Redirect message — generic wording that works for either account being closed
+    const winnerLabel = preferredAccount === 'dbcinema' ? 'our main account' : 'our other listing';
     const message =
-      `Hi ${firstName}! I can see you've also sent a request on our main account. ` +
+      `Hi ${firstName}! I can see you've also sent a request on ${winnerLabel}. ` +
       `I'll handle everything through that chat — makes it easier to coordinate. ` +
       `Please continue the conversation there!`;
 
     try {
-      await this.hyggloService.sendMessage(leoRental.listing_id, message);
+      await this.hyggloService.sendMessage(loserRental.listing_id, message);
     } catch (err) {
-      this.logger.warn(`Failed to send cross-account redirect for ${leoRental.listing_id}: ${err.message}`);
+      this.logger.warn(`Failed to send cross-account redirect for ${loserRental.listing_id}: ${err.message}`);
     }
 
     // Mark as consolidated
     try {
       await this.prisma.rental.update({
-        where: { id: leoRental.id },
+        where: { id: loserRental.id },
         data: { status: 'consolidated' },
       });
     } catch (err) {
-      this.logger.warn(`Failed to mark Leo rental as consolidated: ${err.message}`);
+      this.logger.warn(`Failed to mark ${loserAccount} rental as consolidated: ${err.message}`);
     }
+
+      // Cascade: cancel bookings on the consolidated rental
+      try {
+        await this.calendarService.cascadeRentalStatusToBookings(loserRental.id, 'consolidated');
+      } catch (cascErr) {
+        this.logger.debug(`Failed to cascade consolidated bookings: ${cascErr.message}`);
+      }
 
     // Close follow-up state
     try {
       await this.prisma.follow_up_state.updateMany({
-        where: { rental_id: leoRental.id },
+        where: { rental_id: loserRental.id },
         data: { status: 'completed' },
       });
     } catch { /* may not exist yet */ }
@@ -1494,12 +1596,12 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.prisma.ai_decision.create({
         data: {
-          rental_id: leoRental.id,
+          rental_id: loserRental.id,
           decision_type: 'cross_account_duplicate',
           input_summary: `Same renter "${renterName}" requested on both Leo and DB Cinema accounts`,
-          output_summary: `Discarded Leo rental — redirected to ${preferredAccount} (higher-priced account)`,
+          output_summary: `Discarded ${loserAccount} rental — redirected to ${preferredAccount} (higher earnings)`,
           confidence: 1.0,
-          action_taken: 'consolidated_to_dbcinema',
+          action_taken: `consolidated_to_${preferredAccount}`,
           notified: true,
         },
       });
@@ -1507,12 +1609,31 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Failed to store cross-account decision: ${err.message}`);
     }
 
+    // Log decision for the WINNER rental so it's flagged in audit trail
+    if (winnerRental) {
+      try {
+        await this.prisma.ai_decision.create({
+          data: {
+            rental_id: winnerRental.id,
+            decision_type: 'cross_account_duplicate',
+            input_summary: `Cross-account winner: same renter "${renterName}" also requested on ${loserAccount}`,
+            output_summary: `Retained as primary — ${loserAccount} rental (£${loserRental.rental_price || 0}) closed. Renter redirected here.`,
+            confidence: 1.0,
+            action_taken: `winner_retained_over_${loserAccount}`,
+            notified: true,
+          },
+        });
+      } catch (err) {
+        this.logger.warn(`Failed to log cross-account winner decision: ${err.message}`);
+      }
+    }
+
     // Notify Daniel
     try {
       await this.telegramService.sendProactiveMessage(
         `🔄 Cross-account duplicate detected:\n` +
         `Renter: ${renterName}\n` +
-        `Leo rental "${leoRental.title}" closed → continuing on DB Cinema`,
+        `${loserAccount} rental "${loserRental.title}" closed → continuing on ${preferredAccount}`,
       );
     } catch { /* non-critical */ }
   }
@@ -1549,6 +1670,13 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       this.logger.warn(`Failed to consolidate existing Leo rental: ${err.message}`);
     }
+
+      // Cascade: cancel bookings on the consolidated rental
+      try {
+        await this.calendarService.cascadeRentalStatusToBookings(leoRental.id, 'consolidated');
+      } catch (cascErr) {
+        this.logger.debug(`Failed to cascade consolidated bookings: ${cascErr.message}`);
+      }
 
     // Close follow-up
     try {
@@ -1612,6 +1740,149 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
     const completed = [...this.recentlyCompletedRentals];
     this.recentlyCompletedRentals = [];
     return completed;
+  }
+
+  /**
+   * Declarative consistency enforcer — runs every scan.
+   * Defines 5 rules that detect and fix data inconsistencies.
+   * If nothing is wrong, queries return empty and this exits in milliseconds.
+   */
+  private async enforceConsistency(): Promise<void> {
+    const fixes: string[] = [];
+
+    try {
+      // Rule 1 — Terminal rentals → terminal bookings
+      // cancelled/obsolete/consolidated rental → cancel all active bookings
+      const toCancel: { id: string }[] = await this.prisma.$queryRaw`
+        SELECT b.id FROM booking b
+        JOIN rental r ON b.rental_id = r.id
+        WHERE b.status IN ('pending_review', 'confirmed')
+          AND r.status IN ('cancelled', 'obsolete', 'consolidated')
+      `;
+      if (toCancel.length > 0) {
+        await this.prisma.booking.updateMany({
+          where: { id: { in: toCancel.map(b => b.id) } },
+          data: { status: 'cancelled' },
+        });
+        fixes.push(`R1: cancelled ${toCancel.length} bookings on dead rentals`);
+      }
+
+      // Note: completed rentals intentionally keep bookings as confirmed/pending_review
+      // to avoid triggering backfill (hasBookings guard counts these statuses).
+      // Booking status is only changed to 'completed' via explicit return processing.
+
+      // Rule 2 — Pending rental → no confirmed bookings
+      // Any confirmed booking on a pending rental → demote to pending_review
+      const toDemote: { id: string }[] = await this.prisma.$queryRaw`
+        SELECT b.id FROM booking b
+        JOIN rental r ON b.rental_id = r.id
+        WHERE b.status = 'confirmed'
+          AND r.status = 'pending'
+      `;
+      if (toDemote.length > 0) {
+        await this.prisma.booking.updateMany({
+          where: { id: { in: toDemote.map(b => b.id) } },
+          data: { status: 'pending_review' },
+        });
+        fixes.push(`R2: demoted ${toDemote.length} confirmed bookings on pending rentals`);
+      }
+
+      // Rule 3 — Revenue must match rental_price
+      // For rentals with rental_price > 0 and active bookings where revenue is NULL or sum deviates > £0.50
+      const revenueMismatches: { rental_id: string; rental_price: number; rev_sum: number | null; has_null: boolean }[] = await this.prisma.$queryRaw`
+        SELECT
+          r.id as rental_id,
+          r.rental_price,
+          SUM(b.revenue) as rev_sum,
+          BOOL_OR(b.revenue IS NULL) as has_null
+        FROM rental r
+        JOIN booking b ON b.rental_id = r.id AND b.status IN ('confirmed', 'pending_review')
+        WHERE r.rental_price > 0
+          AND r.status IN ('upcoming', 'ongoing')
+        GROUP BY r.id, r.rental_price
+        HAVING BOOL_OR(b.revenue IS NULL) = true
+           OR ABS(SUM(b.revenue) - r.rental_price) > 0.50
+      `;
+      if (revenueMismatches.length > 0) {
+        for (const m of revenueMismatches) {
+          try {
+            await this.calendarService.recomputeRentalRevenue(m.rental_id, Number(m.rental_price));
+            fixes.push(`R3: recomputed revenue for ${m.rental_id.slice(0, 8)} (sum=£${m.rev_sum ?? 'NULL'} vs price=£${m.rental_price})`);
+          } catch (err) {
+            this.logger.warn(`R3: revenue recompute failed for ${m.rental_id}: ${err.message}`);
+          }
+        }
+      }
+
+      // Rule 4 — Stale pending_review cleanup
+      // pending_review bookings on rentals with end_date < 7 days ago → cancelled
+      const stalePending: { id: string }[] = await this.prisma.$queryRaw`
+        SELECT b.id FROM booking b
+        JOIN rental r ON b.rental_id = r.id
+        WHERE b.status = 'pending_review'
+          AND r.end_date < NOW() - INTERVAL '7 days'
+      `;
+      if (stalePending.length > 0) {
+        await this.prisma.booking.updateMany({
+          where: { id: { in: stalePending.map(b => b.id) }, status: 'pending_review' },
+          data: { status: 'cancelled' },
+        });
+        fixes.push(`R4: cancelled ${stalePending.length} stale pending_review bookings`);
+      }
+
+      // Rule 5 — Stuck pending_review on accepted rentals
+      // pending_review bookings on upcoming/ongoing rentals with accepted order_step, older than 24h → confirmed
+      const stuckPending: { id: string; item_name: string }[] = await this.prisma.$queryRaw`
+        SELECT b.id, b.item_name FROM booking b
+        JOIN rental r ON b.rental_id = r.id
+        WHERE b.status = 'pending_review'
+          AND r.status IN ('upcoming', 'ongoing')
+          AND r.order_step IN ('DELIVERED', 'BOOKED_AFTER_VERIFIED', 'RETURNED')
+          AND b.created_at < NOW() - INTERVAL '24 hours'
+      `;
+      if (stuckPending.length > 0) {
+        await this.prisma.booking.updateMany({
+          where: { id: { in: stuckPending.map(b => b.id) } },
+          data: { status: 'confirmed' },
+        });
+        fixes.push(`R5: promoted ${stuckPending.length} stuck pending_review bookings (${stuckPending.map(b => b.item_name).join(', ')})`);
+      }
+
+      if (fixes.length > 0) {
+        this.logger.log(`Consistency enforcer: ${fixes.join(' | ')}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Consistency enforcer failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Fuzzy renter name matching for cross-account deduplication.
+   * Returns true if names likely refer to the same person:
+   * - Exact match (case-insensitive)
+   * - One name is a prefix of the other ("Sam K" matches "Sam Karam")
+   * - Same first name + one last name is a prefix of the other ("Yosune A" matches "Yosune Aston")
+   */
+  private rentersMatch(a: string, b: string): boolean {
+    const aNorm = a.trim().toLowerCase();
+    const bNorm = b.trim().toLowerCase();
+
+    // Exact match
+    if (aNorm === bNorm) return true;
+
+    // One is a prefix of the other
+    if (aNorm.startsWith(bNorm) || bNorm.startsWith(aNorm)) return true;
+
+    // Same first name + last name prefix
+    const aParts = aNorm.split(/\s+/);
+    const bParts = bNorm.split(/\s+/);
+    if (aParts.length >= 2 && bParts.length >= 2 && aParts[0] === bParts[0]) {
+      const aLast = aParts.slice(1).join(' ');
+      const bLast = bParts.slice(1).join(' ');
+      if (aLast.startsWith(bLast) || bLast.startsWith(aLast)) return true;
+    }
+
+    return false;
   }
 
   getStatus() {

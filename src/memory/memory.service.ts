@@ -76,7 +76,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'Leo Adams Welcome Text',
-        content: 'Leo Adams welcome text: "Hey! Thx for the request, item is available for those times. Ill be by Charing Cross Road station near the National Portrait Gallery for pickup & return. Usually 10-12:30pm & 7-9pm. Let me know if that works & ill move it forward. - Leo"',
+        content: 'Leo Adams welcome text: "Hey! Thx for the request, item is available for those times. Ill be by Charing Cross Road station near the National Portrait Gallery for pickup & return. Usually 10-12pm & 7-9pm. Let me know if that works & ill move it forward. - Leo"',
         importance: 9,
       },
       {
@@ -203,8 +203,8 @@ export class MemoryService implements OnModuleInit {
       },
       {
         memory_type: 'fact',
-        subject: 'FAQ - Remus vs Great Joy Anamorphic',
-        content: 'Remus: amber/warm flare, 1.5x squeeze, T1.6 (faster, better low-light), PL mount native. Great Joy: blue flare, 1.8x squeeze, T2.9 (more cinematic stretch), EF mount native. Remus needs PL adapter for Sony/Canon. Great Joy mounts directly on EF cameras (BMPCC 6K Pro) or via EF adapter on Sony.',
+        subject: 'FAQ - Blazar Remus Anamorphic Lenses',
+        content: 'Remus: amber/warm flare, 1.5x squeeze, T1.6 (fastest anamorphic in our inventory), PL mount native. 4 lenses: 33mm, 45mm, 65mm, 100mm. Needs PL adapter for Sony/Canon.',
         importance: 8,
       },
       {
@@ -503,8 +503,8 @@ export class MemoryService implements OnModuleInit {
       },
       {
         memory_type: 'fact',
-        subject: 'DANIEL RULE - Master Inventory 71 Items',
-        content: 'Full master inventory with max quantities (shared across both accounts): Anamorphic Blazar Remus 33mm:1, 45mm:1, 65mm:1, 100mm:1. Anamorphic Great Joy lens 35mm:1, 50mm:1, 85mm:1. Sony GM 24-70mm f2.8:4, 16-35mm f2.8:1, 70-200mm f2.8:2, 90mm f2.8:1. Sony 28-70mm:2. Canon EF 24-105mm f4:1, 16-35mm f2.8:1. Sony 11mm f2.8 fisheye:1. Sony FX3:3, A7 III:1, A7 II:1. Fujifilm X100 VI:1. BMPCC 6K Pro:1, BMPCC 6K Full Frame:1. Softbox 85cm:2. V-mount 95mAh:2, 150mAh:4. C-stand:1. DJI Osmo Action Pro 5:3. DJI Mavic 3 Pro:1. LED light panels RGB:3. DJI gimbal battery:3. Hollyland Mars 4K transmitter:1. GoPro 12 Hero:3. Suction cups:6. Nanlite Forza 300:1. Rode Video Mic Go:1. Camera flash:1. Rode Wireless Mic Pro set:2. Audio boom mic Sennheiser:1. DJI Wireless Mics:1. Smoke machine fogger:1. Motorized slider:1. ND filter:3. 256GB card:3. Atomos Ninja V:1. DJI Mini 4 Pro:1. Cinebloom filter mist:1. Rode Video Mic Pro Plus:1. Nanlite Pavotube 30x II:4. Small rig tripod:3. Nanlite 500B:1. JBL wireless microphones:1. Smoke Ninja Pro hazer:1. DJ RX3 Pioneer controller:1. PL to Sony E mount:2. Anker Power Station F2000:1. Hollyland Pyro S transmitter:1. Hollyland 7-inch monitor:1. PL to EF mount:1, RF mount:1, L mount:1. DJI Mic 2 wireless:1. Sirui tripod:1. CF Express Type A card:1. JBL Club 120 speaker:2. Ambitful RGB light tubes 2x set:2. Smoke Ninja:1. Tilta Nucleus Nano 2 follow focus:1. Sony NPF 970 batteries 2x sets:4. Monopod arm support:1. 5-in-1 reflector panel:1. Tilta shoulder rig:1. DJI RS3 Pro gimbal:2.',
+        subject: 'DANIEL RULE - Master Inventory',
+        content: 'Full master inventory with max quantities (shared across both accounts): Anamorphic Blazar Remus 33mm:1, 45mm:1, 65mm:1, 100mm:1. Sony GM 24-70mm f2.8:4, 16-35mm f2.8:1, 70-200mm f2.8:2, 90mm f2.8:1. Sony 28-70mm:2. Canon EF 24-105mm f4:1, 16-35mm f2.8:1. Sony 11mm f2.8 fisheye:1. Sony FX3:3, A7 III:1, A7 II:1, A7 V:1. Fujifilm X100 VI:1. BMPCC 6K Pro:1, BMPCC 6K Full Frame:1. Softbox 85cm:2. V-mount 95mAh:2, 150mAh:4. C-stand:1. DJI Osmo Action Pro 5:3. DJI Mavic 3 Pro:1. LED light panels RGB:3. DJI gimbal battery:3. Hollyland Mars 4K transmitter:1. GoPro 12 Hero:3. Suction cups:6. Nanlite Forza 300:1. Rode Video Mic Go:1. Camera flash:1. Rode Wireless Mic Pro set:2. Audio boom mic Sennheiser:1. DJI Wireless Mics:1. Smoke machine fogger:1. Motorized slider:1. ND filter:3. 256GB card:3. Atomos Ninja V:1. DJI Mini 4 Pro:1. Cinebloom filter mist:1. Rode Video Mic Pro Plus:1. Nanlite Pavotube 30x II:4. Small rig tripod:3. Nanlite 500B:1. JBL wireless microphones:1. Smoke Ninja Pro hazer:1. DJ RX3 Pioneer controller:1. PL to Sony E mount:2. Anker Power Station F2000:1. Hollyland Pyro S transmitter:1. Hollyland 7-inch monitor:1. PL to EF mount:1, RF mount:1, L mount:1. DJI Mic 2 wireless:1. Sirui tripod:1. CF Express Type A card:1. JBL Club 120 speaker:2. Ambitful RGB light tubes 2x set:2. Smoke Ninja:1. Tilta Nucleus Nano 2 follow focus:1. Sony NPF 970 batteries 2x sets:4. Monopod arm support:1. 5-in-1 reflector panel:1. Tilta shoulder rig:1. DJI RS3 Pro gimbal:2.',
         importance: 10,
       },
       {
@@ -724,7 +724,7 @@ export class MemoryService implements OnModuleInit {
       {
         memory_type: 'fact',
         subject: 'DB Cinema Rentals - Bundle Prices (Lens & Specialty Kits)',
-        content: 'DB Cinema BUNDLE listing prices (per day). ANAMORPHIC BUNDLES: Great Joy anamorphic set (35mm+50mm+85mm) £50-99/day. Blazar Remus 4-lens anamorphic set £80-120/day. Atlas Mercury anamorphic set £143-300/day. LENS BUNDLES: Sony GM triple lens set (16-35 + 24-70 + 70-200) £35-55/day. Canon EF triple set £25-40/day. DJ & SPEAKER BUNDLES: JBL speakers + Pioneer DJ RX3 controller set £79-100/day (delivery mandatory). LIGHTING BUNDLES: Interview lighting kit (2x lights + stands) £25-40/day. Full lighting kit (Forza 300 + pavotube set + stands) £50-70/day. NOTE: Estimates from real listings.',
+        content: 'DB Cinema BUNDLE listing prices (per day). ANAMORPHIC BUNDLES: Blazar Remus 4-lens anamorphic set £80-120/day. LENS BUNDLES: Sony GM triple lens set (16-35 + 24-70 + 70-200) £35-55/day. Canon EF triple set £25-40/day. DJ & SPEAKER BUNDLES: JBL speakers + Pioneer DJ RX3 controller set £79-100/day (delivery mandatory). LIGHTING BUNDLES: Interview lighting kit (2x lights + stands) £25-40/day. Full lighting kit (Forza 300 + pavotube set + stands) £50-70/day. NOTE: Estimates from real listings.',
         importance: 8,
       },
       {

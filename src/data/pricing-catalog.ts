@@ -36,33 +36,31 @@ export const PRICING_CATALOG: PricingEntry[] = [
   // ──────────────────────────────────────────
   // CAMERAS (individual)
   // ──────────────────────────────────────────
-  { item_name: 'Sony FX3', category: 'camera', daily_price_min: 34, daily_price_max: 40, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony A7 III', category: 'camera', daily_price_min: 20, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony A7 II', category: 'camera', daily_price_min: 16, daily_price_max: 28, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Fujifilm X100 VI', category: 'camera', daily_price_min: 30, daily_price_max: 45, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'BMPCC 6K Pro', category: 'camera', daily_price_min: 35, daily_price_max: 50, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'BMPCC 6K Full Frame', category: 'camera', daily_price_min: 35, daily_price_max: 50, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'DJI Osmo Action Pro 5', category: 'camera', daily_price_min: 26, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'GoPro 12 Hero', category: 'camera', daily_price_min: 16, daily_price_max: 18, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
+  { item_name: 'Sony FX3', category: 'camera', daily_price_min: 34, daily_price_max: 40, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony A7 V', category: 'camera', daily_price_min: 42, daily_price_max: 42, is_bundle: false, multi_day_notes: '3d=110, 7d=210' },
+  { item_name: 'Sony A7 III', category: 'camera', daily_price_min: 20, daily_price_max: 30, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony A7 II', category: 'camera', daily_price_min: 16, daily_price_max: 28, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Fujifilm X100 VI', category: 'camera', daily_price_min: 30, daily_price_max: 45, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'BMPCC 6K Pro', category: 'camera', daily_price_min: 35, daily_price_max: 50, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'BMPCC 6K Full Frame', category: 'camera', daily_price_min: 35, daily_price_max: 50, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'DJI Osmo Action Pro 5', category: 'camera', daily_price_min: 26, daily_price_max: 33, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'GoPro 12 Hero', category: 'camera', daily_price_min: 16, daily_price_max: 18, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
 
   // ──────────────────────────────────────────
   // LENSES (individual)
   // ──────────────────────────────────────────
-  { item_name: 'Sony GM 24-70mm f2.8', category: 'lens', daily_price_min: 14, daily_price_max: 20, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony GM 70-200mm f2.8', category: 'lens', daily_price_min: 16, daily_price_max: 22, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony GM 16-35mm f2.8', category: 'lens', daily_price_min: 14, daily_price_max: 20, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony GM 90mm f2.8', category: 'lens', daily_price_min: 10, daily_price_max: 15, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony 28-70mm', category: 'lens', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Canon EF 24-105mm f4', category: 'lens', daily_price_min: 8, daily_price_max: 12, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Canon EF 16-35mm f2.8', category: 'lens', daily_price_min: 12, daily_price_max: 18, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Sony 11mm f2.8 fisheye', category: 'lens', daily_price_min: 8, daily_price_max: 12, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Blazar Remus 33mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Blazar Remus 45mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Blazar Remus 65mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Blazar Remus 100mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Great Joy lens 35mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Great Joy lens 50mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'Anamorphic Great Joy lens 85mm', category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
+  { item_name: 'Sony GM 24-70mm f2.8', category: 'lens', daily_price_min: 14, daily_price_max: 20, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony GM 70-200mm f2.8', category: 'lens', daily_price_min: 16, daily_price_max: 22, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony GM 16-35mm f2.8', category: 'lens', daily_price_min: 14, daily_price_max: 20, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony GM 90mm f2.8', category: 'lens', daily_price_min: 10, daily_price_max: 15, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony 28-70mm', category: 'lens', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Canon EF 24-105mm f4', category: 'lens', daily_price_min: 8, daily_price_max: 12, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Canon EF 16-35mm f2.8', category: 'lens', daily_price_min: 12, daily_price_max: 18, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Sony 11mm f2.8 fisheye', category: 'lens', daily_price_min: 8, daily_price_max: 12, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Blazar Remus 33mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Blazar Remus 45mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Blazar Remus 65mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'Anamorphic Blazar Remus 100mm', category: 'lens', daily_price_min: 26, daily_price_max: 30, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
 
   // ──────────────────────────────────────────
   // MOUNT ADAPTERS
@@ -75,8 +73,8 @@ export const PRICING_CATALOG: PricingEntry[] = [
   // ──────────────────────────────────────────
   // DRONES
   // ──────────────────────────────────────────
-  { item_name: 'DJI Mavic 3 Pro', category: 'drone', daily_price_min: 36, daily_price_max: 37, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
-  { item_name: 'DJI Mini 4 Pro', category: 'drone', daily_price_min: 18, daily_price_max: 22, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks' },
+  { item_name: 'DJI Mavic 3 Pro', category: 'drone', daily_price_min: 36, daily_price_max: 37, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
+  { item_name: 'DJI Mini 4 Pro', category: 'drone', daily_price_min: 18, daily_price_max: 22, is_bundle: false, multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks' },
 
   // ──────────────────────────────────────────
   // GIMBALS & MOTION
@@ -127,7 +125,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   { item_name: 'V-mount 95mAh', category: 'power', daily_price_min: 11, daily_price_max: 15, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'V-mount 150mAh', category: 'power', daily_price_min: 20, daily_price_max: 28, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'Anker Power Station F2000', category: 'power', daily_price_min: 25, daily_price_max: 35, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
-  { item_name: 'Sony NPF 970 batteries 2x sets', category: 'power', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
+  { item_name: 'Sony NP-FZ100 batteries 2x sets', category: 'power', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'DJI gimbal battery', category: 'power', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
 
   // ──────────────────────────────────────────
@@ -146,6 +144,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   // SPEAKERS & DJ
   // ──────────────────────────────────────────
   { item_name: 'JBL Club 120 speaker', category: 'dj', daily_price_min: 39, daily_price_max: 49, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
+  { item_name: 'JBL PartyBox 110', category: 'dj', daily_price_min: 35, daily_price_max: 45, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'DJ RX3 Pioneer controller', category: 'dj', daily_price_min: 40, daily_price_max: 55, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
 
   // ══════════════════════════════════════════════════════════════
@@ -307,21 +306,21 @@ export const PRICING_CATALOG: PricingEntry[] = [
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: '2x Sony NPF 970 Batteries Set',
+    item_name: '2x Sony NP-FZ100 Batteries Set',
     category: 'bundle', daily_price_min: 8, daily_price_max: 14, is_bundle: true,
-    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets'],
+    bundle_items: ['Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x. 4 batteries total.',
   },
   {
-    item_name: '3x Sony NPF 970 Batteries Set',
+    item_name: '3x Sony NP-FZ100 Batteries Set',
     category: 'bundle', daily_price_min: 10, daily_price_max: 18, is_bundle: true,
-    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets'],
+    bundle_items: ['Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x. 6 batteries total.',
   },
   {
-    item_name: '4x Sony NPF 970 Batteries Set',
+    item_name: '4x Sony NP-FZ100 Batteries Set',
     category: 'bundle', daily_price_min: 12, daily_price_max: 22, is_bundle: true,
-    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets'],
+    bundle_items: ['Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x. 8 batteries total.',
   },
   {
@@ -420,37 +419,37 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Sony FX3 + 24-70mm GM Kit',
     category: 'bundle', daily_price_min: 41, daily_price_max: 55, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 + 16-35mm GM Kit',
     category: 'bundle', daily_price_min: 40, daily_price_max: 55, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 + 70-200mm GM Kit',
     category: 'bundle', daily_price_min: 42, daily_price_max: 57, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 70-200mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 + 90mm GM Macro Kit',
     category: 'bundle', daily_price_min: 38, daily_price_max: 50, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 90mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 + GM Triple Lens Kit',
     category: 'bundle', daily_price_min: 60, daily_price_max: 85, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 + 28-70mm Starter Kit',
     category: 'bundle', daily_price_min: 32, daily_price_max: 44, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony 28-70mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 + 11mm Fisheye Kit',
@@ -460,24 +459,6 @@ export const PRICING_CATALOG: PricingEntry[] = [
   },
 
   // -- Sony FX3 + Anamorphic Combos --
-  {
-    item_name: 'Sony FX3 + Great Joy 35mm Anamorphic',
-    category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 35mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
-  },
-  {
-    item_name: 'Sony FX3 + Great Joy 50mm Anamorphic',
-    category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 50mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
-  },
-  {
-    item_name: 'Sony FX3 + Great Joy 85mm Anamorphic',
-    category: 'bundle', daily_price_min: 45, daily_price_max: 65, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 85mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
-  },
   {
     item_name: 'Sony FX3 + Blazar Remus 33mm Anamorphic',
     category: 'bundle', daily_price_min: 48, daily_price_max: 65, is_bundle: true,
@@ -502,25 +483,25 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Sony A7 III + 24-70mm GM Kit',
     category: 'bundle', daily_price_min: 28, daily_price_max: 45, is_bundle: true,
     bundle_items: ['Sony A7 III', 'Sony GM 24-70mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony A7 III + 16-35mm GM Kit',
     category: 'bundle', daily_price_min: 28, daily_price_max: 45, is_bundle: true,
     bundle_items: ['Sony A7 III', 'Sony GM 16-35mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony A7 III + 70-200mm GM Kit',
     category: 'bundle', daily_price_min: 30, daily_price_max: 47, is_bundle: true,
     bundle_items: ['Sony A7 III', 'Sony GM 70-200mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony A7 III + GM Triple Lens Kit',
     category: 'bundle', daily_price_min: 50, daily_price_max: 75, is_bundle: true,
     bundle_items: ['Sony A7 III', 'Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
 
   // -- Sony A7 II + Lens Combos --
@@ -528,13 +509,13 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Sony A7 II + 28-70mm Kit',
     category: 'bundle', daily_price_min: 18, daily_price_max: 32, is_bundle: true,
     bundle_items: ['Sony A7 II', 'Sony 28-70mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony A7 II + 24-70mm GM Kit',
     category: 'bundle', daily_price_min: 25, daily_price_max: 42, is_bundle: true,
     bundle_items: ['Sony A7 II', 'Sony GM 24-70mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
 
   // -- BMPCC + Lens Combos --
@@ -542,19 +523,19 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'BMPCC 6K Pro + Canon 24-105mm Kit',
     category: 'bundle', daily_price_min: 36, daily_price_max: 55, is_bundle: true,
     bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'BMPCC 6K Pro + Canon 16-35mm f2.8 Kit',
     category: 'bundle', daily_price_min: 38, daily_price_max: 60, is_bundle: true,
     bundle_items: ['BMPCC 6K Pro', 'Canon EF 16-35mm f2.8'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'BMPCC 6K FF + Canon 24-105mm Kit',
     category: 'bundle', daily_price_min: 36, daily_price_max: 55, is_bundle: true,
     bundle_items: ['BMPCC 6K Full Frame', 'Canon EF 24-105mm f4'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
 
   // ══════════════════════════════════════════════════════════════
@@ -570,7 +551,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Sony FX3 + 24-70mm GM + RS3 Gimbal Kit',
     category: 'bundle', daily_price_min: 50, daily_price_max: 70, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony A7 III + RS3 Pro Gimbal Kit',
@@ -675,12 +656,6 @@ export const PRICING_CATALOG: PricingEntry[] = [
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'Great Joy Anamorphic Set (35+50+85mm)',
-    category: 'bundle', daily_price_min: 50, daily_price_max: 90, is_bundle: true,
-    bundle_items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
-  },
-  {
     item_name: 'Blazar Remus 4-Lens Anamorphic Set (33+45+65+100)',
     category: 'bundle', daily_price_min: 80, daily_price_max: 110, is_bundle: true,
     bundle_items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm'],
@@ -698,12 +673,6 @@ export const PRICING_CATALOG: PricingEntry[] = [
     bundle_items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
-  {
-    item_name: 'Great Joy Anamorphic Duo (35+50)',
-    category: 'bundle', daily_price_min: 32, daily_price_max: 58, is_bundle: true,
-    bundle_items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
-  },
 
   // ══════════════════════════════════════════════════════════════
   // PRODUCTION / SCENARIO KITS
@@ -712,25 +681,25 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Sony FX3 Full Production Kit',
     category: 'bundle', daily_price_min: 100, daily_price_max: 120, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks. NOTE: Does NOT include CF Express cards or suction cups.',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks. NOTE: Does NOT include CF Express cards or suction cups.',
   },
   {
     item_name: 'Sony FX3 Full Production Kit + V-Mount 95mAh',
     category: 'bundle', daily_price_min: 108, daily_price_max: 130, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter', 'V-mount 95mAh'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Sony FX3 Full Production Kit + V-Mount 150mAh',
     category: 'bundle', daily_price_min: 115, daily_price_max: 140, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set', 'Atomos Ninja V', 'ND filter', 'V-mount 150mAh'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Documentary Filmmaker Kit',
     category: 'bundle', daily_price_min: 75, daily_price_max: 100, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'Rode Wireless Mic Pro set', 'Audio boom mic Sennheiser'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Wedding Dual Camera Kit',
@@ -750,12 +719,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
     bundle_items: ['Sony FX3', 'Sony GM 24-70mm f2.8', 'LED light panels RGB', 'LED light panels RGB', 'Rode Wireless Mic Pro set'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
-  {
-    item_name: 'Music Video Kit',
-    category: 'bundle', daily_price_min: 90, daily_price_max: 120, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 50mm', 'DJI RS3 Pro gimbal', 'Smoke Ninja', 'Nanlite Pavotube 30x II'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
-  },
+
   {
     item_name: 'Run & Gun Kit',
     category: 'bundle', daily_price_min: 60, daily_price_max: 78, is_bundle: true,
@@ -790,13 +754,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'Short Film Kit',
     category: 'bundle', daily_price_min: 110, daily_price_max: 145, is_bundle: true,
     bundle_items: ['Sony FX3', 'Sony GM 16-35mm f2.8', 'Sony GM 24-70mm f2.8', 'Sony GM 70-200mm f2.8', 'DJI RS3 Pro gimbal', 'Atomos Ninja V', 'Rode Wireless Mic Pro set'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
-  },
-  {
-    item_name: 'Anamorphic Film Kit (FX3 + Great Joy Set + RS3)',
-    category: 'bundle', daily_price_min: 95, daily_price_max: 130, is_bundle: true,
-    bundle_items: ['Sony FX3', 'Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm', 'DJI RS3 Pro gimbal'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'Blazar Anamorphic Film Kit (FX3 + Blazar Set + RS3)',
@@ -808,7 +766,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
     item_name: 'BMPCC 6K Pro Cinema Kit',
     category: 'bundle', daily_price_min: 79, daily_price_max: 120, is_bundle: true,
     bundle_items: ['BMPCC 6K Pro', 'Canon EF 24-105mm f4', 'DJI RS3 Pro gimbal', 'Atomos Ninja V'],
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
   },
   {
     item_name: 'BMPCC 6K Pro Interview Kit',
@@ -1027,9 +985,9 @@ export const PRICING_CATALOG: PricingEntry[] = [
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
-    item_name: 'Camera Power Pack (2x NPF 970 + 2x V-mount 95mAh)',
+    item_name: 'Camera Power Pack (2x NP-FZ100 + 2x V-mount 95mAh)',
     category: 'bundle', daily_price_min: 22, daily_price_max: 38, is_bundle: true,
-    bundle_items: ['Sony NPF 970 batteries 2x sets', 'Sony NPF 970 batteries 2x sets', 'V-mount 95mAh', 'V-mount 95mAh'],
+    bundle_items: ['Sony NP-FZ100 batteries 2x sets', 'Sony NP-FZ100 batteries 2x sets', 'V-mount 95mAh', 'V-mount 95mAh'],
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
   },
   {
@@ -1137,49 +1095,49 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'Sony FX6',
     category: 'camera', daily_price_min: 60, daily_price_max: 80, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'Sony A7S III',
     category: 'camera', daily_price_min: 35, daily_price_max: 50, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'Canon R5',
     category: 'camera', daily_price_min: 40, daily_price_max: 55, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'Canon C70',
     category: 'camera', daily_price_min: 55, daily_price_max: 75, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'RED Komodo',
     category: 'camera', daily_price_min: 80, daily_price_max: 120, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'DJI Ronin 4D',
     category: 'camera', daily_price_min: 90, daily_price_max: 130, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'Sony A1',
     category: 'camera', daily_price_min: 55, daily_price_max: 75, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
     item_name: 'Panasonic S5 II',
     category: 'camera', daily_price_min: 25, daily_price_max: 40, is_bundle: false,
-    multi_day_notes: '3 days ~2.5x, 7 days ~5x, 1 month ~2.5 weeks',
+    multi_day_notes: '3d=2.5x, 7d+=5x daily rate. 1,2,4,5,6 days = full price per day. 1 month ~2.5 weeks',
     marketing_only: true,
   },
   {
@@ -1251,6 +1209,24 @@ export const PRICING_CATALOG: PricingEntry[] = [
   {
     item_name: 'SmallHD Cine 7 Monitor',
     category: 'monitor', daily_price_min: 25, daily_price_max: 40, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Anamorphic Great Joy lens 35mm',
+    category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Anamorphic Great Joy lens 50mm',
+    category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false,
+    multi_day_notes: '3 days ~2.5x, 7 days ~5x',
+    marketing_only: true,
+  },
+  {
+    item_name: 'Anamorphic Great Joy lens 85mm',
+    category: 'lens', daily_price_min: 20, daily_price_max: 33, is_bundle: false,
     multi_day_notes: '3 days ~2.5x, 7 days ~5x',
     marketing_only: true,
   },
@@ -1358,5 +1334,224 @@ export function formatPricingCatalogForAI(): string {
     'NEVER mention platform fees, service fees, or Hygglo fees to renters. ' +
     'Always validate item availability against master inventory before confirming.',
   );
+  return parts.join('\n');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// DATABASE-AWARE PRICING LOOKUP
+// Prefer database prices over hardcoded catalog (for when Hygglo prices change)
+// ═══════════════════════════════════════════════════════════════════════════════════
+
+export interface DbPriceResult {
+  item_name: string;
+  daily_price: number;
+  renter_price?: number;
+  days?: number;
+  source: 'database' | 'catalog';
+  listing_title?: string;
+}
+
+export async function getPriceWithDbPreference(
+  prisma: any,
+  itemName: string,
+  options?: {
+    account?: 'dbcinema' | 'leo' | 'both';
+    status?: string[];
+    limitDays?: number;
+  }
+): Promise<DbPriceResult | null> {
+  const statusFilter = options?.status || ['pending', 'upcoming', 'ongoing', 'completed'];
+  const daysLimit = options?.limitDays || 90;
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - daysLimit);
+
+  try {
+    const dbRentals = await prisma.rental.findMany({
+      where: {
+        status: { in: statusFilter },
+        updated_at: { gte: sinceDate },
+        OR: [
+          { title: { contains: itemName, mode: 'insensitive' } },
+////          { extracteditem: { some: { item_name: { contains: itemName, mode: 'insensitive' } } } }
+        ],
+        price_per_day: { not: null }
+      },
+      orderBy: { updated_at: 'desc' },
+      take: 5,
+      select: {
+        title: true,
+        price_per_day: true,
+        renter_price: true,
+        start_date: true,
+        end_date: true,
+        account: true,
+      }
+    });
+
+    for (const rental of dbRentals) {
+      if (rental.price_per_day) {
+        let days = 1;
+        if (rental.start_date && rental.end_date) {
+          days = Math.max(1, Math.round(
+            (new Date(rental.end_date).getTime() - new Date(rental.start_date).getTime()) / (1000 * 60 * 60 * 24)
+          ) + 1);
+        }
+
+        return {
+          item_name: itemName,
+          daily_price: rental.price_per_day,
+          renter_price: rental.renter_price || undefined,
+          days,
+          source: 'database',
+          listing_title: rental.title,
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('DB price lookup failed for ' + itemName + ', falling back to catalog:', error);
+  }
+
+  const catalogEntry = getItemPrice(itemName);
+  if (catalogEntry) {
+    return {
+      item_name: catalogEntry.item_name,
+      daily_price: catalogEntry.daily_price_max,
+      source: 'catalog',
+    };
+  }
+
+  return null;
+}
+
+export async function getPricesWithDbPreference(
+  prisma: any,
+  itemNames: string[],
+  options?: {
+    account?: 'dbcinema' | 'leo' | 'both';
+    status?: string[];
+    limitDays?: number;
+  }
+): Promise<Map<string, DbPriceResult>> {
+  const results = new Map<string, DbPriceResult>();
+
+  await Promise.all(
+    itemNames.map(async (itemName) => {
+      const price = await getPriceWithDbPreference(prisma, itemName, options);
+      if (price) {
+        results.set(itemName, price);
+      }
+    })
+  );
+
+  return results;
+}
+
+export async function formatFilteredPricingForAIWithDb(
+  prisma: any,
+  mentionedItems: string[],
+  rentalId?: string
+): Promise<string> {
+  if (mentionedItems.length === 0) return '';
+
+  const lowerMentioned = mentionedItems.map(i => i.toLowerCase());
+  const matched = new Set<PricingEntry>();
+  const dbPrices = new Map<string, DbPriceResult>();
+
+  if (rentalId) {
+    try {
+      const rental = await prisma.rental.findUnique({
+        where: { id: rentalId },
+        select: {
+          title: true,
+          price_per_day: true,
+          renter_price: true,
+          start_date: true,
+          end_date: true,
+          extracteditem: { select: { item_name: true } }
+        }
+      });
+
+      if (rental?.price_per_day) {
+        let days = 1;
+        if (rental.start_date && rental.end_date) {
+          days = Math.max(1, Math.round(
+            (new Date(rental.end_date).getTime() - new Date(rental.start_date).getTime()) / (1000 * 60 * 60 * 24)
+          ) + 1);
+        }
+
+        const itemName = rental.extracteditem?.[0]?.item_name || mentionedItems[0];
+        dbPrices.set(itemName, {
+          item_name: itemName,
+          daily_price: rental.price_per_day,
+          renter_price: rental.renter_price || undefined,
+          days,
+          source: 'database',
+          listing_title: rental.title,
+        });
+      }
+    } catch (e) {
+      // Continue with regular DB lookup
+    }
+  }
+
+  const itemsToLookup = mentionedItems.filter(item => !dbPrices.has(item));
+  if (itemsToLookup.length > 0) {
+    const moreDbPrices = await getPricesWithDbPreference(prisma, itemsToLookup);
+    for (const [key, value] of moreDbPrices) {
+      dbPrices.set(key, value);
+    }
+  }
+
+  for (const entry of PRICING_CATALOG) {
+    if (entry.marketing_only) continue;
+    const lowerName = entry.item_name.toLowerCase();
+
+    if (lowerMentioned.some(m => lowerName.includes(m) || m.includes(lowerName))) {
+      matched.add(entry);
+      continue;
+    }
+
+    if (entry.is_bundle && entry.bundle_items) {
+      const bundleItemsLower = entry.bundle_items.map(b => b.toLowerCase());
+      if (lowerMentioned.some(m => bundleItemsLower.some(b => b.includes(m) || m.includes(b)))) {
+        matched.add(entry);
+      }
+    }
+  }
+
+  const matchedCategories = new Set(Array.from(matched).map(e => e.category));
+  for (const entry of PRICING_CATALOG) {
+    if (entry.marketing_only || entry.is_bundle) continue;
+    if (matchedCategories.has(entry.category)) {
+      matched.add(entry);
+    }
+  }
+
+  if (matched.size === 0 && dbPrices.size === 0) return '';
+
+  const parts: string[] = ['=== RELEVANT PRICING (from actual Hygglo listings - preferring database prices) ==='];
+
+  for (const [itemName, dbPrice] of dbPrices) {
+    const source = dbPrice.source === 'database' ? ' (actual Hygglo price)' : ' (catalog fallback)';
+    if (dbPrice.days && dbPrice.days > 1 && dbPrice.renter_price) {
+      parts.push(`- ${dbPrice.item_name}: £${dbPrice.daily_price}/day (total £${dbPrice.renter_price} for ${dbPrice.days} days)${source}`);
+    } else {
+      parts.push(`- ${dbPrice.item_name}: £${dbPrice.daily_price}/day${source}`);
+    }
+  }
+
+  for (const e of matched) {
+    if (!dbPrices.has(e.item_name)) {
+      const bundleTag = e.is_bundle && e.bundle_items ? ` (includes: ${e.bundle_items.join(' + ')})` : '';
+      parts.push(`- ${e.item_name}: £${e.daily_price_max}/day (catalog)${bundleTag}`);
+    }
+  }
+
+  parts.push(
+    '\nPRICING RULES: One-day price = highest listed price. ' +
+    'Multi-day discounts: 3 days ~2.5x daily, 7 days ~5x daily, 1 month ~2.5 weeks. ' +
+    'NEVER mention platform fees to renters.'
+  );
+
   return parts.join('\n');
 }

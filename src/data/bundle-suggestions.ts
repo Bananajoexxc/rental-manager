@@ -139,14 +139,7 @@ export const BUNDLE_DEFINITIONS: BundleDefinition[] = [
   },
 
   // ── Anamorphic Bundles ──
-  {
-    bundle_name: 'Great Joy Anamorphic Set (35+50+85mm)',
-    items: ['Anamorphic Great Joy lens 35mm', 'Anamorphic Great Joy lens 50mm', 'Anamorphic Great Joy lens 85mm'],
-    daily_price_min: 50, daily_price_max: 90,
-    use_cases: ['anamorphic', 'cinematic', 'film', 'music video', 'widescreen'],
-    trigger_keywords: ['anamorphic', 'great joy', 'widescreen', 'cinemascope', 'film look', 'oval bokeh'],
-    savings_note: 'Save vs renting 3 primes separately (~£60-99 individual vs ~£50-99 bundle)',
-  },
+
   {
     bundle_name: 'Blazar Remus 4-Lens Anamorphic Set (33+45+65+100)',
     items: ['Anamorphic Blazar Remus 33mm', 'Anamorphic Blazar Remus 45mm', 'Anamorphic Blazar Remus 65mm', 'Anamorphic Blazar Remus 100mm'],

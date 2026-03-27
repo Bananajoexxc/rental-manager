@@ -198,7 +198,7 @@ export class CompetitorIntelService {
     private readonly revenueService: RevenueService,
   ) {
     this.claude = new Anthropic({ apiKey: this.configService.get('ANTHROPIC_API_KEY') });
-    this.model = this.configService.get('CLAUDE_MODEL_COMPLEX') || 'claude-sonnet-4-5-20250929';
+    this.model = this.configService.get('CLAUDE_MODEL_COMPLEX') || 'claude-sonnet-4-6-20250514';
   }
 
   // ────────────── SCRAPING ──────────────
@@ -1029,7 +1029,7 @@ Format your response as JSON array:
     const bundleLines: string[] = [];
     for (const item of PRICING_CATALOG) {
       if (item.is_bundle && item.bundle_items) {
-        bundleLines.push(`- ${item.item_name}: £${item.daily_price_min}-${item.daily_price_max}/day (contains: ${item.bundle_items.join(', ')})`);
+        bundleLines.push(`- ${item.item_name}: £${item.daily_price_max}/day (contains: ${item.bundle_items.join(', ')})`);
       }
     }
 

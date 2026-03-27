@@ -40,6 +40,7 @@ import { verifyResponse, buildCorrectionPrompt } from './verify';
 import { filterResponse } from './filter';
 import { enforceContract, surgicalContractFix } from './contract';
 import { verifyGrounding } from './ground';
+import { getInventoryItemNames } from '../utils/item-matcher';
 import { DiagnosticService } from '../monitoring/diagnostic.service';
 
 @Injectable()
@@ -219,6 +220,11 @@ export class PipelineService {
       factPack,
     );
 
+    // Inject simulation rental context if provided
+    if (input.simulationRentalContext) {
+      context.rentalContext = (context.rentalContext || '') + ' ' + input.simulationRentalContext;
+    }
+
     // Add tool handlers for production mode
     if (input.rental) {
       context.toolHandlers = {
@@ -237,7 +243,8 @@ export class PipelineService {
           const dailyRate = entry.daily_price_max;
           let total = dailyRate * days;
           if (days >= 7) total = dailyRate * 5;
-          else if (days >= 3) total = dailyRate * 2.5;
+          else if (days === 3) total = dailyRate * 2.5;
+          // else: total stays at dailyRate * days (no discount for 1,2,4,5,6 days)
           const ownerEarnings = Math.round(total * 0.64);
           return `${itemName} for ${days} day(s): ~£${Math.round(total)} (renter pays), ~£${ownerEarnings} (owner earnings)`;
         },
@@ -259,14 +266,41 @@ export class PipelineService {
       };
     }
 
-    // Choose model based on complexity + inner monologue assessment
-    const useAdaptive = classification.complexity === 'high'
-      || monologue.plan.length > 2
-      || (monologue.missing && monologue.missing.length > 50);
+    // Model routing: Sonnet for anything requiring intelligence, Haiku for simple/terminal messages only.
+    const needsThinkTool = (
+      classification.intent === 'negotiation' ||
+      classification.intent === 'complaint' ||
+      classification.intent === 'damage_report' ||
+      classification.intent === 'cancellation'
+    ) && classification.complexity === 'high';
 
-    const response = useAdaptive
-      ? await this.aiService.processAdaptive(userMessage, context)
-      : await this.aiService.processRoutine(userMessage, context);
+    // Haiku ONLY for genuinely simple messages where intelligence isn't needed.
+    // Negotiation, pricing, equipment/compatibility always get Sonnet for accuracy.
+    const haikuSafeIntents = new Set([
+      'greeting', 'acknowledgment', 'goodbye', 'return_confirmation',
+      'logistics', 'availability_check', 'booking_action',
+    ]);
+    const useHaiku = !needsThinkTool
+      && classification.complexity === 'low'
+      && haikuSafeIntents.has(classification.intent)
+      && classification.mentionedItems.length < 2;
+
+    let response;
+    if (needsThinkTool) {
+      // Strip tools: extended thinking replaces think tool, GATHER pre-fetched all data.
+      // Eliminates the expensive 2nd API call + conversation cache write.
+      const { toolHandlers, ...adaptiveCtx } = context;
+      response = await this.aiService.processAdaptive(userMessage, adaptiveCtx);
+    } else if (useHaiku) {
+      // Strip tools — GATHER already provided all data, no tool loop needed
+      const { toolHandlers, ...haikuCtx } = context;
+      response = await this.aiService.processLightweight(userMessage, haikuCtx);
+    } else {
+      // Sonnet for substantive intents (pricing, negotiation, equipment, etc.)
+      // Uses processComplex to ensure Sonnet regardless of CLAUDE_MODEL env var.
+      const { toolHandlers, ...routineCtx } = context;
+      response = await this.aiService.processComplex(userMessage, routineCtx);
+    }
 
     let responseContent = response.content;
 
@@ -281,6 +315,7 @@ export class PipelineService {
       input.message,
       input.account,
       rentalStage,
+      factPack,
     );
     responseContent = filterResult.response;
 
@@ -375,6 +410,63 @@ export class PipelineService {
 
     // --- Layer 9: CHECK (price/item/availability verification — code, <1ms) ---
     let verification = verifyResponse(responseContent, factPack);
+
+    // Late-binding availability check: if bot claims unavailability but no formal check was done,
+    // perform a real availability check now and either confirm or correct the claim.
+    const unverifiedUnavail = verification.issues.find(i => i.type === 'UNVERIFIED_UNAVAILABILITY');
+    if (unverifiedUnavail && input.rental?.start_date && input.rental?.end_date) {
+      try {
+        const itemsInResponse = getInventoryItemNames().filter(item => {
+          const parts = item.toLowerCase().split(' ').filter(p => p.length > 2);
+          const respLower = responseContent.toLowerCase();
+          return parts.length >= 2
+            ? parts.filter(p => respLower.includes(p)).length >= Math.min(2, parts.length)
+            : respLower.includes(item.toLowerCase());
+        });
+
+        if (itemsInResponse.length > 0) {
+          const lateAvailItems: import('./types').ItemAvailability[] = [];
+          for (const itemName of itemsInResponse.slice(0, 5)) {
+            const result = await this.calendarService.checkAvailability(
+              itemName, new Date(input.rental.start_date), new Date(input.rental.end_date), input.rental.id,
+            );
+            if (result.matchedItem) {
+              lateAvailItems.push({
+                item: result.matchedItem,
+                available: result.available,
+                booked: result.booked,
+                maxQuantity: result.maxQuantity,
+                availableFrom: result.availableFrom,
+                unavailableAfter: result.unavailableAfter,
+              });
+            }
+          }
+
+          if (lateAvailItems.length > 0) {
+            // Inject real availability data into factPack for re-verification
+            factPack.availability = { items: lateAvailItems };
+            const anyWronglyUnavailable = lateAvailItems.some(i => i.available);
+
+            if (anyWronglyUnavailable) {
+              // Bot claimed unavailable but items ARE available — critical error
+              this.logger.warn(
+                `[Pipeline] LATE AVAIL CHECK: Bot falsely claimed unavailability! ` +
+                `Available items: ${lateAvailItems.filter(i => i.available).map(i => i.item).join(', ')}`,
+              );
+              // Re-run verification with real data to get proper AVAILABILITY_LIE issues
+              verification = verifyResponse(responseContent, factPack);
+            } else {
+              // Items genuinely unavailable — remove the unverified issue
+              verification.issues = verification.issues.filter(i => i.type !== 'UNVERIFIED_UNAVAILABILITY');
+              verification.passed = verification.issues.length === 0;
+              this.logger.debug(`[Pipeline] LATE AVAIL CHECK: Unavailability confirmed correct`);
+            }
+          }
+        }
+      } catch (lateErr) {
+        this.logger.debug(`[Pipeline] Late availability check failed: ${(lateErr as Error).message}`);
+      }
+    }
 
     if (!verification.passed && verification.issues.length > 0) {
       this.logger.warn(

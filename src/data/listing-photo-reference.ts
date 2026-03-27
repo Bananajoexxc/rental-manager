@@ -1242,9 +1242,3 @@ export function getVerifiedItems(listingId: string): ListingPhotoEntry | null {
   return LISTING_PHOTO_REFERENCE[listingId] || null;
 }
 
-/**
- * Get all listing IDs that have been photo-analyzed.
- */
-export function getAnalyzedListingIds(): string[] {
-  return Object.keys(LISTING_PHOTO_REFERENCE);
-}

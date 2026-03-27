@@ -11,6 +11,7 @@
  */
 
 import { Intent, MessageClassification } from './types';
+import { QUALIFY_PATTERNS, SHOOT_QUESTION_PATTERN } from './patterns';
 
 export interface ContractViolation {
   rule: string;
@@ -37,14 +38,23 @@ const UPSELL_PATTERNS: { pattern: RegExp; label: string; severity: 'block' | 'wa
   { pattern: /\bhave you (thought|considered) about\b/i, label: 'have-you-considered', severity: 'block' },
   { pattern: /\bworth (adding|considering|grabbing|getting)\b/i, label: 'worth-adding', severity: 'block' },
   { pattern: /\byou might (want|need|like|also)\b/i, label: 'you-might-want', severity: 'block' },
-  { pattern: /\bwhat(?:'s| is) the shoot for\b/i, label: 'shoot-type-question', severity: 'block' },
+  // "what's the shoot for" moved to QUESTION_PATTERNS (was duplicated here)
+  // GPT-specific variants that bypass the exact patterns above
+  { pattern: /\bI can (?:suggest|recommend) (?:the right|some|any) gear\b/i, label: 'suggest-gear-upsell', severity: 'block' },
+  { pattern: /\bthat way I can (?:suggest|recommend|help|advise)\b/i, label: 'that-way-upsell', severity: 'block' },
+  { pattern: /\bneed (?:any(?:thing)?|gear|equipment|accessories) (?:else|alongside|to go with|with (?:it|that|the))\b/i, label: 'need-anything-else', severity: 'block' },
+  { pattern: /\bcan (?:recommend|suggest) (?:the best|the right|some|any) (?:gear|equipment|kit|setup)\b/i, label: 'recommend-gear', severity: 'block' },
 ];
 
-// Question-asking patterns
+// Question-asking patterns — shared QUALIFY_PATTERNS from patterns.ts + contract-specific extras
 const QUESTION_PATTERNS: { pattern: RegExp; label: string; severity: 'block' | 'warn' }[] = [
-  { pattern: /\bwhat(?:'s| is) the shoot for\b/i, label: 'shoot-type-question', severity: 'block' },
-  { pattern: /\bwhat (?:are you|kind of|type of) (?:shooting|filming|working on)\b/i, label: 'project-question', severity: 'block' },
+  // Shared patterns (also used by filter.ts for stripping)
+  ...QUALIFY_PATTERNS.map(p => ({ pattern: p, label: 'qualify-question', severity: 'block' as const })),
+  // Contract-specific extras not needed for filter stripping
+  { pattern: SHOOT_QUESTION_PATTERN, label: 'shoot-type-question', severity: 'block' },
+  { pattern: /\bwhat (?:are you|kind of|type of) (?:shoot|shooting|filming|working on|project|production)\b/i, label: 'project-question', severity: 'block' },
   { pattern: /\bwhat dates?\b/i, label: 'dates-question', severity: 'block' },
+  { pattern: /\bwhat(?:'s| is) your (?:shoot|project|production)\b/i, label: 'your-project-question', severity: 'block' },
 ];
 
 const CONTRACTS: Record<string, ResponseContract> = {
@@ -102,6 +112,29 @@ const CONTRACTS: Record<string, ResponseContract> = {
   [Intent.NEGOTIATION]: {
     mustNot: [
       ...UPSELL_PATTERNS.filter(p => p.label !== 'upsell-language'), // Bundle savings are OK in negotiation
+      ...QUESTION_PATTERNS, // Do NOT ask "what are you shooting?" when they're negotiating price
+    ],
+  },
+
+  // GENERAL: Catch-all — still block question spam and upsell in non-greeting contexts
+  [Intent.GENERAL]: {
+    mustNot: [
+      ...QUESTION_PATTERNS,
+    ],
+  },
+
+  // AVAILABILITY_CHECK: Don't upsell or ask project questions on availability check
+  [Intent.AVAILABILITY_CHECK]: {
+    mustNot: [
+      ...UPSELL_PATTERNS,
+      ...QUESTION_PATTERNS,
+    ],
+  },
+
+  // EQUIPMENT_QUESTION: Answer the equipment question. Don't derail.
+  [Intent.EQUIPMENT_QUESTION]: {
+    mustNot: [
+      ...QUESTION_PATTERNS,
     ],
   },
 };
@@ -218,5 +251,7 @@ export function surgicalContractFix(
   if (cleanSentences.length === 0) return null; // Removed everything — need regeneration
   if (cleanSentences.length === sentences.length) return null; // Nothing removed
 
-  return cleanSentences.join(' ').trim();
+  const result = cleanSentences.join(' ').trim();
+  if (result.length < 60) return null; // Fragment too short — need regeneration, not a stub
+  return result;
 }

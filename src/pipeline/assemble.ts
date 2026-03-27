@@ -14,7 +14,9 @@
  */
 
 import { FactPack, InnerMonologue, MessageClassification, RenterDNA } from './types';
-import { getInventoryItemNames } from '../utils/item-matcher';
+import { getInventoryItemNames, MASTER_INVENTORY } from "../utils/item-matcher";
+import { getCompactListingReference } from "../data/hygglo-listings";
+import { CAMERA_KIT_TOTALS } from "../data/replacement-costs";
 import { AiContext } from '../ai/ai.service';
 import { buildKnownFacts } from './ground';
 
@@ -81,63 +83,22 @@ function buildPlanSection(monologue: InnerMonologue): string {
 // --- Section 4: Verified Facts ---
 
 function buildFactsSection(facts: FactPack, classification: MessageClassification): string {
+  // Core facts (rental, items, prices, delivery, schedule, compatibility) are in the
+  // KNOWLEDGE FENCE section. Only supplementary context assembled here to avoid duplication.
   const parts: string[] = [];
 
-  // Rental context
-  if (facts.rental) {
-    const r = facts.rental;
-    const startStr = r.startDate ? new Date(r.startDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : 'TBC';
-    const endStr = r.endDate ? new Date(r.endDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : 'TBC';
-    // Calculate return morning (day after end date) — renters keep gear through the last rental day
-    let returnMorningStr = '';
-    if (r.endDate) {
-      const returnDate = new Date(r.endDate);
-      returnDate.setDate(returnDate.getDate() + 1);
-      returnMorningStr = ` → return morning of ${returnDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}`;
-    }
-    parts.push(`Rental: ${r.title} | Status: ${r.status} | Dates: ${startStr} to ${endStr}${r.days ? ` (${r.days} day${r.days > 1 ? 's' : ''})` : ''}${returnMorningStr}`);
-    parts.push(`Renter: ${r.renterName}`);
-    if (r.renterPrice) parts.push(`Total price: £${r.renterPrice}`);
-  }
-
-  // Resolved items
-  if (facts.resolvedItems.length > 0) {
-    parts.push(`Items: ${facts.resolvedItems.join(', ')}`);
-  }
-
-  // Verified listing item
-  if (facts.verifiedListingItem) parts.push(facts.verifiedListingItem);
-
-  // Listing inventory context
-  if (facts.listingInventoryContext) parts.push(facts.listingInventoryContext);
-
-  // Pricing — disambiguate standalone vs bundle/kit
+  // Pricing instructions (supplements KF price facts)
   if (facts.pricing) {
-    for (const p of facts.pricing.itemPrices) {
-      parts.push(`${p.itemName} (standalone item): £${p.dailyMin}-${p.dailyMax}/day`);
-    }
     if (facts.pricing.bundlePrices) {
-      for (const b of facts.pricing.bundlePrices) {
-        parts.push(`BUNDLE: ${b.itemName} (complete kit): £${b.dailyMin}-${b.dailyMax}/day`);
-      }
       parts.push('NOTE: Bundle/kit prices are for the COMPLETE kit together. Individual prices are for one item only. Match the price to what the renter is actually booking.');
     }
     parts.push(facts.pricing.multiDayNote);
   }
 
-  // Delivery
-  if (facts.delivery) parts.push(`DELIVERY: ${facts.delivery}`);
-
-  // Schedule
-  if (facts.schedule) parts.push(`SCHEDULE: ${facts.schedule}`);
-
-  // Compatibility
-  if (facts.compatibility) parts.push(facts.compatibility);
-
   // Inventory context
   if (facts.inventoryContext) parts.push(facts.inventoryContext);
 
-  // Conversation state (what's already been discussed)
+  // Conversation state (what\'s already been discussed)
   const state = facts.conversationState;
   const stateLines: string[] = [];
   if (state.confirmedItems?.length) stateLines.push(`Confirmed: ${state.confirmedItems.join(', ')}`);
@@ -145,50 +106,29 @@ function buildFactsSection(facts: FactPack, classification: MessageClassificatio
   if (state.agreedReturnTime) stateLines.push(`Return: ${state.agreedReturnTime}`);
   if (state.renterShootType) stateLines.push(`Shoot: ${state.renterShootType}`);
   if (state.questionsAsked?.length) stateLines.push(`Already asked: ${state.questionsAsked.join(', ')}`);
-  if (state.upsellAttempted) stateLines.push('Upselling already attempted — do NOT upsell again');
-  if (state.priceQuoted) stateLines.push(`Last quoted: £${state.priceQuoted}`);
+  if (state.upsellAttempted) stateLines.push('Upselling already attempted \u2014 do NOT upsell again');
+  if (state.priceQuoted) stateLines.push(`Last quoted: \u00a3${state.priceQuoted}`);
   if (state.deliveryDiscussed) stateLines.push('Delivery already discussed');
-  if (state.unavailabilityMentioned) stateLines.push('IMPORTANT: You already told this renter about item unavailability — do NOT repeat the warning. If they bring it up, acknowledge briefly and move forward (suggest alternatives or ask how else you can help).');
+  if (state.unavailabilityMentioned) stateLines.push('IMPORTANT: You already told this renter about item unavailability \u2014 do NOT repeat the warning.');
   if (stateLines.length > 0) {
     parts.push(`CONVERSATION STATE:\n${stateLines.join('\n')}\nDo NOT re-ask questions above. Do NOT repeat established facts.`);
   }
 
-  // Urgency
   if (facts.urgency) parts.push(facts.urgency);
-
-  // Welcome back
-  if (facts.welcomeBack) {
-    parts.push('RETURNING RENTER: Welcome warmly. Skip re-introductions. Get straight to helping.');
-  }
-
-  // Multi-rental coordination
+  if (facts.welcomeBack) parts.push('RETURNING RENTER: Welcome warmly. Skip re-introductions.');
   if (facts.multiRental) parts.push(facts.multiRental);
-
-  // Discount context
   if (facts.discountContext) parts.push(facts.discountContext);
-
-  // Low value instruction
   if (facts.lowValueInstruction) parts.push(facts.lowValueInstruction);
-
-  // Stage guidance — now promoted to sales directive section (see buildSalesDirectiveSection)
-  // Kept here ONLY as fallback if salesDirective section is empty
-  // if (facts.stageGuidance) parts.push(facts.stageGuidance);
-
-  // Renter profile
   if (facts.renterProfile) parts.push(facts.renterProfile);
-
-  // Account templates
   if (facts.accountTemplates) parts.push(facts.accountTemplates);
 
-  // Upsell + Bundle context (only when not suppressed)
   if (!facts.suppressUpsell) {
     if (facts.bundleContext) parts.push(facts.bundleContext);
     if (facts.upsellContext) parts.push(facts.upsellContext);
   } else {
-    parts.push('Do NOT suggest additional items. Answer what the renter asked — keep it focused.');
+    parts.push('Do NOT suggest additional items. Answer what the renter asked \u2014 keep it focused.');
   }
 
-  // Conversation summary
   if (facts.conversationSummary) parts.push(`SUMMARY: ${facts.conversationSummary}`);
 
   return parts.join('\n');
@@ -267,6 +207,110 @@ function buildNegotiationStrategy(facts: FactPack): string {
 
 // --- Main Assembly ---
 
+
+/**
+ * Build HARD TRUTHS — situation-specific facts injected at the END of the prompt.
+ * These are the most important facts for THIS specific response.
+ * Placed last because LLMs pay most attention to the end of the prompt (recency bias).
+ */
+function buildHardTruths(
+  facts: FactPack,
+  classification: MessageClassification,
+  message: string,
+): string {
+  const truths: string[] = [];
+
+  // PRICING: inject exact prices so the AI can't hallucinate them
+  if (facts.pricing?.itemPrices?.length) {
+    const priceLines = facts.pricing.itemPrices
+      .map((p: any) => `${p.itemName}: £${p.dailyMin}-${p.dailyMax}/day`)
+      .join(', ');
+    truths.push(`PRICES (use ONLY these numbers): ${priceLines}`);
+    truths.push('CAMERA BASE KITS (INCLUDED FREE — never charge separately):\n' +
+      '• Sony FX3: 3x NP-FZ100 batteries + 320GB CFexpress Type A card + card reader + charger\n' +
+      '• Sony A7 V: 3x NP-FZ100 batteries + 256GB V90 SD card + charger\n' +
+      '• Sony A7 III: 2x NP-FZ100 batteries + 128GB V30 SD card + charger\n' +
+      '• Sony A7 II: 2x NP-FW50 batteries + 128GB SD card + charger\n' +
+      '• Fujifilm X100 VI: 2x NP-W126S batteries + 256GB SD card + charger\n' +
+      '• BMPCC 6K Pro: 5x NP-F970 batteries + 2TB SSD + SSD reader + charger\n' +
+      '• BMPCC 6K Full Frame: 2x NP-F970 batteries + 1TB CFexpress Type B card + card reader + charger\n' +
+      '• DJI Osmo Action 5: 3x batteries + 256GB microSD + charger\n' +
+      '• GoPro Hero 12: 2x batteries + 128GB microSD + charger\n' +
+      'CFexpress and SSD rentals include a card/SSD reader. SD cards do NOT include a reader.\n' +
+      'No strap included with FX3 (cinema camera, not photo camera).\n' +
+      'EXTRA batteries or cards beyond the base kit can be added for a fee if renter asks.');
+    truths.push('BOOM MIC SET (2 available): Each includes Sennheiser MKE 600 + boom pole + shock mount + Zoom H5 recorder + XLR cable + dead cat windshield + SD card. Full kit value £777. All included in the rental price — never charge for individual components.');
+    // Inject available listings so bot knows what camera+lens combos exist
+    const listingRef = getCompactListingReference();
+    if (listingRef) {
+      truths.push('OUR HYGGLO LISTINGS (camera+lens sets exist — suggest these instead of piecing items together):\n' + listingRef);
+    }
+    truths.push('When a renter wants camera + lens: find the matching SET listing above and quote that. Sets are cheaper than renting each item individually. Never piece together items when a combined listing exists.');
+  }
+
+  // RENTAL STAGE: make it crystal clear what stage we're in
+  const stage = facts.conversationState?.currentStage;
+  if (stage === 'booked') {
+    truths.push('BOOKING STATUS: NOT YET CONFIRMED. Verification is still pending on the platform. Do NOT tell the renter it\'s confirmed, accepted, gone through, or sorted. Say "once the platform verification is complete, I\'ll send pickup details."');
+  } else if (stage === 'confirmed') {
+    truths.push('BOOKING STATUS: CONFIRMED AND PAID. Focus on pickup/return logistics.');
+  } else if (stage === 'inquiry' || stage === 'interested') {
+    truths.push('BOOKING STATUS: No booking yet. Renter is still enquiring.');
+  }
+
+  // ARRIVAL: if renter says they're here, don't give directions
+  const arrivalWords = /\b(?:i'm here|i am here|we're here|just arrived|i've arrived|here now|i'm outside|we're outside|i'm at the|arrived|i'm waiting)\b/i;
+  if (arrivalWords.test(message)) {
+    truths.push('RENTER HAS ARRIVED. Do NOT give directions or tell them where to go. Say ONLY "One moment!" and nothing more. Daniel/Leo will handle the physical meetup.');
+  }
+
+  // MODEL NAME: pin the exact model from the listing
+  if (facts.verifiedListingItem) {
+    truths.push(`LISTING ITEM: "${facts.verifiedListingItem}" — use this EXACT name. Do not substitute similar model names.`);
+  }
+
+  // BOT LIMITATIONS: you're a chat agent, not an admin
+  // INVENTORY TRUTH: Only suggest items that actually exist
+  const inventoryItems = getInventoryItemNames();
+  if (inventoryItems && inventoryItems.length > 0) {
+    // Dynamic camera list from CAMERA_KIT_TOTALS + MASTER_INVENTORY
+    const cameraLines = Object.entries(CAMERA_KIT_TOTALS).map(([name, kitValue]) => {
+      const qty = MASTER_INVENTORY[name] || 1;
+      return `• ${name} (${qty} unit${qty > 1 ? 's' : ''}, kit value £${kitValue.toLocaleString()})`;
+    }).join('\n');
+    truths.push('CAMERAS WE OWN (suggest ONLY these — NEVER invent models not listed here):\n' +
+      cameraLines + '\n' +
+      'We do NOT own: A7IV, A7SII, A7RIII, A6600, FX30, Canon R5, Canon R6, or any other camera.\n' +
+      'If none of the above fit, say our cameras are all booked — do NOT fabricate.');
+
+    // SEO TEXT WARNING: listing titles contain marketing names of competitor cameras
+    // e.g. "(same sensor as a7siii)" or "(like Canon R5C)" — these are NOT items we own
+    truths.push('LISTING TITLES CONTAIN SEO TEXT like "same sensor as a7siii" or "like Canon R5C". ' +
+      'These are marketing comparisons ONLY — we do NOT stock those items. ' +
+      'NEVER suggest an item just because it appears in a listing title after "like" or "same as". ' +
+      'Only suggest cameras from the CAMERAS WE OWN list above.');
+  }
+
+  // RENTAL DATES: use the exact dates from the booking, don't shift them
+  if (facts.rental) {
+    const startDate = facts.rental.startDate || undefined;
+    const endDate = facts.rental.endDate || undefined;
+    if (startDate) {
+      truths.push('RENTAL DATES: Starts ' + startDate + (endDate ? ', ends ' + endDate : '') + '. ' +
+        'Pickup is on the START date (not the day before). ' +
+        'Do NOT suggest pickup on ' + (startDate ? 'the day before unless the renter specifically asks about evening-before pickup' : 'a different date') + '. ' +
+        'Quote times for the actual start date: 10am-12pm or 7-9pm.');
+    }
+  }
+
+  truths.push('You are a CHAT AGENT. You CANNOT accept bookings, verify documents, check backend systems, or perform any platform actions. Never claim "I\'ll get it accepted" or "I\'ve just checked."');
+
+  if (truths.length === 0) return '';
+
+  return '\n--- HARD TRUTHS (read these LAST, they override everything above) ---\n' +
+    truths.map((t, i) => `${i + 1}. ${t}`).join('\n');
+}
+
 export function assemblePrompt(
   message: string,
   classification: MessageClassification,
@@ -307,9 +351,7 @@ export function assemblePrompt(
     'Never prefix response with timestamps.',
     'RETURN CLOSURE: If asked to mark rental returned, explain inspection takes 24-72 hours.',
     'EARLY ARRIVALS: If renter wants to come earlier than scheduled or on short notice — NEVER accept. Say "let me check I can make that work" and escalate.',
-    facts.resolvedItems.length > 0 || classification.hasPricingIntent
-      ? `INVENTORY: ${getInventoryItemNames().join(', ')}.`
-      : '',
+    '',  // Full inventory list removed to save ~1K tokens — resolved items + pricing facts are sufficient
     ...intentConstraints,
   ].filter(Boolean).join('\n');
 
@@ -319,15 +361,12 @@ export function assemblePrompt(
   const knowledgeBoundary = `=== KNOWN FACTS (you may ONLY state these) ===
 ${numberedFacts}
 
-=== KNOWLEDGE BOUNDARY ===
-You have NO other information beyond KNOWN FACTS above.
-- If asked about specs, dimensions, weight, features, or capabilities not listed: say "Let me check on that and get back to you."
-- NEVER guess or use your general knowledge about cameras/equipment. Only state facts from the list above.
-- You are a CHAT AGENT. You CANNOT: be physically present, receive payments, grab equipment, arrive at locations, or perform any physical action. ${account === 'leo' ? 'Leo' : 'Daniel'} handles all physical handoffs — you only arrange them via chat.
-- NEVER fabricate what the renter said. Only reference things actually in the conversation history.
-- NEVER invent policies, discounts, or promotions not listed above.`
+=== BOUNDARY ===
+Only state facts listed above. For unknown specs: "Let me check on that."
+No guessing. No fabricating renter quotes. No inventing policies/discounts.
+You are a CHAT AGENT — ${account === 'leo' ? 'Leo' : 'Daniel'} handles physical handoffs.`
 + (marketingListingItems.length > 0
-  ? `\n\n=== MARKETING-ONLY ITEMS (NOT AVAILABLE) ===\nThe following items are marketing-only listings. They are NOT available for rental and NOT in our inventory: ${marketingListingItems.join(', ')}.\nIf a renter asks about any of these items, say: "That item is currently out of stock — I can suggest similar alternatives from what we have available." NEVER say these items are available or offer to book them.`
+  ? `\n\n=== MARKETING-ONLY ITEMS (NOT AVAILABLE) ===\nNOT AVAILABLE (marketing only): ${marketingListingItems.join(', ')}.\nIf asked about these: "Currently out of stock, I can suggest alternatives."`
   : '');
 
   // SECTION: Sales directive (promoted stage guidance + momentum + salesAction)
@@ -352,6 +391,12 @@ You have NO other information beyond KNOWN FACTS above.
     `--- KNOWLEDGE FENCE ---\n${knowledgeBoundary}`,
     `--- CONSTRAINTS ---\n${constraints}`,
   );
+  // HARD TRUTHS: situation-specific facts at the END (recency bias = most attention here)
+  const hardTruths = buildHardTruths(facts, classification, message);
+  if (hardTruths) {
+    contextParts.push(hardTruths);
+  }
+
   const additionalContext = contextParts.join('\n\n');
 
   // Build the user message (with persona prefix for Leo)
@@ -360,11 +405,11 @@ You have NO other information beyond KNOWN FACTS above.
     : message;
 
   // Token budget based on complexity
-  let maxTokens = 256;
-  if (classification.complexity === 'high') maxTokens = 448;
-  else if (classification.hasPricingIntent || classification.hasDeliveryIntent) maxTokens = 320;
-  else if (classification.contextLevel === 'comprehensive') maxTokens = 384;
-  else if (classification.contextLevel === 'minimal') maxTokens = 200;
+  let maxTokens = 512;
+  if (classification.complexity === 'high') maxTokens = 1024;
+  else if (classification.hasPricingIntent || classification.hasDeliveryIntent) maxTokens = 768;
+  else if (classification.contextLevel === 'comprehensive') maxTokens = 768;
+  else if (classification.contextLevel === 'minimal') maxTokens = 384;
 
   return {
     userMessage: userMsg,
@@ -372,6 +417,12 @@ You have NO other information beyond KNOWN FACTS above.
       rules: facts.rules,
       memories: '', // Facts are now inlined via additionalContext
       conversationHistory: facts.conversationHistory,
+      intent: classification.intent,
+      intentFlags: {
+        hasPricingIntent: classification.hasPricingIntent,
+        hasDeliveryIntent: classification.hasDeliveryIntent,
+        hasMultipleItems: facts.resolvedItems.length > 1,
+      },
       rentalContext: `ACTIVE ACCOUNT: ${businessName}`,
       additionalContext,
       maxTokens,

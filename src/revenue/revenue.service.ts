@@ -41,7 +41,7 @@ export class RevenueService {
 
   /** Cached data-derived baselines (computed once, stored in DB) */
   private boostCache: { data: any; expiry: number } | null = null;
-  private static readonly BOOST_CACHE_TTL = 10 * 60 * 1000; // 10 min cache
+  private static readonly BOOST_CACHE_TTL = 60 * 60 * 1000; // 1 hour cache (was 10 min — caused 437 DB records/month)
   private static readonly AI_DEPLOY_DATE = new Date('2026-01-29');
 
   /**
@@ -170,6 +170,7 @@ export class RevenueService {
       status: { in: ['completed', 'ongoing', 'upcoming'] },
       rental_price: { not: null, gt: 0 },
       start_date: { not: null },
+
     };
     if (account) where.account = account;
 
@@ -178,10 +179,10 @@ export class RevenueService {
       select: {
         id: true, listing_id: true, title: true, renter_info: true,
         account: true, start_date: true, end_date: true, rental_price: true, status: true,
-        parsed_items: true,
+        order_step: true, parsed_items: true,
         // Get actual pickup date from confirmed bookings (when gear physically goes out)
         bookings: {
-          where: { status: 'confirmed' },
+          where: { status: { in: ['confirmed', 'completed'] } },
           select: { pickup_date: true, return_date: true },
           take: 1,
         },
@@ -194,8 +195,12 @@ export class RevenueService {
       if (!r.start_date || !r.renter_info) continue;
       // Upcoming rentals require at least 1 confirmed booking to count in revenue.
       // Without confirmed bookings, the rental is unvalidated (phantom).
-      // Completed/ongoing already happened — rental_price is the truth.
       if (r.status === 'upcoming' && r.bookings.length === 0) continue;
+      // Phantom completed rentals: owner accepted (APPROVED) but renter never paid.
+      // Expired and auto-completed — never generated real revenue.
+      if (r.status === 'completed' && (r as any).order_step === 'APPROVED') continue;
+      // Also exclude completed rentals with no confirmed/completed bookings at all
+      if (r.status === 'completed' && r.bookings.length === 0) continue;
       const key = `${r.listing_id}|${r.renter_info}|${r.start_date.toISOString().split('T')[0]}`;
       const existing = seen.get(key);
       if (!existing || (r.rental_price || 0) > (existing.rental_price || 0)) {
@@ -395,7 +400,7 @@ export class RevenueService {
     const startMonth = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
     const endMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    const results: { month: string; revenue: number; cumulative: number; count: number; aiAttribution: number; dbcinemaRevenue: number; leoRevenue: number; danielRevenue: number; vertusRevenue: number; damageRevenue: number; bookedRevenue: number; bookedDbcinema: number; bookedLeo: number }[] = [];
+    const results: { month: string; revenue: number; cumulative: number; count: number; aiAttribution: number; dbcinemaRevenue: number; leoRevenue: number; danielRevenue: number; vertusRevenue: number; damageRevenue: number; bookedRevenue: number; bookedDbcinema: number; bookedLeo: number; pendingRevenue: number }[] = [];
     let cumulative = 0;
 
     // Get the current AI boost rate for attribution calculation
@@ -448,6 +453,7 @@ export class RevenueService {
         bookedRevenue: 0,
         bookedDbcinema: 0,
         bookedLeo: 0,
+        pendingRevenue: 0,
       });
 
       cursor.setMonth(cursor.getMonth() + 1);
@@ -578,6 +584,23 @@ export class RevenueService {
     const bookedDb = booked.filter(b => b.account === 'dbcinema' || (!b.account && !account)).reduce((s, b) => s + (b.revenue || 0), 0);
     const bookedLeo = booked.filter(b => b.account === 'leo').reduce((s, b) => s + (b.revenue || 0), 0);
 
+    // Query pending (unconfirmed) rentals grouped by pickup month
+    const pendingWhere: any = {
+      order_step: { in: ['FUNDS_RESERVED', 'VERIFIED'] },
+      status: { notIn: ['cancelled', 'completed', 'obsolete', 'consolidated'] },
+    };
+    if (account) pendingWhere.account = account;
+    const pendingRentals = await this.prisma.rental.findMany({
+      where: pendingWhere,
+      select: { rental_price: true, start_date: true },
+    });
+    const pendingByMonth = new Map<string, number>();
+    for (const r of pendingRentals) {
+      if (!r.start_date || !r.rental_price) continue;
+      const mKey = r.start_date.toISOString().split('T')[0].substring(0, 7);
+      pendingByMonth.set(mKey, (pendingByMonth.get(mKey) || 0) + r.rental_price);
+    }
+
     // Add next month entry to results so the chart has an x-axis label for it
     results.push({
       month: nextMonthKey,
@@ -593,7 +616,14 @@ export class RevenueService {
       bookedRevenue: Math.round(bookedTotal * 100) / 100,
       bookedDbcinema: Math.round(bookedDb * 100) / 100,
       bookedLeo: Math.round(bookedLeo * 100) / 100,
+      pendingRevenue: 0,
     });
+
+    // Overlay pending revenue on all months (does NOT affect cumulative/totals)
+    for (const entry of results) {
+      const pRev = pendingByMonth.get(entry.month) || 0;
+      if (pRev > 0) (entry as any).pendingRevenue = Math.round(pRev * 100) / 100;
+    }
 
     return {
       months: results,
@@ -1103,116 +1133,6 @@ export class RevenueService {
   };
 
   /**
-   * Compute pre-AI conversion rate from real data.
-   * Formula: confirmed_rentals / (confirmed_rentals + lost_revenue_records) for pre-AI period.
-   */
-  private async computeConversionBaseline(): Promise<{ rate: number; dataPoints: number; source: string }> {
-    const aiDeploy = RevenueService.AI_DEPLOY_DATE;
-
-    const [confirmedCount, lostCount] = await Promise.all([
-      this.prisma.rental.count({
-        where: {
-          status: { in: ['completed', 'ongoing', 'upcoming'] },
-          rental_price: { gt: 0 },
-          start_date: { lt: aiDeploy },
-        },
-      }),
-      this.prisma.lost_revenue_record.count({
-        where: { start_date: { lt: aiDeploy } },
-      }),
-    ]);
-
-    const total = confirmedCount + lostCount;
-    if (total < 20) {
-      return { rate: RevenueService.BASELINE_FALLBACKS.conversionRate, dataPoints: total, source: 'fallback (< 20 data points)' };
-    }
-
-    const rate = Math.round((confirmedCount / total) * 1000) / 1000;
-    return { rate, dataPoints: total, source: `${confirmedCount} confirmed / ${total} total (pre-AI)` };
-  }
-
-  /**
-   * Compute quality baseline as P25 of all measured AI quality scores.
-   * P25 approximates human-level quality (bottom quartile of AI performance).
-   */
-  private async computeQualityBaseline(): Promise<{ score: number; dataPoints: number; source: string }> {
-    const result = await this.prisma.$queryRaw<[{ p25: number | null; cnt: number }]>`
-      SELECT
-        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY overall_quality)::float as p25,
-        COUNT(*)::int as cnt
-      FROM response_quality
-      WHERE overall_quality IS NOT NULL
-    `;
-
-    const p25 = result[0]?.p25;
-    const cnt = result[0]?.cnt || 0;
-
-    if (p25 === null || cnt === 0) {
-      return { score: RevenueService.BASELINE_FALLBACKS.qualityScore, dataPoints: 0, source: 'fallback (no quality data)' };
-    }
-
-    const score = Math.round(p25 * 1000) / 1000;
-    return { score, dataPoints: cnt, source: `P25 of ${cnt} quality scores` };
-  }
-
-  /**
-   * Analyze historical Hygglo chat data to compute pre-AI response coverage.
-   * Fetches completed orders, analyzes activities to find renter message sequences
-   * and whether they got owner replies.
-   */
-  private async analyzeHistoricalResponseRate(): Promise<{ rate: number; ordersAnalyzed: number; source: string }> {
-    const accounts: HyggloAccount[] = ['dbcinema', 'leo'];
-    let totalSequences = 0;
-    let repliedSequences = 0;
-    let ordersAnalyzed = 0;
-
-    for (const account of accounts) {
-      try {
-        const orders = await this.hyggloService.scanCompletedRentalsPaginated(account, 50);
-
-        for (const order of orders) {
-          const activities: any[] = order._detail?.activities || [];
-          const chatMessages = activities
-            .filter((a: any) => a.chatMessage?.text?.content)
-            .map((a: any) => ({ byMe: !!a.chatMessage.byMe }));
-
-          if (chatMessages.length < 2) continue; // Need at least a renter msg + potential reply
-          ordersAnalyzed++;
-
-          // Identify renter message sequences (byMe=false from owner perspective = renter sent it)
-          let inRenterSequence = false;
-          for (let i = 0; i < chatMessages.length; i++) {
-            const msg = chatMessages[i];
-            if (!msg.byMe) {
-              // Renter message
-              if (!inRenterSequence) {
-                inRenterSequence = true;
-                totalSequences++;
-              }
-            } else {
-              // Owner reply
-              if (inRenterSequence) {
-                repliedSequences++;
-                inRenterSequence = false;
-              }
-            }
-          }
-          // If conversation ended with unanswered renter sequence, it stays uncounted as replied
-        }
-      } catch (err) {
-        this.logger.warn(`Failed to analyze response rate for ${account}: ${err.message}`);
-      }
-    }
-
-    if (ordersAnalyzed < 10 || totalSequences === 0) {
-      return { rate: RevenueService.BASELINE_FALLBACKS.responseCoverage, ordersAnalyzed, source: 'fallback (< 10 orders analyzable)' };
-    }
-
-    const rate = Math.round((repliedSequences / totalSequences) * 1000) / 1000;
-    return { rate, ordersAnalyzed, source: `${repliedSequences}/${totalSequences} sequences replied across ${ordersAnalyzed} orders` };
-  }
-
-  /**
    * Get data-derived baselines (cached in memory, persisted in DB).
    * Replaces the old static PRE_AI_BASELINES.
    */
@@ -1226,28 +1146,14 @@ export class RevenueService {
     // HARDCODED PRE-AI BASELINES — based on solo human operator reality.
     // The DB has no true pre-AI data (system went live Feb 4 2026).
     // Previous "data-derived" baselines were contaminated (computed from AI-era data).
-    // These reflect Daniel's actual manual operation before the bot:
+    // These reflect Daniel actual manual operation before the bot:
     return {
       responseCoverage: 0.55,  // ~55% of messages got a reply within 4 hours (manual, waking hours only)
-      offHoursHandling: 0.0,   // Zero off-hours responses — no one replies at 2am manually
-      followUpRate: 0.0,       // No systematic follow-ups — manual operation doesn't chase cold leads
-      conversionRate: 0.077,   // 7.7% — from earliest funnel snapshot (Feb 2026, AI had just started)
-      qualityScore: 0.80,      // 80% — manual responses are good but inconsistent/slow vs templated AI
+      offHoursHandling: 0.0,   // Zero off-hours responses -- no one replies at 2am manually
+      followUpRate: 0.0,       // No systematic follow-ups -- manual operation does not chase cold leads
+      conversionRate: 0.077,   // 7.7% -- from earliest funnel snapshot (Feb 2026, AI had just started)
+      qualityScore: 0.80,      // 80% -- manual responses are good but inconsistent/slow vs templated AI
     };
-  }
-
-  /** Store a computed baseline in ai_decision for persistence. */
-  private async storeBaseline(type: string, value: number, source: string, dataPoints: number): Promise<void> {
-    await this.prisma.ai_decision.create({
-      data: {
-        decision_type: type,
-        input_summary: `Baseline calculation: ${type}`,
-        output_summary: JSON.stringify({ value, source, dataPoints, calculatedAt: new Date().toISOString() }),
-        confidence: value,
-        action_taken: `${type} = ${value} (${source})`,
-        notified: false,
-      },
-    });
   }
 
   /**

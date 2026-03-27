@@ -11,6 +11,7 @@ import { FollowUpModule } from '../follow-up/follow-up.module';
 import { VerificationModule } from '../verification/verification.module';
 import { RevenueModule } from '../revenue/revenue.module';
 import { ContentionModule } from '../contention/contention.module';
+import { ItemResolverModule } from '../item-resolver/item-resolver.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ContentionModule } from '../contention/contention.module';
     VerificationModule,
     RevenueModule,
     ContentionModule,
+    ItemResolverModule,
   ],
   providers: [RentalScannerService],
   exports: [RentalScannerService],

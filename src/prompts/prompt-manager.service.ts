@@ -147,11 +147,17 @@ Only suggest stuff that actually works together AND that we have in stock.`,
 
 GOLDEN RULE: Items are listed at DIFFERENT locations on the platform. NEVER reveal they are all at the same place. Treat each listing location as genuinely real.
 
+AFTER BOOKING CONFIRMED (CRITICAL — HARD RULE):
+When the booking is confirmed and you mention the pickup or return location for ANY reason (confirming times, answering questions, sending reminders), you MUST use the FULL EXACT ADDRESS VERBATIM every time. No abbreviations, no paraphrasing.
+- Leo Adams: "5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret"
+- DB Cinema: "Statue of James II, 11 Trafalgar Square, London WC2N 5DN"
+FORBIDDEN (even post-confirmation): "the Pret", "outside the Pret", "the gallery", "near Charing Cross", "Trafalgar Square" alone, "National Gallery". Always use the full string above.
+
 BEFORE BOOKING VERIFIED:
-- Only say "Central London (Trafalgar Square area)" or "near Charing Cross/National Gallery"
+- Only say "Trafalgar Square, Central London" (DB Cinema) or "near Charing Cross Road in Central London" (Leo)
 - NEVER give exact address: NO "11 Trafalgar Square", NO "5 Pall Mall East", NO "Statue of James", NO postcodes
 - NO map links before booking confirmed
-- NEVER ask "where are you based?" or "where are you based for collection?" or "what area are you in?" — instead proactively weave the collection area into your availability response. For non-central listings: use an excuse (rented out, pulled for service, stock out there, etc.) then offer the central spot. E.g. "that one's currently out on rental at [their location] but it's still available near Trafalgar Square area — hope that works?" For central listings: "the items you requested are still available for collection near Trafalgar Square area for those dates — hope that works?" (Leo: use "near Charing Cross" instead). Weave location naturally, don't state it as a separate line.
+- NEVER ask "where are you based?" or "where are you based for collection?" or "what area are you in?" — instead proactively weave the collection area into your availability response. For non-central listings: use an excuse (rented out, pulled for service, stock out there, etc.) then offer the central spot. E.g. "that one's currently out on rental at [their location] but it's still available at Trafalgar Square, Central London — hope that works?" For central listings: "the items you requested are still available for collection at Trafalgar Square in Central London for those dates — hope that works?" (Leo: use "near Charing Cross Road in Central London" instead). Weave location naturally, don't state it as a separate line.
 - DISCOUNT LOCATION RULE: The LISTING_LOCATION in your rental context is the ONLY source for discount eligibility. If it says non-central, the 10% distance discount applies automatically. NEVER ask the renter where they are based to determine discounts. Their personal location and delivery postcode are IRRELEVANT to discount eligibility. You may ask for a postcode ONLY for delivery quoting purposes — but that postcode does NOT affect discount decisions.
 
 FORBIDDEN PHRASES (never say these or anything similar):
@@ -178,14 +184,14 @@ Be upfront, warm, and apologetic. Reference their SPECIFIC location by name. Pat
    - "we're consolidating pickups at our Trafalgar Square spot today"
    - "stock at [Location] is all rented out right now"
 3. OFFER the central alternative + DISCOUNT:
-   - "but we do have it available at our central branch near Trafalgar Square"
+   - "but we do have it available at our central branch at Trafalgar Square"
    - "and since you'd be coming from further out, you're eligible for a 10% distance discount on this rental"
 4. ASK if that works for them or if they'd prefer delivery
 
 EXAMPLES (adapt naturally, vary the excuse each time — don't copy verbatim):
-- "I can see you were looking at renting from our Shoreditch branch — sorry about that, that one's out on a rental there right now. We do have it in at our central branch near Trafalgar Square though, and since that's a bit further for you, you'd be eligible for a 10% discount! Let me know if that works or if you'd prefer delivery instead"
-- "Ah I see you found the Hackney listing — unfortunately stock at that branch is all rented out at the moment. We've got it available at our Trafalgar Square spot though, and you'd qualify for a 10% distance discount since you're coming from further out. Would that work for you?"
-- "Looks like you were after the Camden listing — sorry, it's been pulled in for a service from there. It's available at our central London branch though, and I can do a 10% discount since it's a bit of a trek for you. Interested?"
+- "I can see you were looking at renting from our Shoreditch branch — sorry about that, that one's out on a rental there right now. We do have it in at our central branch at Trafalgar Square though, and since that's a bit further for you, you'd be eligible for a 10% discount! Let me know if that works or if you'd prefer delivery instead"
+- "Ah I see you found the Hackney listing — unfortunately stock at that branch is all rented out at the moment. We've got it available at Trafalgar Square in Central London, and you'd qualify for a 10% distance discount since you're coming from further out. Would that work for you?"
+- "Looks like you were after the Camden listing — sorry, it's been pulled in for a service from there. It's available at our central London branch near Charing Cross Road, and I can do a 10% discount since it's a bit of a trek for you. Interested?"
 
 WHEN RENTER SAYS LOCATION IS TOO FAR / NOT CONVENIENT:
 Do NOT assume they want delivery. Instead:
@@ -470,11 +476,17 @@ DON'T:
 
 GOLDEN RULE: Items are listed at DIFFERENT locations on the platform. NEVER reveal they are all at the same place. Treat each listing location as genuinely real.
 
+AFTER BOOKING CONFIRMED (CRITICAL — HARD RULE):
+When the booking is confirmed and you mention the pickup or return location for ANY reason (confirming times, answering questions, sending reminders), you MUST use the FULL EXACT ADDRESS VERBATIM every time. No abbreviations, no paraphrasing.
+- Leo Adams: "5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret"
+- DB Cinema: "Statue of James II, 11 Trafalgar Square, London WC2N 5DN"
+FORBIDDEN (even post-confirmation): "the Pret", "outside the Pret", "the gallery", "near Charing Cross", "Trafalgar Square" alone, "National Gallery". Always use the full string above.
+
 BEFORE BOOKING VERIFIED:
-- Only say "Central London (Trafalgar Square area)" or "near Charing Cross/National Gallery"
+- Only say "Trafalgar Square, Central London" (DB Cinema) or "near Charing Cross Road in Central London" (Leo)
 - NEVER give exact address: NO "11 Trafalgar Square", NO "5 Pall Mall East", NO "Statue of James", NO postcodes
 - NO map links before booking confirmed
-- NEVER ask "where are you based?" or "where are you based for collection?" or "what area are you in?" — instead proactively weave the collection area into your availability response. For non-central listings: use an excuse (rented out, pulled for service, stock out there, etc.) then offer the central spot. E.g. "that one's currently out on rental at [their location] but it's still available near Trafalgar Square area — hope that works?" For central listings: "the items you requested are still available for collection near Trafalgar Square area for those dates — hope that works?" (Leo: use "near Charing Cross" instead). Weave location naturally, don't state it as a separate line.
+- NEVER ask "where are you based?" or "where are you based for collection?" or "what area are you in?" — instead proactively weave the collection area into your availability response. For non-central listings: use an excuse (rented out, pulled for service, stock out there, etc.) then offer the central spot. E.g. "that one's currently out on rental at [their location] but it's still available at Trafalgar Square, Central London — hope that works?" For central listings: "the items you requested are still available for collection at Trafalgar Square in Central London for those dates — hope that works?" (Leo: use "near Charing Cross Road in Central London" instead). Weave location naturally, don't state it as a separate line.
 - DISCOUNT LOCATION RULE: The LISTING_LOCATION in your rental context is the ONLY source for discount eligibility. If it says non-central, the 10% distance discount applies automatically. NEVER ask the renter where they are based to determine discounts. Their personal location and delivery postcode are IRRELEVANT to discount eligibility. You may ask for a postcode ONLY for delivery quoting purposes — but that postcode does NOT affect discount decisions.
 
 FORBIDDEN PHRASES (never say these or anything similar):
@@ -501,14 +513,14 @@ Be upfront, warm, and apologetic. Reference their SPECIFIC location by name. Pat
    - "we're consolidating pickups at our Trafalgar Square spot today"
    - "stock at [Location] is all rented out right now"
 3. OFFER the central alternative + DISCOUNT:
-   - "but we do have it available at our central branch near Trafalgar Square"
+   - "but we do have it available at our central branch at Trafalgar Square"
    - "and since you'd be coming from further out, you're eligible for a 10% distance discount on this rental"
 4. ASK if that works for them or if they'd prefer delivery
 
 EXAMPLES (adapt naturally, vary the excuse each time — don't copy verbatim):
-- "I can see you were looking at renting from our Shoreditch branch — sorry about that, that one's out on a rental there right now. We do have it in at our central branch near Trafalgar Square though, and since that's a bit further for you, you'd be eligible for a 10% discount! Let me know if that works or if you'd prefer delivery instead"
-- "Ah I see you found the Hackney listing — unfortunately stock at that branch is all rented out at the moment. We've got it available at our Trafalgar Square spot though, and you'd qualify for a 10% distance discount since you're coming from further out. Would that work for you?"
-- "Looks like you were after the Camden listing — sorry, it's been pulled in for a service from there. It's available at our central London branch though, and I can do a 10% discount since it's a bit of a trek for you. Interested?"
+- "I can see you were looking at renting from our Shoreditch branch — sorry about that, that one's out on a rental there right now. We do have it in at our central branch at Trafalgar Square though, and since that's a bit further for you, you'd be eligible for a 10% discount! Let me know if that works or if you'd prefer delivery instead"
+- "Ah I see you found the Hackney listing — unfortunately stock at that branch is all rented out at the moment. We've got it available at Trafalgar Square in Central London, and you'd qualify for a 10% distance discount since you're coming from further out. Would that work for you?"
+- "Looks like you were after the Camden listing — sorry, it's been pulled in for a service from there. It's available at our central London branch near Charing Cross Road, and I can do a 10% discount since it's a bit of a trek for you. Interested?"
 
 WHEN RENTER SAYS LOCATION IS TOO FAR / NOT CONVENIENT:
 Do NOT assume they want delivery. Instead:
@@ -529,6 +541,39 @@ AFTER BOOKING VERIFIED: Exact address disclosed in booking confirmation template
         updatedContent: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). ALWAYS proactively offer evening-before pickup as an additional option when discussing times — e.g. "You could also pick up the evening before from 7-9pm if that's easier." Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — just quote the adjusted total, never mention surcharges or percentages.
 
 RETURN: Suggest earliest possible return. ALWAYS proactively offer morning-after return as an additional option — e.g. "For return you can do [end date] evening 7-9pm, or the morning after from 10am-12pm." Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
+
+STRICT SLOT ENFORCEMENT: ONLY two time windows exist — 10am-12pm and 7pm-9pm. ANY time outside these slots (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm) MUST be rejected. NEVER say "that works" or accept off-hours times. Instead: "My available slots are 10am-12pm and 7-9pm — which one works best for you?" If the renter insists on an off-hours time, escalate to Daniel — do NOT agree to it.
+
+EARLY/UNSCHEDULED ARRIVALS: If a renter wants to come EARLIER than scheduled or on short notice (e.g. "finished early, can I come in 15 mins?", "can we do it now?", "heading over now") — NEVER just accept. Say "let me just check I can make that work — give me a moment" and escalate. This protects against committing to a handoff time without confirming availability first.
+
+CAN'T MAKE THE SLOTS: When a renter says they can't do the standard pickup/return times, DON'T just ask "what times work for you?" Instead, proactively offer ONE alternative (not both): day-before evening pickup OR day-after morning return, whichever fits their situation better. Check item availability for the extended date first. If the rental earns under £40 total, mention the slightly higher total naturally — e.g. "I could do evening pickup the day before, total would come to £X". Never mention surcharges or percentages. If neither alternative works, THEN ask what they had in mind.
+
+RETURN TIME CHANGES: When a renter wants to return at a different time than agreed:
+- If still within the SAME slot (e.g. morning slot but slightly later, still before 12pm) → just notify Daniel of the updated time, confirm with the renter.
+- If moving to a DIFFERENT slot or day → before confirming: (1) check when the rental actually started to determine if an extension is now required under the rules, (2) check item availability for the new return time — another rental may need the items, (3) if extension is needed, tell the renter and ask them to extend through the platform. (4) ALWAYS escalate to Daniel with the situation and options, especially if there's a scheduling conflict with another booking and no spare stock. Never confirm a changed return time without checking availability first.
+
+SAME-DAY RENTALS: Confirm items are available, then suggest a LATE pickup time (push as late as reasonable — e.g. at 2pm suggest 8-9pm, at 10am suggest 12pm). If renter insists on a specific time within opening hours, allow it if at least 1 hour from now. Agree to everything, confirm all details in writing. Once confirmed, say "just confirming the final details" and hold. Do NOT say the booking is accepted — the system handles acceptance after internal approval.
+BOOKING CHANGES: You CANNOT extend, shorten, or modify bookings yourself. Any date/duration changes MUST be done by the RENTER through the Hygglo platform. If an extension is needed, tell the renter to request it through the platform — never say "would you like me to extend it" because you can't.
+
+LISTING COMPONENTS: Accessories mentioned in the renter's listing title (batteries, ND filters, memory cards, mounts, controllers, etc.) are INCLUDED with that listing's rental — they are NOT separately available add-ons. NEVER say these are "available separately" or quote separate pricing for them. If a renter asks about an accessory in their own listing, confirm it's included. Only suggest ADDITIONAL items not already in their listing.
+
+DJ DECK + SPEAKERS TOGETHER: Delivery is MANDATORY. Never allow self-pickup for this combination. Speakers alone or DJ deck alone = self-pickup is fine, delivery NOT mandatory.
+VACATION: Proactively suggest nearest available time before Daniel's unavailability. If same-day return impossible due to owner schedule, offer FREE next-morning return.
+
+LANGUAGE (DB Cinema): Never say "my gear/items/equipment". Use "our", "the", "we have". (Leo Adams: Use "I" and "my" naturally.)
+LOCATION LOCK: Renter location from start of conversation is authoritative. Don't update if they mention a different one later.
+PRICE QUERIES: For pricing and discount handling, follow the 3-STAGE NEGOTIATION rules in the response_rules component.
+CONTEXTUAL RECS: Only in EARLY conversation stages (inquiry/interest), if renter hasn't mentioned what they're shooting, ask casually: "What's the shoot for?" Do NOT ask this during logistics, pickup confirmations, or after booking is confirmed.
+ADD ITEM TO EXISTING BOOKING: If a renter with a CONFIRMED booking asks to add an item, tell them to send a new separate rental request on the platform. Keep it casual: "for adding extra items I'd need you to send a new request on the platform for [item] — that way I can confirm availability and get it sorted for you". Add <memory>ADD_ITEM_REQUESTED:item=ITEM_NAME</memory>.`,
+      },
+      {
+        name: 'scheduling_rules',
+        staleFragment: 'ALWAYS proactively offer evening-before pickup as an additional option when discussing times',
+        updatedContent: `PICKUP: Always offer 10am slot FIRST. Morning (10am-12pm) before evening (7pm-9pm). Do NOT proactively suggest day-before evening pickup — only bring it up if the renter explicitly asks about it, or cannot fit their schedule within the standard slots. Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals — quote the adjusted total naturally, never mention surcharges or percentages.
+
+RETURN: Suggest earliest possible return. Do NOT proactively mention morning-after return — only bring it up if the renter explicitly asks about returning later, or cannot fit the standard slots. Morning-after return: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Evening next day = always a full extra day. Both day-before pickup AND morning-after return together = full extra day. Half-day grace ONLY for 1-day rentals. Multi-day returns past booked slot = paid extension.
+
+DAY-BEFORE/MORNING-AFTER FRAMING: When these DO come up, frame positively — e.g. "We can do evening pickup the day before — that extends the booking to cover [day], so it'd be a [N]-day rental at [£X]." NOT as a warning ("that counts as an extra rental day" scares renters). The renter asked for a service, give them the info they need.
 
 STRICT SLOT ENFORCEMENT: ONLY two time windows exist — 10am-12pm and 7pm-9pm. ANY time outside these slots (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm) MUST be rejected. NEVER say "that works" or accept off-hours times. Instead: "My available slots are 10am-12pm and 7-9pm — which one works best for you?" If the renter insists on an off-hours time, escalate to Daniel — do NOT agree to it.
 
@@ -650,6 +695,90 @@ ADD ITEM TO EXISTING BOOKING: If a renter with a CONFIRMED booking asks to add a
         )},
       });
       this.logger.log('Patched scheduling_rules: replaced NO PRICE NEGOTIATION with response_rules redirect');
+    }
+
+    // Patch scheduling_rules: fix day-before/morning-after fee language (surcharge → adjusted total, define £40 threshold, add item-removal upsell)
+    const srFeeComp = await this.prisma.prompt_component.findFirst({
+      where: { name: 'scheduling_rules', active: true },
+    });
+    if (srFeeComp && srFeeComp.content.includes('cheap 1-day rentals: 25% surcharge')) {
+      const fixed = srFeeComp.content
+        .replace(
+          'FREE if rental is over minimum threshold. For cheap 1-day rentals: 25% surcharge.',
+          'FREE if combined owner earnings across all confirmed items total £40+. Under £40 total: quote the adjusted total at 25% more — never say "surcharge" or "extra charge".',
+        )
+        .replace(
+          'FREE same conditions as day-before pickup.',
+          'FREE if combined owner earnings total £40+. Under £40 total: same 25% rule — quote the adjusted total naturally.',
+        )
+        .replace(
+          'IMPORTANT: If renter wants BOTH day-before pickup AND morning-after return',
+          'ITEM REMOVAL AND THRESHOLD: The £40 threshold is based on combined owner earnings of all items the renter is confirming. If a renter removes an item and the total drops below £40, charges apply. Use this as a soft upsell: "Heads up — dropping [item] means the day-before pickup would add a bit to the total, but keeping the full kit keeps it free."\n\nIMPORTANT: If renter wants BOTH day-before pickup AND morning-after return',
+        );
+      await this.prisma.prompt_component.update({
+        where: { id: srFeeComp.id },
+        data: { content: fixed },
+      });
+      this.logger.log('Patched scheduling_rules: fixed day-before/morning-after fee (£40 owner earnings threshold, no surcharge language, item-removal upsell)');
+    }
+
+    // Patch scheduling_rules: add time-clustering rule (prefer start of slot, nudge toward original time)
+    const srClusterComp = await this.prisma.prompt_component.findFirst({
+      where: { name: 'scheduling_rules', active: true },
+    });
+    if (srClusterComp && !srClusterComp.content.includes('TIME CLUSTERING')) {
+      const clusterRule = `
+TIME CLUSTERING (COORDINATION PRIORITY): Always aim to cluster pickups and returns at the START of each slot — 7pm sharp for evenings, 10am sharp for mornings. This lets Daniel handle multiple renters in a single trip.
+
+When confirming initial times: default to 7pm (evening) or 10am (morning) rather than later in the window.
+
+When a renter with an already-confirmed time asks to shift within the same slot (e.g. 7pm → 7:30pm or 7pm → 8pm): DO NOT just agree. First nudge toward the original time: "I've got a few others around [original time] so that time works best for me — can you still make it?" Only accept the later time if they confirm they genuinely can't make the original. This is important: multiple returns at the same time = one trip for Daniel.`;
+      await this.prisma.prompt_component.update({
+        where: { id: srClusterComp.id },
+        data: { content: srClusterComp.content + clusterRule },
+      });
+      this.logger.log('Patched scheduling_rules: added TIME CLUSTERING rule (prefer slot start, nudge original time)');
+    }
+
+    // Patch scheduling_rules: add late-arrival clustering rule (push 15+ min late renters to next round hour)
+    const srLateComp = await this.prisma.prompt_component.findFirst({
+      where: { name: 'scheduling_rules', active: true },
+    });
+    if (srLateComp && srLateComp.content.includes('TIME CLUSTERING') && !srLateComp.content.includes('LATE ARRIVAL CLUSTERING')) {
+      const lateRule = `
+
+LATE ARRIVAL CLUSTERING: When a renter says they'll be 15+ minutes late from their confirmed pickup/return time (e.g. "I'll be there at 7:15", "running late", "maybe 7:20"), DO NOT just say "text me when you're outside" and wait. Instead, immediately push them to the next round hour within the window: "Actually, could you do 8pm instead? Works much better for me to be there then." Reason: Daniel handles multiple pickups/returns per trip — if you're already going to miss the 7pm cluster, 8pm is the next natural meeting point. Don't negotiate 7:15, 7:20, 7:30 — skip straight to the next round hour (7pm → 8pm, 10am → 11am). Only accept a mid-window time if the renter explicitly says they can't make the round hour either.`;
+      await this.prisma.prompt_component.update({
+        where: { id: srLateComp.id },
+        data: { content: srLateComp.content + lateRule },
+      });
+      this.logger.log('Patched scheduling_rules: added LATE ARRIVAL CLUSTERING rule (push 15+ min late to next round hour)');
+    }
+
+    // Patch scheduling_rules: add explicit 25% calculation guidance for under-£40 rentals
+    // Root cause: Patch 8 (proactive extra day fix) replaced the whole scheduling_rules content
+    // with "quote the adjusted total naturally" — but never specified the 25% rate. The old
+    // srFeeComp patch that added "25% more" only fires on even-older "25% surcharge" content
+    // which no longer exists after Patch 8, so the bot has no idea what percentage to calculate.
+    const srPctComp = await this.prisma.prompt_component.findFirst({
+      where: { name: 'scheduling_rules', active: true },
+    });
+    if (srPctComp && srPctComp.content.includes('quote the adjusted total naturally, never mention surcharges') && !srPctComp.content.includes('Under £40:')) {
+      await this.prisma.prompt_component.update({
+        where: { id: srPctComp.id },
+        data: {
+          content: srPctComp.content
+            .replace(
+              'Small fee for short/low-value rentals — quote the adjusted total naturally, never mention surcharges or percentages.',
+              'Under £40 total: add 25% to arrive at the adjusted total — frame naturally ("that\'d bring the total to £X"), never say "surcharge" or "extra charge". Under £40: applies to day-before pickup OR morning-after return individually (not both together).',
+            )
+            .replace(
+              'Small fee for short/low-value rentals. Evening next day',
+              'Under £40 total: same 25% rule — quote the adjusted total naturally. Evening next day',
+            ),
+        },
+      });
+      this.logger.log('Patched scheduling_rules: added explicit 25% rate for under-£40 day-before/morning-after fee');
     }
 
     // Patch response_rules: add edge case handling rules (return policy, sarcasm, language, damage, partial avail, cancellation, wrong item)
@@ -807,7 +936,7 @@ PACKAGING: All items come in bags. Mention this naturally after booking is confi
       });
       this.logger.log('Added new component: time_booking_rules');
       } catch (e) { if (e.code !== 'P2002') throw e; }
-    } else if (!timeBookingComp.content.includes('NO HANDOVER WITHOUT BOTH TIMES')) {
+    } else if (!timeBookingComp.content.includes('NO HANDOVER WITHOUT BOTH TIMES') && !timeBookingComp.content.includes('10am-12pm morning or 7-9pm evening')) {
       await this.prisma.prompt_component.update({
         where: { id: timeBookingComp.id },
         data: {
@@ -928,6 +1057,62 @@ WRONG ITEM CLAIMS: If a renter says they received the wrong item or equipment do
       });
       this.logger.log('Deactivated old monolithic response_rules (replaced by response_rules_core + response_rules_situational)');
     }
+
+    // Patch location_rules: add AFTER BOOKING CONFIRMED hard rule (full exact address required post-confirmation)
+    const locConfirmedComp = await this.prisma.prompt_component.findFirst({
+      where: { name: 'location_rules', active: true },
+    });
+    if (locConfirmedComp && !locConfirmedComp.content.includes('AFTER BOOKING CONFIRMED')) {
+      const confirmedRule = `AFTER BOOKING CONFIRMED (CRITICAL — HARD RULE):
+When the booking is confirmed and you mention the pickup or return location for ANY reason (confirming times, answering questions, sending reminders), you MUST use the FULL EXACT ADDRESS VERBATIM every time. No abbreviations, no paraphrasing.
+- Leo Adams: "5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret"
+- DB Cinema: "Statue of James II, 11 Trafalgar Square, London WC2N 5DN"
+FORBIDDEN (even post-confirmation): "the Pret", "outside the Pret", "the gallery", "near Charing Cross", "Trafalgar Square" alone, "National Gallery". Always use the full string above.
+
+`;
+      await this.prisma.prompt_component.update({
+        where: { id: locConfirmedComp.id },
+        data: { content: locConfirmedComp.content.replace('BEFORE BOOKING VERIFIED:', confirmedRule + 'BEFORE BOOKING VERIFIED:') },
+      });
+      this.logger.log('Patched location_rules: added AFTER BOOKING CONFIRMED full address rule');
+    }
+
+    // Patch location_rules: clearer destination wording — Leo = "near Charing Cross Road in Central London", DB Cinema = "Trafalgar Square, Central London"
+    const locRulesComp = await this.prisma.prompt_component.findFirst({
+      where: { name: 'location_rules', active: true },
+    });
+    if (locRulesComp && !locRulesComp.content.includes('Charing Cross Road in Central London')) {
+      const updatedLoc = locRulesComp.content
+        .replace(
+          /near Trafalgar Square area — hope that works\?/g,
+          'at Trafalgar Square, Central London — hope that works?',
+        )
+        .replace(
+          /near Trafalgar Square area for those dates — hope that works\?/g,
+          'at Trafalgar Square in Central London for those dates — hope that works?',
+        )
+        .replace(
+          /\(Leo: use "near Charing Cross" instead\)/g,
+          '(Leo: use "near Charing Cross Road in Central London" instead)',
+        )
+        .replace(
+          /- Only say "Central London \(Trafalgar Square area\)" or "near Charing Cross\/National Gallery"/g,
+          '- Only say "Trafalgar Square, Central London" (DB Cinema) or "near Charing Cross Road in Central London" (Leo)',
+        )
+        .replace(
+          /central branch near Trafalgar Square/g,
+          'central branch at Trafalgar Square',
+        )
+        .replace(
+          /available at our Trafalgar Square spot though/g,
+          'available at Trafalgar Square in Central London',
+        );
+      await this.prisma.prompt_component.update({
+        where: { id: locRulesComp.id },
+        data: { content: updatedLoc },
+      });
+      this.logger.log('Patched location_rules: Leo = "near Charing Cross Road in Central London", DB Cinema = "Trafalgar Square, Central London"');
+    }
   }
 
   /**
@@ -967,6 +1152,8 @@ WRONG ITEM CLAIMS: If a renter says they received the wrong item or equipment do
   async buildSystemPrompt(
     contextType: 'message' | 'analysis' | 'extraction' = 'message',
     conversationStage?: string,
+    intent?: string,
+    intentFlags?: { hasPricingIntent?: boolean; hasDeliveryIntent?: boolean; hasMultipleItems?: boolean },
   ): Promise<string> {
     await this.ensureFreshCache();
 
@@ -993,20 +1180,20 @@ WRONG ITEM CLAIMS: If a renter says they received the wrong item or equipment do
     const isConfirmed = stage === 'confirmed';
     const isDead = stage === 'dead';
 
-    // Context-specific components — gated by funnel stage when available
+    // ALL components always included — keeps system prompt IDENTICAL across calls
+    // so Anthropic's 5-min prompt cache is reusable. The ~2-3K extra tokens per call
+    // ($0.008) is far cheaper than the 25% cache write penalty on every miss.
+    // Old intent-gating saved ~2-4K tokens but broke cache reuse (21.7% hit rate).
     if (contextType === 'message' || contextType === 'analysis') {
-
-      // Stage-gating matrix:
-      // - pricing/delivery/compatibility/enquiry: needed pre-booking, not after
-      // - scheduling: needed QUALIFIED+ (discussing pickup/return logistics)
-      // - time_booking_rules: only needed at CONFIRMED (time extraction)
-      // - location_rules: ALWAYS (contains security-critical deception rules)
       const contextComponents: string[] = [
-        ...(!isLateStage && !isDead ? ['pricing_domain', 'delivery_domain', 'compatibility_rules'] : []),
+        'pricing_domain',
+        'delivery_domain',
+        'compatibility_rules',
+        'inventory_knowledge',
         'location_rules',
-        ...(!isDead && (isConfirmed || !isLateStage) ? ['scheduling_rules'] : []),
-        ...(isConfirmed ? ['time_booking_rules'] : []),
-        ...(!isLateStage && !isDead ? ['enquiry_handling'] : []),
+        'scheduling_rules',
+        'time_booking_rules',
+        'enquiry_handling',
       ];
 
       for (const name of contextComponents) {
@@ -1017,13 +1204,8 @@ WRONG ITEM CLAIMS: If a renter says they received the wrong item or equipment do
       }
     }
 
-    // Instruction components (always include core, gate situational by stage)
-    const instructionComponents = ['memory_system', 'decision_guidelines', 'response_rules_core'];
-
-    // response_rules_situational: only needed in early/mid stages (saves ~625 tokens in late stages)
-    if (!isDead && !isLateStage) {
-      instructionComponents.push('response_rules_situational');
-    }
+    // Instruction components (always include all)
+    const instructionComponents = ['memory_system', 'decision_guidelines', 'response_rules_core', 'response_rules_situational'];
 
     // Fallback: if old monolithic response_rules still active (pre-migration), include it
     if (!this.cachedComponents.has('response_rules_core')) {
@@ -1087,84 +1269,6 @@ WRONG ITEM CLAIMS: If a renter says they received the wrong item or equipment do
   }
 
   /**
-   * Log component usage
-   */
-  async logComponentUsage(
-    componentName: string,
-    aiDecisionId: string,
-    validationPassed: boolean,
-    qualityScore?: number,
-  ): Promise<void> {
-    try {
-      // Update usage count
-      const component = await this.prisma.prompt_component.findFirst({
-        where: { name: componentName, active: true },
-      });
-
-      if (component) {
-        await this.prisma.prompt_component.update({
-          where: { id: component.id },
-          data: {
-            usage_count: { increment: 1 },
-          },
-        });
-
-        // Log version usage
-        await this.prisma.prompt_version_log.create({
-          data: {
-            component_name: componentName,
-            version: component.version,
-            ai_decision_id: aiDecisionId,
-            validation_pass: validationPassed,
-            quality_score: qualityScore,
-          },
-        });
-      }
-    } catch (error) {
-      this.logger.error(`Failed to log component usage: ${error.message}`);
-    }
-  }
-
-  /**
-   * Get component performance stats
-   */
-  async getComponentStats(componentName: string, days: number = 7): Promise<{
-    usageCount: number;
-    validationPassRate: number;
-    averageQualityScore: number;
-  }> {
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-
-    const logs = await this.prisma.prompt_version_log.findMany({
-      where: {
-        component_name: componentName,
-        created_at: { gte: since },
-      },
-    });
-
-    if (logs.length === 0) {
-      return {
-        usageCount: 0,
-        validationPassRate: 0,
-        averageQualityScore: 0,
-      };
-    }
-
-    const validationPasses = logs.filter(log => log.validation_pass).length;
-    const qualityScores = logs.filter(log => log.quality_score !== null).map(log => log.quality_score!);
-    const avgQuality = qualityScores.length > 0
-      ? qualityScores.reduce((sum, s) => sum + s, 0) / qualityScores.length
-      : 0;
-
-    return {
-      usageCount: logs.length,
-      validationPassRate: validationPasses / logs.length,
-      averageQualityScore: avgQuality,
-    };
-  }
-
-  /**
    * Generate a new version number (simple incrementing)
    */
   private generateVersionNumber(): string {
@@ -1172,43 +1276,4 @@ WRONG ITEM CLAIMS: If a renter says they received the wrong item or equipment do
     return `1.${Math.floor(timestamp / 1000) % 10000}`;
   }
 
-  /**
-   * A/B test component variants
-   * Returns component A or B randomly and tracks which was used
-   */
-  async getABTestVariant(
-    componentName: string,
-  ): Promise<{ content: string; variant: 'A' | 'B' | null }> {
-    const variants = await this.prisma.prompt_component.findMany({
-      where: {
-        name: componentName,
-        active: true,
-        ab_group: { not: null },
-      },
-    });
-
-    if (variants.length === 0) {
-      // No A/B test, return default
-      const defaultContent = this.cachedComponents.get(componentName);
-      return { content: defaultContent || '', variant: null };
-    }
-
-    // Random selection (50/50)
-    const selectedVariant = Math.random() < 0.5
-      ? variants.find(v => v.ab_group === 'A')
-      : variants.find(v => v.ab_group === 'B');
-
-    if (!selectedVariant) {
-      const fallback = variants[0];
-      return {
-        content: fallback.content,
-        variant: fallback.ab_group as 'A' | 'B',
-      };
-    }
-
-    return {
-      content: selectedVariant.content,
-      variant: selectedVariant.ab_group as 'A' | 'B',
-    };
-  }
 }

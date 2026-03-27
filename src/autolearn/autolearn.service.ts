@@ -454,6 +454,7 @@ export class AutolearnService {
           `/veto ${shortId} [reason]`;
 
         this.logger.log(`Reworked proposal #${shortId} promoted: ${p.description}`);
+        await this.telegramService.sendProactiveMessage(notificationText);
       }
 
       // Notify exhausted reworks
@@ -628,15 +629,26 @@ export class AutolearnService {
         },
       },
     });
+    await this.telegramService.sendProactiveMessage(lines.join('\n'));
   }
 
   private async notifyExhaustedReworks(
     exhausted: { id: string; description: string; analyzer: string; reworkCount: number }[],
   ): Promise<void> {
+    if (exhausted.length === 0) return;
+
     for (const item of exhausted) {
       const shortId = item.id.substring(0, 5);
       this.logger.warn(`Rework exhausted #${shortId}: ${item.description} (${item.reworkCount} attempts, analyzer: ${item.analyzer})`);
     }
+
+    const details = exhausted.map(item => {
+      const shortId = item.id.substring(0, 5);
+      return `  #${shortId}: ${item.description} (${item.reworkCount} attempts, ${item.analyzer})`;
+    }).join("\n");
+    await this.telegramService.sendProactiveMessage(
+      `⚠️ Autolearn: ${exhausted.length} proposal(s) exhausted all rework attempts\n${details}`
+    );
   }
 
   private formatChangeType(type: string): string {

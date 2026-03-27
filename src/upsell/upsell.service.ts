@@ -97,6 +97,13 @@ export class UpsellService {
     },
   };
 
+  // Lenses incompatible with our 82mm filters (ND filter / Cinebloom filter mist)
+  private readonly filterIncompatibleLenses = new Set([
+    'sony 28-70mm',        // 55mm thread
+    'sony gm 90mm f2.8',  // 67mm thread
+    'sony 11mm f2.8 fisheye', // no thread (bulbous front)
+  ]);
+
   // Use case detection patterns
   private readonly useCasePatterns = {
     interview: {
@@ -111,7 +118,7 @@ export class UpsellService {
     },
     music_video: {
       keywords: /\b(music video|mv|artist|performance|band)\b/i,
-      recommendations: ['DJI RS3 Pro gimbal', 'Anamorphic Great Joy lens 50mm', 'LED light panels RGB', 'Smoke machine fogger', 'Motorized slider'],
+      recommendations: ['DJI RS3 Pro gimbal', 'Anamorphic Blazar Remus 33mm', 'LED light panels RGB', 'Smoke machine fogger', 'Motorized slider'],
       reasoning: "Music videos benefit from cinematic movement (gimbal/slider), creative lighting (RGB), and shallow depth (anamorphic lenses)"
     },
     corporate: {
@@ -128,6 +135,21 @@ export class UpsellService {
       keywords: /\b(product|commercial|tabletop|macro|ecommerce)\b/i,
       recommendations: ['LED light panels RGB', 'Softbox 85cm', '5-in-1 reflector panel'],
       reasoning: "Product shoots need controlled lighting (LED/softbox) and light shaping tools"
+    },
+    proposal_portrait: {
+      keywords: /\b(propos(al|ed|e)|engag(ed|ement)|portrait|candid|surprise|secret|romantic|birthday|anniversary|couple|love|outdoor.*shoot|family.*shoot|shoot.*family|shoot.*friend|friend.*shoot|photos?.*day|day.*photos?)\b/i,
+      recommendations: ['DJI RS3 Pro gimbal', 'Sony GM 70-200mm f2.8', 'Sony GM 16-35mm f2.8'],
+      reasoning: "For proposal/portrait/candid shoots: a gimbal gives smooth movement while following the moment, the 70-200mm lets you shoot from a distance without being in the frame (perfect for candid proposal shots), and the 16-35mm wide captures the full environment/context"
+    },
+    event_photography: {
+      keywords: /\b(event|party|birthday|gathering|celebration|concert|show|festival|night|low.?light)\b/i,
+      recommendations: ['Sony GM 70-200mm f2.8', 'DJI RS3 Pro gimbal', 'Rode Wireless Mic Pro set'],
+      reasoning: "Events need a telephoto for candid shots across the room, a gimbal for smooth crowd/movement shots, and a wireless mic if capturing speeches or audio"
+    },
+    travel: {
+      keywords: /\b(travel|trip|holiday|vacation|abroad|tour|landscape|adventure|hiking|outdoor|nature)\b/i,
+      recommendations: ['DJI RS3 Pro gimbal', 'Sony GM 16-35mm f2.8', 'ND filter'],
+      reasoning: "Travel/outdoor shoots benefit from a gimbal for walking shots, a wide lens for landscapes, and ND filters for bright daylight"
     },
   };
 
@@ -166,20 +188,25 @@ export class UpsellService {
 
     try {
       // Find items that appear in the same rental as the requested items
+      // Subquery wrapper: PG18+Prisma6 rejects COUNT(DISTINCT) in HAVING with array params
       const coRows: { item_name: string; co_count: string; avg_revenue: string }[] =
         await this.prisma.$queryRaw`
-          SELECT b2.item_name, COUNT(DISTINCT b1.rental_id)::text AS co_count,
-                 COALESCE(AVG(b2.revenue), 0)::text AS avg_revenue
-          FROM booking b1
-          JOIN booking b2 ON b1.rental_id = b2.rental_id
-            AND b1.item_name != b2.item_name
-            AND b2.status != 'cancelled'
-          WHERE b1.item_name = ANY(${itemNames})
-            AND b1.status != 'cancelled'
-            AND b2.item_name != ALL(${itemNames})
-          GROUP BY b2.item_name
-          HAVING COUNT(DISTINCT b1.rental_id) >= 2
-          ORDER BY COUNT(DISTINCT b1.rental_id) DESC
+          SELECT sub.item_name, sub.co_count::text, sub.avg_revenue::text
+          FROM (
+            SELECT b2.item_name,
+                   COUNT(DISTINCT b1.rental_id) AS co_count,
+                   COALESCE(AVG(b2.revenue), 0) AS avg_revenue
+            FROM booking b1
+            JOIN booking b2 ON b1.rental_id = b2.rental_id
+              AND b1.item_name != b2.item_name
+              AND b2.status != 'cancelled'
+            WHERE b1.item_name = ANY(${itemNames})
+              AND b1.status != 'cancelled'
+              AND b2.item_name != ALL(${itemNames})
+            GROUP BY b2.item_name
+          ) sub
+          WHERE sub.co_count >= 2
+          ORDER BY sub.co_count DESC
           LIMIT 20
         `;
 
@@ -190,15 +217,16 @@ export class UpsellService {
 
       // Get conversion rates from upsell_log
       const coItemNames = coRows.map(r => r.item_name);
+      // CROSS JOIN LATERAL: PG18 rejects comma-LATERAL syntax
       const conversionRows: { item_name: string; total: string; accepted: string }[] =
         await this.prisma.$queryRaw`
-          SELECT unnest(items_suggested) AS item_name,
-                 COUNT(*)::text AS total,
+          SELECT t.item_name, COUNT(*)::text AS total,
                  COUNT(*) FILTER (WHERE outcome IN ('accepted', 'partial'))::text AS accepted
           FROM upsell_log
+          CROSS JOIN LATERAL unnest(items_suggested) AS t(item_name)
           WHERE outcome != 'pending'
-          GROUP BY unnest(items_suggested)
-          HAVING unnest(items_suggested) = ANY(${coItemNames})
+            AND t.item_name = ANY(${coItemNames})
+          GROUP BY t.item_name
         `;
 
       const conversionMap = new Map<string, number>();
@@ -319,7 +347,7 @@ export class UpsellService {
       if (/\b(fx3|camera|bmpcc|a7|fujifilm|x100|gopro|osmo)\b/i.test(item)) {
         category = 'camera';
         averagePrice = 80;
-      } else if (/\b(lens|mm|prime|zoom|sony|canon|blazar|remus|great joy|anamorphic)\b/i.test(item)) {
+      } else if (/\b(lens|mm|prime|zoom|sony|canon|blazar|remus|anamorphic)\b/i.test(item)) {
         category = 'lens';
         averagePrice = 40;
       } else if (/\b(mic|microphone|audio|wireless|rode|sennheiser)\b/i.test(item)) {
@@ -557,21 +585,21 @@ export class UpsellService {
       const hasAudio = itemCategories.some(i => i.category === 'audio');
       const hasGimbal = itemCategories.some(i => i.category === 'gimbal');
 
-      // Camera or lens rentals: always suggest ND filter + mist filter first (most contextual)
-      if (hasCamera || hasLens) {
+      // Camera or lens rentals: gimbal first (highest value + most impactful for most shoots)
+      if ((hasCamera || hasLens) && !hasGimbal && !/\b(static|locked off|tripod only)\b/i.test(conversationText)) {
         priority = 'high';
-        recommendations.push('ND filter', 'Cinebloom filter mist');
+        recommendations.push('DJI RS3 Pro gimbal');
+        reasoning += this.complementaryItems.camera.reasoning.stabilization + '. ';
+      }
+
+      if (hasCamera || hasLens) {
+        if (!recommendations.includes('ND filter')) recommendations.push('ND filter', 'Cinebloom filter mist');
         reasoning += this.complementaryItems.camera.reasoning.filters + '. ';
       }
 
       if (hasCamera && !hasAudio) {
         recommendations.push('Rode Wireless Mic Pro set');
         reasoning += this.complementaryItems.camera.reasoning.audio + '. ';
-      }
-
-      if ((hasCamera || hasLens) && !hasGimbal && !/\b(static|locked off|tripod only)\b/i.test(conversationText)) {
-        recommendations.push('DJI RS3 Pro gimbal');
-        reasoning += this.complementaryItems.camera.reasoning.stabilization + '. ';
       }
 
       if (hasLens && itemCategories.filter(i => i.category === 'lens').length >= 2) {
@@ -620,6 +648,28 @@ export class UpsellService {
         if (!recommendations.includes(match.item_name) && recommendations.length < 5) {
           recommendations.push(match.item_name);
           reasoning += `${match.item_name} matches their needs (${match.reason}). `;
+        }
+      }
+    }
+
+    // Remove ND/Cinebloom suggestions if all lenses in the request are filter-incompatible
+    const lensItems = itemCategories.filter(i => i.category === 'lens');
+    if (lensItems.length > 0) {
+      const allLensesIncompatible = lensItems.every(
+        l => this.filterIncompatibleLenses.has(l.name.toLowerCase()),
+      );
+      if (allLensesIncompatible) {
+        const filterNames = ['ND filter', 'Cinebloom filter mist'];
+        const removed = recommendations.filter(r => filterNames.includes(r));
+        if (removed.length > 0) {
+          this.logger.debug(
+            `Removed filter suggestions ${removed.join(', ')} — incompatible with ${lensItems.map(l => l.name).join(', ')} (wrong thread size)`,
+          );
+        }
+        // Mutate in place so downstream code sees the filtered list
+        for (const fn of filterNames) {
+          const idx = recommendations.indexOf(fn);
+          if (idx !== -1) recommendations.splice(idx, 1);
         }
       }
     }
@@ -748,6 +798,13 @@ export class UpsellService {
       // Item link instruction
       if (itemUrls.size > 0) {
         message += `\n\nITEM LINKS: Only share an item's link if the renter asks about it, asks for more details, or says they'll think about it / are considering it. Do NOT send links proactively — only when the renter shows interest or hesitates on a specific item.`;
+      }
+
+      // Upsell aggression instruction: tell AI how many to suggest and not to hold back
+      if (topItems.length >= 2) {
+        message += `\n\nUPSELL INSTRUCTION: Suggest ALL ${topItems.length} items listed above — weave them naturally into your response. Do NOT pick just one. Mention each with a specific reason tied to what they told you about their shoot. Be enthusiastic and concrete about why each item would improve their specific situation.`;
+      } else if (topItems.length === 1) {
+        message += `\n\nUPSELL INSTRUCTION: Recommend this item with a specific, compelling reason tied to their shoot. Be direct and enthusiastic, not vague.`;
       }
     }
 

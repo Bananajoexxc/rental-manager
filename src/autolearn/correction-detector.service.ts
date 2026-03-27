@@ -103,10 +103,16 @@ export class CorrectionDetectorService {
    */
   async getRecentCorrections(since: Date): Promise<ProposalDraft[]> {
     // Query recent owner conversations that match teaching patterns
+    // Only process actual owner messages (Daniel/Leo), not renter messages
     const ownerMessages = await this.prisma.conversation.findMany({
       where: {
         role: 'user',
         created_at: { gte: since },
+        OR: [
+          { metadata: { path: ['sender'], string_contains: 'Db Cinema' } },
+          { metadata: { path: ['sender'], equals: 'Leo A' } },
+          { metadata: { path: ['sender'], equals: 'Owner' } },
+        ],
       },
       orderBy: { created_at: 'desc' },
       take: 50,

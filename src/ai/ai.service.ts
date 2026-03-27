@@ -2,7 +2,7 @@ import { Injectable, Logger, Inject, Optional, forwardRef } from '@nestjs/common
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { PromptManagerService } from '../prompts/prompt-manager.service';
-import { GeminiAiService } from './gemini-ai.service';
+import { OpenAiAiService } from './openai-ai.service';
 
 export interface AiResponse {
   content: string;
@@ -17,6 +17,17 @@ export interface ToolHandlers {
   lookupPricing?: (itemName: string, days: number) => Promise<string>;
   checkCompatibility?: (items: string[]) => Promise<string>;
   getRentalDetails?: (rentalId: string) => Promise<string>;
+  // Dashboard chat tools
+  readConversation?: (rentalIdOrSearch: string) => Promise<string>;
+  sendCorrectionMessage?: (rentalId: string, message: string) => Promise<string>;
+  updateRule?: (ruleId: string, field: string, value: string) => Promise<string>;
+  updateMemory?: (memoryId: string, newContent: string) => Promise<string>;
+  searchRules?: (query: string) => Promise<string>;
+  searchMemories?: (query: string) => Promise<string>;
+  getDashboardStats?: () => Promise<string>;
+  getBusinessIntelligence?: () => Promise<string>;
+  getDailyBriefing?: () => Promise<string>;
+  getPendingRentals?: () => Promise<string>;
 }
 
 export interface AiContext {
@@ -31,12 +42,18 @@ export interface AiContext {
   rentalDates?: { start?: Date; end?: Date };
   /** Current funnel stage — used to gate prompt components (saves input tokens) */
   conversationStage?: string;
+  /** Detected intent — used for intent-based component gating (saves 2-4K tokens) */
+  intent?: string;
+  /** Intent flags for fine-grained component gating */
+  intentFlags?: { hasPricingIntent?: boolean; hasDeliveryIntent?: boolean; hasMultipleItems?: boolean };
   /** Image URLs attached to the current renter message (for multimodal analysis) */
   imageUrls?: string[];
   /** Tool handlers for function calling — AI can request real-time data */
   toolHandlers?: ToolHandlers;
   /** Lightweight mode — skips full system prompt for internal extraction/classification calls */
   lightweight?: boolean;
+  /** Enable THINK tool for structured reasoning (only for complex/adaptive calls) */
+  enableThinking?: boolean;
 }
 
 @Injectable()
@@ -48,31 +65,31 @@ export class AiService {
   private modelLightweight: string;
 
   private aiEnabled: boolean;
-  private readonly provider: 'claude' | 'gemini';
+  private readonly provider: 'claude' | 'openai';
 
   constructor(
     private configService: ConfigService,
     private promptManager: PromptManagerService,
-    @Optional() @Inject(forwardRef(() => GeminiAiService)) private geminiAiService?: GeminiAiService,
+    @Optional() @Inject(forwardRef(() => OpenAiAiService)) private openAiAiService?: OpenAiAiService,
   ) {
     this.aiEnabled = this.configService.get<string>('AI_ENABLED') !== 'false';
-    this.provider = (this.configService.get<string>('AI_PROVIDER') || 'claude') as 'claude' | 'gemini';
+    this.provider = (this.configService.get<string>('AI_PROVIDER') || 'claude') as 'claude' | 'openai';
 
     const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
     if (!this.aiEnabled) {
       this.logger.warn('AI_ENABLED=false — all AI calls disabled (testing mode)');
-    } else if (this.provider === 'gemini') {
-      this.logger.log('🟢 AI_PROVIDER=gemini — routing all AI calls through Gemini 2.5 Flash');
+    } else if (this.provider === 'openai') {
+      this.logger.log('🟢 AI_PROVIDER=openai — routing all AI calls through OpenAI GPT-4.1 mini');
     } else if (!apiKey || apiKey === 'your_anthropic_api_key_here') {
       this.logger.warn('ANTHROPIC_API_KEY not configured — AI features disabled');
     }
     this.client = new Anthropic({ apiKey: apiKey || '' });
-    this.modelRoutine = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20250514';
+    this.modelRoutine = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20251001';
     this.modelComplex = this.configService.get<string>('CLAUDE_MODEL_COMPLEX') || 'claude-sonnet-4-20250514';
-    this.modelLightweight = this.configService.get<string>('CLAUDE_MODEL_LIGHTWEIGHT') || 'claude-3-haiku-20240307';
+    this.modelLightweight = this.configService.get<string>('CLAUDE_MODEL_LIGHTWEIGHT') || 'claude-haiku-4-5-20251001';
   }
 
-  /** Tool schemas for Claude function calling */
+  /** Data tools for Claude function calling (only available when toolHandlers are provided) */
   private readonly TOOLS: Anthropic.Tool[] = [
     {
       name: 'check_availability',
@@ -121,25 +138,151 @@ export class AiService {
         required: ['rental_id'],
       },
     },
+    {
+      name: 'read_conversation',
+      description: 'Read the full chat transcript of a rental conversation. Search by rental ID, renter name, or item name.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          search: { type: 'string', description: 'Rental ID, renter name, or item/listing name to find the conversation' },
+        },
+        required: ['search'],
+      },
+    },
+    {
+      name: 'send_correction',
+      description: 'Send a corrective follow-up message to a renter through Hygglo. Use when the bot said something wrong and you need to fix it.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          rental_id: { type: 'string', description: 'Rental ID to send the message to' },
+          message: { type: 'string', description: 'The corrective message to send to the renter' },
+        },
+        required: ['rental_id', 'message'],
+      },
+    },
+    {
+      name: 'search_rules',
+      description: 'Search business rules by keyword. Returns matching rules with their IDs, priority, and content.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          query: { type: 'string', description: 'Keyword to search for in rules' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'search_memories',
+      description: 'Search business memories by keyword. Returns matching memories with their IDs and content.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          query: { type: 'string', description: 'Keyword to search for in memories' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'update_rule',
+      description: 'Update a business rule field (content, priority, active status). Requires confirmation from the user first.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          rule_id: { type: 'string', description: 'Rule UUID' },
+          field: { type: 'string', description: 'Field to update: content, priority, or active' },
+          value: { type: 'string', description: 'New value for the field' },
+        },
+        required: ['rule_id', 'field', 'value'],
+      },
+    },
+    {
+      name: 'update_memory',
+      description: 'Update the content of a business memory entry. Requires confirmation from the user first.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          memory_id: { type: 'string', description: 'Memory UUID' },
+          new_content: { type: 'string', description: 'New content for the memory' },
+        },
+        required: ['memory_id', 'new_content'],
+      },
+    },
+    {
+      name: 'get_dashboard_stats',
+      description: 'Get live dashboard statistics: today earnings, active rentals, pending decisions, month revenue, scanner status.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'get_daily_briefing',
+      description: 'Get a comprehensive daily briefing: pickups, returns, pending decisions, alerts, revenue, conversations needing attention.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'get_business_intelligence',
+      description: 'Get advanced business intelligence: purchase recommendations, denied rentals analysis, time gap revenue (outside opening hours), substitution patterns, marketing-only item demand. Use this when the user asks about what to buy, investment decisions, demand patterns, or business optimization.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'get_pending_rentals',
+      description: 'Get all pending rental requests that need accept/decline decisions, with availability and renter details.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
   ];
 
   /** Execute a single tool call and return the result string */
   private async executeToolCall(
     name: string,
     input: any,
-    handlers: ToolHandlers,
+    handlers?: ToolHandlers,
   ): Promise<string> {
     try {
       switch (name) {
         case 'check_availability':
-          return handlers.checkAvailability?.(input.item_name, input.start_date, input.end_date)
+          return handlers?.checkAvailability?.(input.item_name, input.start_date, input.end_date)
             ?? 'Tool not available';
         case 'lookup_pricing':
-          return handlers.lookupPricing?.(input.item_name, input.days) ?? 'Tool not available';
+          return handlers?.lookupPricing?.(input.item_name, input.days) ?? 'Tool not available';
         case 'check_compatibility':
-          return handlers.checkCompatibility?.(input.items) ?? 'Tool not available';
+          return handlers?.checkCompatibility?.(input.items) ?? 'Tool not available';
         case 'get_rental_details':
-          return handlers.getRentalDetails?.(input.rental_id) ?? 'Tool not available';
+          return handlers?.getRentalDetails?.(input.rental_id) ?? 'Tool not available';
+        case 'read_conversation':
+          return handlers?.readConversation?.(input.search) ?? 'Tool not available';
+        case 'send_correction':
+          return handlers?.sendCorrectionMessage?.(input.rental_id, input.message) ?? 'Tool not available';
+        case 'search_rules':
+          return handlers?.searchRules?.(input.query) ?? 'Tool not available';
+        case 'search_memories':
+          return handlers?.searchMemories?.(input.query) ?? 'Tool not available';
+        case 'update_rule':
+          return handlers?.updateRule?.(input.rule_id, input.field, input.value) ?? 'Tool not available';
+        case 'update_memory':
+          return handlers?.updateMemory?.(input.memory_id, input.new_content) ?? 'Tool not available';
+        case 'get_dashboard_stats':
+          return handlers?.getDashboardStats?.() ?? 'Tool not available';
+        case 'get_daily_briefing':
+          return handlers?.getDailyBriefing?.() ?? 'Tool not available';
+        case 'get_business_intelligence':
+          return handlers?.getBusinessIntelligence?.() ?? 'Tool not available';
+        case 'get_pending_rentals':
+          return handlers?.getPendingRentals?.() ?? 'Tool not available';
         default:
           return `Unknown tool: ${name}`;
       }
@@ -193,37 +336,49 @@ export class AiService {
     };
   }
 
-  private async buildSystemPrompt(context: AiContext, temporalBlock?: string): Promise<string> {
-    const parts: string[] = [];
+  /**
+   * Build system prompt (static) and dynamic context (injected into user message).
+   * Static block: DB prompt components + business rules (~22K tokens) → system prompt (cached)
+   * Dynamic block: temporal, memories, rental context (~3-5K tokens) → user message prefix (not cached)
+   * Keeping the system prompt purely static enables multi-turn conversation caching:
+   * the conversation history prefix matches across calls, so Anthropic caches it at 90% discount.
+   */
+  private async buildSystemPromptBlocks(
+    context: AiContext,
+    temporalBlock?: string,
+  ): Promise<{ staticBlock: string; dynamicBlock: string }> {
+    const staticParts: string[] = [];
+    const dynamicParts: string[] = [];
 
-    // Get base system prompt from prompt manager (DB-backed modular components)
-    // Pass conversation stage to gate irrelevant components (saves ~800-2000 input tokens in later stages)
-    const basePrompt = await this.promptManager.buildSystemPrompt('message', context.conversationStage);
-    parts.push(basePrompt);
+    // STATIC: DB prompt components + rules (stable for 5+ min — perfect for prompt caching)
+    const basePrompt = await this.promptManager.buildSystemPrompt('message', context.conversationStage, context.intent, context.intentFlags);
+    staticParts.push(basePrompt);
 
-    if (temporalBlock) {
-      parts.push(`\n${temporalBlock}`);
+    if (context.rules) {
+      staticParts.push(`\n--- BUSINESS RULES ---\n${context.rules}`);
     }
 
-    // Add context-specific sections
-    if (context.rules) {
-      parts.push(`\n--- BUSINESS RULES ---\n${context.rules}`);
+    // DYNAMIC: temporal, memories, additional context, rental context (changes per message)
+    if (temporalBlock) {
+      dynamicParts.push(temporalBlock);
     }
 
     if (context.memories) {
-      parts.push(`\n--- RELEVANT MEMORIES ---\n${context.memories}`);
+      dynamicParts.push(`--- RELEVANT MEMORIES ---\n${context.memories}`);
     }
 
     if (context.additionalContext) {
-      parts.push(`\n--- ADDITIONAL CONTEXT ---\n${context.additionalContext}`);
+      dynamicParts.push(`--- ADDITIONAL CONTEXT ---\n${context.additionalContext}`);
     }
 
-    // ACTIVE IDENTITY — placed BEFORE enforcement as context framing (not override)
     if (context.rentalContext) {
-      parts.push(`\n--- CURRENT RENTAL CONTEXT ---\n${context.rentalContext}`);
+      dynamicParts.push(`--- CURRENT RENTAL CONTEXT ---\n${context.rentalContext}`);
     }
 
-    return parts.join('\n');
+    return {
+      staticBlock: staticParts.join('\n'),
+      dynamicBlock: dynamicParts.join('\n\n'),
+    };
   }
 
   private extractMemories(content: string): string[] {
@@ -244,8 +399,8 @@ export class AiService {
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.processRoutine(userMessage, context);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.processRoutine(userMessage, context);
     }
     return this.callClaude(userMessage, context, this.modelRoutine);
   }
@@ -254,104 +409,27 @@ export class AiService {
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.processComplex(userMessage, context);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.processComplex(userMessage, context);
     }
     return this.callClaude(userMessage, context, this.modelComplex);
   }
 
   /**
-   * Adaptive routing: defaults to Haiku, auto-escalates to Sonnet for edge cases.
-   * When AI_PROVIDER=gemini, delegates to GeminiAiService (single model, no tier split).
+   * Adaptive entry point for complex customer-facing messages.
+   * Routes to modelComplex (currently Sonnet 4.6) with think tool.
+   * Called when pipeline classifies message as high-complexity.
    */
   async processAdaptive(
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.processAdaptive(userMessage, context);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.processAdaptive(userMessage, context);
     }
-    const model = this.shouldEscalateToComplex(userMessage, context)
-      ? this.modelComplex
-      : this.modelRoutine;
-    this.logger.debug(`Adaptive routing: selected ${model} for message`);
-    return this.callClaude(userMessage, context, model);
+    return this.callClaude(userMessage, { ...context, enableThinking: true }, this.modelComplex);
   }
 
-  /**
-   * Detect edge cases that warrant Sonnet-level reasoning.
-   * Requires 2+ signals to escalate (prevents over-escalation on single keywords).
-   */
-  private shouldEscalateToComplex(message: string, context: AiContext): boolean {
-    let signals = 0;
-
-    // Complaint or frustration signals — strong signal, counts as 2
-    if (/\b(complain|disappointed|frustrated|unacceptable|terrible|awful|refund|compensat|escalat|annoying|ridiculous|rip.?off)\b/i.test(message)) {
-      signals += 2;
-    }
-
-    // Price negotiation attempts (not simple "do you do discounts?" which has a canned answer)
-    if (/\b(too expensive|lower price|better deal|best price|negotiate|can you do .* for|feels? steep|saw.*cheaper|over.?priced)\b/i.test(message)) {
-      signals += 2;
-    }
-
-    // Simple discount question — only counts as 1 (canned response works fine on Haiku)
-    if (/\b(discount|any deals)\b/i.test(message) && signals === 0) {
-      signals += 1;
-    }
-
-    // Combined pricing + delivery (complex calculation)
-    const hasPricing = /\b(price|cost|how much|quote|rate|£\d)\b/i.test(message);
-    const hasDelivery = /\b(deliver|delivery|courier|postcode|address|collect)\b/i.test(message);
-    if (hasPricing && hasDelivery) {
-      signals += 2;
-    }
-
-    // Multiple items or bundles being discussed simultaneously
-    const itemMentions = (message.match(/\b(fx3|fx6|a7|bmpcc|pocket|gimbal|lens|camera|drone|light|mic|monitor|slider|tripod|nanlite|atomos|rode|dji|sony|blackmagic|wireless|v.?mount|battery|batteries)\b/gi) || []).length;
-    const bundleMentions = (message.match(/\b(bundle|package|kit|combo|set)\b/gi) || []).length;
-    if (itemMentions >= 3 || bundleMentions >= 2) {
-      signals += 2;
-    } else if (itemMentions >= 2) {
-      signals += 1;
-    }
-
-    // Multi-part questions — renter asking about 2+ different topics
-    const questionMarks = (message.match(/\?/g) || []).length;
-    const alsoActually = /\b(also|actually|and also|plus|as well|another thing)\b/i.test(message);
-    if (questionMarks >= 2 || (questionMarks >= 1 && alsoActually)) {
-      signals += 1;
-    }
-
-    // Adding items to existing booking (logistics reasoning needed)
-    if (/\b(add|adding|throw in|include|can you also|want to get)\b/i.test(message) && itemMentions >= 1) {
-      signals += 1;
-    }
-
-    // Delivery with postcode (requires distance calculation reasoning)
-    if (hasDelivery && /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i.test(message)) {
-      signals += 1;
-    }
-
-    // Cancellation, rescheduling, or date change — strong signal
-    if (/\b(cancel|reschedul|change date|move the date|postpone|different day)\b/i.test(message)) {
-      signals += 2;
-    }
-
-    // Location complaints or pickup issues
-    if (/\b(too far|not convenient|wrong location|different location|why.*not at)\b/i.test(message)) {
-      signals += 2;
-    }
-
-    // Very long messages (likely complex multi-part questions)
-    if (message.length > 600) {
-      signals += 2;
-    } else if (message.length > 350) {
-      signals += 1;
-    }
-
-    return signals >= 2;
-  }
 
   /**
    * Preflight reasoning: extract verified facts before the main AI call.
@@ -365,8 +443,8 @@ export class AiService {
     extractedItems: string[],
     rentalDates: { start?: Date; end?: Date },
   ): Promise<{ listingItem: string; renterIntent: string; status: string; warnings: string[] }> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.preflightReasoning(renterMessage, rentalTitle, rentalStatus, extractedItems, rentalDates);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.preflightReasoning(renterMessage, rentalTitle, rentalStatus, extractedItems, rentalDates);
     }
     if (!this.aiEnabled) {
       return {
@@ -409,42 +487,39 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
 
   /**
    * Lightweight extraction/classification — uses Claude 3 Haiku (4x cheaper).
-   * When AI_PROVIDER=gemini, delegates to GeminiAiService.
    */
   async processExtraction(
     userMessage: string,
     context: Omit<AiContext, 'rules' | 'memories'> = {},
   ): Promise<AiResponse> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.processExtraction(userMessage, context);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.processExtraction(userMessage, context);
     }
     return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true }, this.modelLightweight);
   }
 
   /**
    * Sonnet-grade extraction — for tasks where Haiku lacks nuance.
-   * When AI_PROVIDER=gemini, delegates to GeminiAiService.
    */
   async processExtractionComplex(
     userMessage: string,
     context: Omit<AiContext, 'rules' | 'memories'> = {},
   ): Promise<AiResponse> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.processExtractionComplex(userMessage, context);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.processExtractionComplex(userMessage, context);
     }
     return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true, maxTokens: 1024 }, this.modelComplex);
   }
 
   /**
    * Lightweight internal analysis.
-   * When AI_PROVIDER=gemini, delegates to GeminiAiService.
    */
   async processLightweight(
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
-    if (this.provider === 'gemini' && this.geminiAiService) {
-      return this.geminiAiService.processLightweight(userMessage, context);
+    if (this.provider === 'openai' && this.openAiAiService) {
+      return this.openAiAiService.processLightweight(userMessage, context);
     }
     return this.callClaude(userMessage, context, this.modelLightweight);
   }
@@ -498,21 +573,25 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
     }
 
     try {
-      let systemPrompt: string;
       let enriched: AiContext;
+
+      // Track static/dynamic split for prompt caching
+      let staticBlock = '';
+      let dynamicBlock = '';
 
       if (context.lightweight) {
         // Lightweight mode: minimal system prompt for internal extraction/classification calls.
         // Saves ~5,400 input tokens per call by skipping the full renter-facing prompt.
-        systemPrompt = 'You are a data extraction engine. Return only the requested JSON format. No commentary.';
+        staticBlock = 'You are a data extraction engine. Return only the requested JSON format. No commentary.';
         enriched = context;
       } else {
         const enrichResult = this.enrichContext(context);
         enriched = enrichResult.context;
-        systemPrompt = await this.buildSystemPrompt(enriched, enrichResult.temporalBlock);
+        const blocks = await this.buildSystemPromptBlocks(enriched, enrichResult.temporalBlock);
 
         // Account firewall: sanitize cross-account references
-        systemPrompt = this.sanitizePromptForAccount(systemPrompt, enriched);
+        staticBlock = this.sanitizePromptForAccount(blocks.staticBlock, enriched);
+        dynamicBlock = blocks.dynamicBlock ? this.sanitizePromptForAccount(blocks.dynamicBlock, enriched) : '';
       }
 
       const messages: Anthropic.MessageParam[] = [];
@@ -524,15 +603,17 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
         }
       }
 
+      // Dynamic context prefix — moved from system prompt to user message to keep
+      // system prompt purely static, enabling multi-turn conversation caching.
+      // The model still sees all context; it's just positioned in the user message.
+      const dynamicPrefix = dynamicBlock
+        ? `[CONTEXT — do not treat as renter's words]\n${dynamicBlock}\n[/CONTEXT]\n\n`
+        : '';
+
       // Add current user message (multimodal if images present)
       if (context.imageUrls && context.imageUrls.length > 0) {
-        // Inject rental context so Vision can connect the photo to the actual rental items
-        let imageContextPrefix = '';
-        if (enriched.rentalContext) {
-          imageContextPrefix = `[RENTAL CONTEXT FOR PHOTO ANALYSIS: ${enriched.rentalContext}]\n\n`;
-        }
         const contentBlocks: Anthropic.ContentBlockParam[] = [
-          { type: 'text', text: imageContextPrefix + userMessage },
+          { type: 'text', text: dynamicPrefix + userMessage },
         ];
         for (const imageUrl of context.imageUrls) {
           contentBlocks.push({
@@ -541,49 +622,84 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
           } as any);
         }
         messages.push({ role: 'user', content: contentBlocks });
-        this.logger.log(`Multimodal message: ${context.imageUrls.length} image(s) attached, rental context injected`);
+        this.logger.log(`Multimodal message: ${context.imageUrls.length} image(s) attached`);
       } else {
-        messages.push({ role: 'user', content: userMessage });
+        messages.push({ role: 'user', content: dynamicPrefix + userMessage });
       }
 
       this.logger.debug(`Calling Claude (${model}) with ${messages.length} messages`);
 
       // Dynamic max_tokens: use context override or lean defaults
-      const maxTokens = context.maxTokens || (model === this.modelComplex ? 800 : 500);
+      // For long/complex renter messages, increase budget to prevent truncation
+      let baseMaxTokens = model === this.modelComplex ? 500 : 350;
+      if (!context.maxTokens && userMessage.length > 500) {
+        baseMaxTokens = Math.min(baseMaxTokens + 150, 650);
+      }
+      const maxTokens = context.maxTokens || baseMaxTokens;
 
-      // Use prompt caching for the static system prompt portion
+      // MULTI-TURN CACHING: System prompt is PURELY static (always cacheable).
+      // Dynamic context (temporal, memories, rental) is injected into user message prefix.
+      // This enables automatic caching of BOTH system prompt AND conversation history:
+      //   - System prompt (~22K): cached at 90% discount (same as before)
+      //   - Conversation history (15-40K): NOW ALSO cached at 90% discount (was full price!)
+      //   - Only the new user message + dynamic context (~3-5K) pays full price
+      // The tool-use loop's 2nd API call benefits even more: entire prefix is a cache HIT.
+      // Cache system prompt only when tools are present (tool-use loop reads cached prefix).
+      // For thinking-only calls (single API roundtrip), cache write at 1.25x is wasted
+      // unless another call arrives within 5 minutes to read it.
+      const shouldCacheSystem = !context.lightweight && context.toolHandlers;
+      const systemBlocks: any[] = [
+        {
+          type: 'text' as const,
+          text: staticBlock,
+          ...(shouldCacheSystem ? { cache_control: { type: 'ephemeral' as const } } : {}),
+        },
+      ];
+
       const createParams: any = {
         model,
         max_tokens: maxTokens,
-        system: [
-          {
-            type: 'text' as const,
-            text: systemPrompt,
-            cache_control: { type: 'ephemeral' as const },
-          },
-        ],
+        system: systemBlocks,
         messages,
       };
 
-      // Add tools if handlers are provided
-      if (context.toolHandlers) {
+      // Extended thinking for complex/adaptive calls: native reasoning in a single API call.
+      // Replaces think tool (which caused an expensive 2nd API call with cache write).
+      // Thinking tokens: ~1K at output rate ($15/MTok) = $0.015 vs old $0.15-0.30 per adaptive call.
+      if (!context.lightweight && context.enableThinking) {
+        createParams.thinking = { type: 'enabled', budget_tokens: 1024 };
+        createParams.max_tokens = Math.max(maxTokens, 500) + 1024;
+      } else if (context.toolHandlers) {
         createParams.tools = this.TOOLS;
+      }
+
+      // Only cache conversation when tools are present (tool-use loop reads cached prefix on 2nd call).
+      // Without tools, conversation cache is written at 1.25x cost but never read (5-min TTL expires).
+      // System prompt is always cached via its explicit breakpoint regardless.
+      if (createParams.tools) {
+        createParams.cache_control = { type: 'ephemeral' as const };
       }
 
       let response = await this.client.messages.create(createParams);
       let totalInput = response.usage.input_tokens;
       let totalOutput = response.usage.output_tokens;
+      let totalCacheRead = (response.usage as any).cache_read_input_tokens || 0;
+      let totalCacheCreate = (response.usage as any).cache_creation_input_tokens || 0;
 
       // Tool-use loop: max 3 iterations to prevent infinite loops
+      // Also handle max_tokens when tool_use blocks are present (think tool exceeded budget)
       let iterations = 0;
-      while (response.stop_reason === 'tool_use' && context.toolHandlers && iterations < 3) {
+      while (iterations < 2 && (
+        response.stop_reason === 'tool_use' ||
+        (response.stop_reason === 'max_tokens' && response.content.some(b => b.type === 'tool_use'))
+      )) {
         iterations++;
         const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
         const toolResultContent: any[] = [];
 
         for (const block of toolUseBlocks) {
           const toolBlock = block as Anthropic.ToolUseBlock;
-          const result = await this.executeToolCall(toolBlock.name, toolBlock.input, context.toolHandlers);
+          const result = await this.executeToolCall(toolBlock.name, toolBlock.input, context.toolHandlers || undefined);
           this.logger.debug(`Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input)}) → ${result.substring(0, 100)}`);
           toolResultContent.push({
             type: 'tool_result',
@@ -592,6 +708,7 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
           });
         }
 
+
         // Continue conversation with tool results
         messages.push({ role: 'assistant', content: response.content as any });
         messages.push({ role: 'user', content: toolResultContent });
@@ -599,6 +716,8 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
         response = await this.client.messages.create({ ...createParams, messages });
         totalInput += response.usage.input_tokens;
         totalOutput += response.usage.output_tokens;
+        totalCacheRead += (response.usage as any).cache_read_input_tokens || 0;
+        totalCacheCreate += (response.usage as any).cache_creation_input_tokens || 0;
       }
 
       const rawContent = response.content
@@ -609,8 +728,19 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
       const memories = this.extractMemories(rawContent);
       const cleanContent = this.stripMemoryTags(rawContent);
 
+      // Log extended thinking content (for debugging, not shown to user)
+      const thinkingBlocks = response.content.filter(b => b.type === 'thinking');
+      if (thinkingBlocks.length > 0) {
+        const thinkText = (thinkingBlocks[0] as any).thinking || '';
+        this.logger.debug(`Extended thinking (${thinkText.length} chars): ${thinkText.substring(0, 300)}...`);
+      }
+
+      const cacheInfo = totalCacheRead > 0 || totalCacheCreate > 0
+        ? `, cache_read=${totalCacheRead}, cache_create=${totalCacheCreate}`
+        : '';
+      const thinkInfo = thinkingBlocks.length > 0 ? ', thinking=yes' : '';
       this.logger.log(
-        `Claude response: ${model}, in=${totalInput}, out=${totalOutput}${iterations > 0 ? `, tools=${iterations}` : ''}, memories=${memories.length}`,
+        `Claude response: ${model}, in=${totalInput}, out=${totalOutput}${iterations > 0 ? `, tools=${iterations}` : ''}${thinkInfo}${cacheInfo}, memories=${memories.length}`,
       );
 
       return {

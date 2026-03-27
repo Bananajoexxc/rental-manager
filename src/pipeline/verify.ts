@@ -81,12 +81,16 @@ export function verifyResponse(response: string, facts: FactPack): VerificationR
   }
 
   // 3. AVAILABILITY CLAIM CHECK
-  if (facts.availability) {
-    const claimsAvailable = /\b(available|free|open|no conflicts?)\b/i.test(response);
-    const claimsUnavailable = /\b(not available|unavailable|booked|conflict|taken)\b/i.test(response);
+  const claimsUnavailable = /\b(not available|unavailable|out of stock|booked out|fully booked|already booked|currently rented|not in stock)\b/i.test(response);
+  const claimsAvailable = /\b(available|free|open|no conflicts?)\b/i.test(response);
+  const claimsPartialAvailability = /\b(available\s+from|available\s+after|free\s+from|free\s+after)\b/i.test(response);
 
+  if (facts.availability) {
     for (const item of facts.availability.items) {
+      const hasTimeWindow = !!(item.availableFrom || item.unavailableAfter);
+
       if (claimsAvailable && !item.available) {
+        if (hasTimeWindow && claimsPartialAvailability) continue;
         issues.push({
           type: 'AVAILABILITY_LIE',
           detail: `Claims available but ${item.item} has conflicts (${item.booked}/${item.maxQuantity} booked)`,
@@ -99,6 +103,14 @@ export function verifyResponse(response: string, facts: FactPack): VerificationR
         });
       }
     }
+  } else if (claimsUnavailable) {
+    // SAFETY NET: No formal availability data was gathered, but bot claims something
+    // is unavailable. Flag as unverified — this is the #1 source of false stock-out errors.
+    // The AI is guessing from the compact booking list without real availability checks.
+    issues.push({
+      type: 'UNVERIFIED_UNAVAILABILITY',
+      detail: 'Response claims item is unavailable/booked but no formal availability check was performed. This claim may be wrong — the AI is guessing from the booking list.',
+    });
   }
 
   // 4. UPSELL VIOLATION CHECK

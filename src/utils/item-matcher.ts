@@ -150,7 +150,7 @@ export function findBestMatch(input: string, inventory: string[]): string | null
   // (prevents "anamorphic" from returning first of 7 anamorphic lenses)
   const categoryKeywords: Record<string, string[]> = {
     fisheye: ['fisheye', 'fish eye'],
-    anamorphic: ['anamorphic', 'blazar', 'great joy', 'remus'],
+    anamorphic: ['anamorphic', 'blazar', 'remus'],
     gimbal: ['gimbal', 'rs3', 'stabiliser', 'stabilizer'],
     drone: ['drone', 'mavic', 'mini 4', 'avata'],
     tripod: ['tripod'],
@@ -349,7 +349,7 @@ export const ACCESSORY_ITEMS = new Set([
   'Cinebloom filter mist',
   '256GB card',
   'DJI gimbal battery',
-  'Sony NPF 970 batteries 2x sets',
+  'Sony NP-FZ100 batteries 2x sets',
   'V-mount 95mAh',
   'V-mount 150mAh',
   'Suction cups',
@@ -358,6 +358,44 @@ export const ACCESSORY_ITEMS = new Set([
 export function isAccessoryItem(name: string): boolean {
   return ACCESSORY_ITEMS.has(name);
 }
+
+/**
+ * Functional equivalents — items that serve the same purpose and can be offered
+ * as alternatives when the requested item is held in contention.
+ * Cross-brand where appropriate (e.g. DJI mic ↔ Rode Wireless Pro).
+ */
+export const FUNCTIONAL_EQUIVALENTS: Record<string, string[]> = {
+  // Wireless microphone systems (lavalier-capable)
+  'DJI Wireless Mics':       ['DJI Mic 2 wireless', 'Rode Wireless Mic Pro set'],
+  'DJI Mic 2 wireless':      ['DJI Wireless Mics', 'Rode Wireless Mic Pro set'],
+  'Rode Wireless Mic Pro set': ['DJI Wireless Mics', 'DJI Mic 2 wireless'],
+  'JBL wireless microphones': ['DJI Wireless Mics', 'DJI Mic 2 wireless', 'Rode Wireless Mic Pro set'],
+  // On-camera / shotgun mics
+  'Rode Video Mic Go':        ['Rode Video Mic Pro Plus', 'Audio boom mic Sennheiser'],
+  'Rode Video Mic Pro Plus':  ['Rode Video Mic Go', 'Audio boom mic Sennheiser'],
+  // Sony mirrorless camera bodies
+  'Sony FX3':    ['Sony A7 V', 'Sony A7 III', 'Sony A7 II'],
+  'Sony A7 V':   ['Sony FX3', 'Sony A7 III'],
+  'Sony A7 III': ['Sony FX3', 'Sony A7 V', 'Sony A7 II'],
+  'Sony A7 II':  ['Sony A7 III', 'Sony A7 V'],
+  // DJI drones
+  'DJI Mavic 3 Pro': ['DJI Mini 4 Pro'],
+  'DJI Mini 4 Pro':  ['DJI Mavic 3 Pro'],
+  // Action cameras
+  'DJI Osmo Action Pro 5': ['GoPro 12 Hero'],
+  'GoPro 12 Hero':         ['DJI Osmo Action Pro 5'],
+  // Gimbals
+  'DJI RS3 Pro gimbal': [],
+  // Tripods
+  'Small rig tripod': ['Sirui tripod'],
+  'Sirui tripod':     ['Small rig tripod'],
+  // Lights (approx equivalents by output level)
+  'Nanlite 500B':          ['Nanlite Forza 300'],
+  'Nanlite Forza 300':     ['Nanlite 500B'],
+  'LED light panels RGB':  ['Ambitful RGB light tubes 2x set', 'Nanlite Pavotube 30x II'],
+  'Nanlite Pavotube 30x II': ['Ambitful RGB light tubes 2x set', 'LED light panels RGB'],
+  'Ambitful RGB light tubes 2x set': ['Nanlite Pavotube 30x II', 'LED light panels RGB'],
+};
 
 /**
  * DEFINITIVE MASTER INVENTORY — Daniel's authoritative list (Feb 9 2026).
@@ -370,9 +408,6 @@ export const MASTER_INVENTORY: Record<string, number> = {
   'Anamorphic Blazar Remus 45mm': 1,
   'Anamorphic Blazar Remus 65mm': 1,
   'Anamorphic Blazar Remus 100mm': 1,
-  'Anamorphic Great Joy lens 35mm': 1,
-  'Anamorphic Great Joy lens 50mm': 1,
-  'Anamorphic Great Joy lens 85mm': 1,
   // Sony lenses
   'Sony GM 24-70mm f2.8': 4,
   'Sony GM 16-35mm f2.8': 1,
@@ -386,6 +421,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   // Camera bodies
   'Sony FX3': 3,
   'Sony A7 III': 1,
+  'Sony A7 V': 1,
   'Sony A7 II': 1,
   'Fujifilm X100 VI': 1,
   'BMPCC 6K Pro': 1,
@@ -402,7 +438,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   // Power
   'V-mount 95mAh': 2,
   'V-mount 150mAh': 4,
-  'Sony NPF 970 batteries 2x sets': 4,
+  'Sony NP-FZ100 batteries 2x sets': 4,
   'DJI gimbal battery': 3,
   'Anker Power Station F2000': 1,
   // Support & gimbals
@@ -423,7 +459,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   'Rode Video Mic Go': 1,
   'Rode Wireless Mic Pro set': 2,
   'Rode Video Mic Pro Plus': 1,
-  'Audio boom mic Sennheiser': 1,
+  'Audio boom mic Sennheiser': 2,  // MKE 600 + original
   'DJI Wireless Mics': 1,
   'DJI Mic 2 wireless': 1,
   'JBL wireless microphones': 1,
@@ -436,6 +472,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   // DJ & speakers
   'DJ RX3 Pioneer controller': 1,
   'JBL Club 120 speaker': 2,
+  'JBL PartyBox 110': 1,
   // Smoke & effects
   'Smoke machine fogger': 1,
   'Smoke Ninja Pro hazer': 1,
@@ -454,6 +491,156 @@ export const MASTER_INVENTORY: Record<string, number> = {
 
 export function getInventoryItemNames(): string[] {
   return Object.keys(MASTER_INVENTORY);
+}
+
+/**
+ * BRAND INTEGRITY GATE — Detects cross-brand substitutions.
+ *
+ * Given a listing title and a matched inventory item, determines whether
+ * the match is a genuine same-brand match or a cross-brand substitution.
+ *
+ * Returns null if no brand detected (neutral), or a mismatch descriptor.
+ * This is NOT regex — it uses semantic brand extraction with SEO noise stripping.
+ */
+
+// Canonical brand families: group misspellings, abbreviations, sub-brands
+const BRAND_FAMILIES: Record<string, string[]> = {
+  sony:       ['sony', 'α', 'alpha'],
+  canon:      ['canon', 'cannon', 'eos'],
+  blackmagic: ['blackmagic', 'bmpcc', 'bmpc', 'pyxis'],
+  fujifilm:   ['fujifilm', 'fuji'],
+  panasonic:  ['panasonic', 'lumix'],
+  nikon:      ['nikon', 'nikkor'],
+  red:        ['red', 'dsmc'],
+  arri:       ['arri', 'alexa'],
+  dji:        ['dji'],
+  rode:       ['rode', 'røde'],
+  sennheiser: ['sennheiser'],
+  dzo:        ['dzo', 'dzofilm', 'vespid'],
+  sigma:      ['sigma'],
+  aputure:    ['aputure'],
+  nanlite:    ['nanlite'],
+  hollyland:  ['hollyland'],
+  tilta:      ['tilta'],
+  gopro:      ['gopro', 'go pro'],
+  pioneer:    ['pioneer', 'xdj'],
+  jbl:        ['jbl'],
+  blazar:     ['blazar', 'remus'],
+  '7artisans': ['7artisans'],
+  smallrig:   ['smallrig', 'small rig'],
+  atomos:     ['atomos', 'ninja'],
+  anker:      ['anker'],
+};
+
+/**
+ * Extract the primary brand from text, ignoring SEO comparison noise.
+ * Strips "(like X / Y)" and "(similar to ...)" before extraction.
+ * Returns the FIRST (leftmost) brand found — the primary product brand.
+ */
+export function extractPrimaryBrand(text: string): string | null {
+  // Strip SEO comparison clauses BEFORE brand detection
+  const cleaned = text
+    .replace(/\(\s*(?:like|similar to|comparable to|replaces|vs|or|same\s+(?:sensor|chip|quality|level|class)\s+as|equivalent to|alternative to|beats|better than|compared to|upgrade from|matching|competes\s+with|rival\s+to|works\s+like)\s[^)]*\)/gi, '')
+    .replace(/[|–—]\s*(?:like|similar|comparable|replaces|vs)\b[^|–—]*/gi, '') // pipe-separated SEO
+    .toLowerCase();
+
+  // Find the leftmost brand mention
+  let earliestPos = Infinity;
+  let primaryBrand: string | null = null;
+
+  for (const [canonical, variants] of Object.entries(BRAND_FAMILIES)) {
+    for (const variant of variants) {
+      const pos = cleaned.indexOf(variant);
+      if (pos !== -1 && pos < earliestPos) {
+        earliestPos = pos;
+        primaryBrand = canonical;
+      }
+    }
+  }
+
+  return primaryBrand;
+}
+
+/**
+ * Extract ALL brands from text (after stripping SEO noise).
+ */
+export function extractAllBrands(text: string): string[] {
+  const cleaned = text
+    .replace(/\(\s*(?:like|similar to|comparable to|replaces|vs|or|same\s+(?:sensor|chip|quality|level|class)\s+as|equivalent to|alternative to|beats|better than|compared to|upgrade from|matching|competes\s+with|rival\s+to|works\s+like)\s[^)]*\)/gi, '')
+    .replace(/[|–—]\s*(?:like|similar|comparable|replaces|vs)\b[^|–—]*/gi, '')
+    .toLowerCase();
+
+  const found: string[] = [];
+  for (const [canonical, variants] of Object.entries(BRAND_FAMILIES)) {
+    if (variants.some(v => cleaned.includes(v)) && !found.includes(canonical)) {
+      found.push(canonical);
+    }
+  }
+  return found;
+}
+
+export interface BrandMatchResult {
+  isMismatch: boolean;
+  listingBrand: string | null;
+  itemBrand: string | null;
+  /** Human-readable explanation for AI prompts */
+  explanation: string;
+}
+
+/**
+ * Core brand integrity check: does the listing title's brand match the
+ * matched inventory item's brand?
+ *
+ * Cases:
+ * - Same brand → direct match (ok)
+ * - Listing has a brand, item has a DIFFERENT brand → cross-brand mismatch
+ * - Listing has no detectable brand → neutral (allow match)
+ * - Item has no detectable brand (accessories) → neutral (allow match)
+ * - Multi-brand listing (e.g. "BMPCC + Canon lens") → check per-component
+ */
+export function detectBrandMismatch(listingTitle: string, matchedInventoryItem: string): BrandMatchResult {
+  const listingBrand = extractPrimaryBrand(listingTitle);
+  const itemBrand = extractPrimaryBrand(matchedInventoryItem);
+
+  // No brand detected on either side → neutral, allow
+  if (!listingBrand || !itemBrand) {
+    return { isMismatch: false, listingBrand, itemBrand, explanation: '' };
+  }
+
+  // Same brand family → direct match
+  if (listingBrand === itemBrand) {
+    return { isMismatch: false, listingBrand, itemBrand, explanation: '' };
+  }
+
+  // Special case: Blackmagic cameras use Canon/Sony lenses legitimately
+  // "BMPCC + Canon lens" is a real combo, not a mismatch
+  if (listingBrand === 'blackmagic' || itemBrand === 'blackmagic') {
+    // Check if the listing mentions BOTH brands explicitly (combo listing)
+    const allListingBrands = extractAllBrands(listingTitle);
+    if (allListingBrands.includes(listingBrand) && allListingBrands.includes(itemBrand)) {
+      return { isMismatch: false, listingBrand, itemBrand, explanation: '' };
+    }
+  }
+
+  // Cross-brand accessories / support gear are often brand-agnostic
+  // These items work with any camera brand — don't flag as mismatch
+  const accessoryPatterns = /\b(batter|card|mount|adapter|filter|tripod|gimbal|mic|light|stand|cable|rig|focus|slider|monopod|softbox|reflector|c-stand|smoke|flash|suction)\b/i;
+  if (accessoryPatterns.test(matchedInventoryItem)) {
+    return { isMismatch: false, listingBrand, itemBrand, explanation: '' };
+  }
+
+  // Also check the ACCESSORY_ITEMS set directly
+  if (ACCESSORY_ITEMS.has(matchedInventoryItem)) {
+    return { isMismatch: false, listingBrand, itemBrand, explanation: '' };
+  }
+
+  // Cross-brand mismatch: listing says one brand, matched item is another
+  return {
+    isMismatch: true,
+    listingBrand,
+    itemBrand,
+    explanation: `LISTING MISMATCH: Renter ordered "${listingTitle}" (${listingBrand.toUpperCase()} product) but matched to "${matchedInventoryItem}" (${itemBrand.toUpperCase()}). These are DIFFERENT brands with incompatible mounts. Frame as "this specific item is currently unavailable" and offer the ${itemBrand.toUpperCase()} alternative.`,
+  };
 }
 
 /**

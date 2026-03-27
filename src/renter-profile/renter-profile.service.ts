@@ -740,31 +740,56 @@ export class RenterProfileService {
             },
           },
           orderBy: { created_at: 'desc' },
-          take: 6,
+          take: 10,
         },
       },
     });
 
     if (!profile) return null;
 
-    // Filter to completed rentals (not the current one)
-    const completedRentals = profile.renter_links.filter(
-      (link) =>
-        link.rental_id !== currentRentalId &&
-        link.rental &&
-        ['completed', 'obsolete'].includes((link.rental.status || '').toLowerCase()),
+    const allOtherRentals = profile.renter_links.filter(
+      (link) => link.rental_id !== currentRentalId && link.rental,
     );
 
-    if (completedRentals.length === 0) return null;
+    // Active/ongoing rentals (critical for detecting extensions & add-ons)
+    const activeRentals = allOtherRentals.filter(
+      (link) => ['ongoing', 'confirmed', 'upcoming', 'pending'].includes((link.rental!.status || '').toLowerCase()),
+    );
+
+    // Completed rentals (returning renter context)
+    const completedRentals = allOtherRentals.filter(
+      (link) => ['completed', 'obsolete'].includes((link.rental!.status || '').toLowerCase()),
+    );
+
+    if (activeRentals.length === 0 && completedRentals.length === 0) return null;
 
     const parts: string[] = [];
-    const totalRentals = completedRentals.length;
+    const totalPast = completedRentals.length;
     const loyalty = this.getLoyaltyTier(profile.total_rentals);
 
-    parts.push(
-      `RETURNING RENTER (${this.ordinal(totalRentals + 1)} rental` +
-      (loyalty ? `, ${loyalty.tier} tier` : '') + '):',
-    );
+    // --- ACTIVE RENTALS (highest priority context) ---
+    if (activeRentals.length > 0) {
+      parts.push('OTHER REQUESTS/RENTALS FROM THIS RENTER (status shown in brackets — PENDING means request sent but NOT yet a confirmed rental):');
+      for (const link of activeRentals) {
+        const r = link.rental!;
+        const start = r.start_date ? new Date(r.start_date).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' }) : '?';
+        const end = r.end_date ? new Date(r.end_date).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' }) : '?';
+        const price = r.rental_price ? ` \xA3${r.rental_price}` : '';
+        parts.push(`  -> [${(r.status || '').toUpperCase()}] ${r.title} (${start}\u2013${end}${price})`);
+      }
+      parts.push('THIS NEW REQUEST MAY BE: (1) an extension of their active rental, (2) late add-on gear for the same period, or (3) a genuinely new separate rental. Assess based on items, dates, and conversation context. See RENTER_CONTEXT_AWARENESS rule.');
+    }
+
+    // --- RETURNING RENTER context ---
+    if (totalPast > 0) {
+      parts.push(
+        `RETURNING RENTER (${this.ordinal(totalPast + 1)} rental` +
+        (loyalty ? `, ${loyalty.tier} tier` : '') + '):',
+      );
+    } else if (activeRentals.length > 0) {
+      // Has pending/active requests but ZERO completed rentals — explicitly label as first-time
+      parts.push('FIRST-TIME RENTER: This person has NOT rented from us before. They have pending/active requests but no completed rentals. Do NOT treat them as a returning customer or say "welcome back".');
+    }
 
     // Preferences summary
     const prefs = profile.preferences as any;
@@ -777,11 +802,11 @@ export class RenterProfileService {
       if (prefParts.length > 0) parts.push(prefParts.join('. ') + '.');
     }
 
-    // Last rental summary
+    // Last completed rental summary
     const lastRental = completedRentals[0]?.rental;
     if (lastRental) {
-      const price = lastRental.rental_price ? `£${lastRental.rental_price}` : '';
-      parts.push(`Last rental: ${lastRental.title}${price ? `, ${price}` : ''}.`);
+      const price = lastRental.rental_price ? `\xA3${lastRental.rental_price}` : '';
+      parts.push(`Last completed rental: ${lastRental.title}${price ? `, ${price}` : ''}.`);
     }
 
     // Cross-rental conversation insights from conversation_archive
@@ -810,7 +835,7 @@ export class RenterProfileService {
       }
     } catch { /* conversation_archive may not have entries yet */ }
 
-    return parts.join(' ');
+    return parts.join('\n');
   }
 
   private ordinal(n: number): string {

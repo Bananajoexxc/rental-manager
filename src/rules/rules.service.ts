@@ -7,6 +7,7 @@ export class RulesService implements OnModuleInit {
 
   // 5-minute TTL cache for formatted rules
   private rulesCache: { value: string; expiresAt: number } | null = null;
+  private intentRulesCache: Record<string, { value: string; expiresAt: number }> = {};
   private readonly RULES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   constructor(private prisma: PrismaService) {}
@@ -32,14 +33,16 @@ export class RulesService implements OnModuleInit {
   }
 
   async addRule(category: string, name: string, content: string, priority = 0) {
-    this.rulesCache = null; // Invalidate cache
+    this.rulesCache = null;
+    this.intentRulesCache = {}; // Invalidate all caches
     return this.prisma.rule.create({
       data: { category, name, content, priority },
     });
   }
 
   async deactivateRule(id: string) {
-    this.rulesCache = null; // Invalidate cache
+    this.rulesCache = null;
+    this.intentRulesCache = {}; // Invalidate all caches
     return this.prisma.rule.update({
       where: { id },
       data: { is_active: false },
@@ -57,8 +60,23 @@ export class RulesService implements OnModuleInit {
 
     const grouped: Record<string, string[]> = {};
     for (const rule of rules) {
+      if (rule.priority < 3) continue;
       if (!grouped[rule.category]) grouped[rule.category] = [];
-      grouped[rule.category].push(`- ${rule.name}: ${rule.content}`);
+      const sentences = rule.content.split(/(?<=\.)\s+/);
+      // p90+ rules: show in FULL (never truncate critical rules)
+      // p50-89: first 4 sentences, 400 chars
+      // p<50: first 2 sentences, 200 chars
+      let compact: string;
+      if (rule.priority >= 90) {
+        compact = rule.content; // FULL text for critical rules
+      } else if (rule.priority >= 50) {
+        compact = sentences.slice(0, 4).join(' ');
+        if (compact.length > 400) compact = compact.substring(0, 400) + '...';
+      } else {
+        compact = sentences.slice(0, 2).join(' ');
+      }
+      const truncated = compact.length > 200 ? compact.substring(0, 200) + "..." : compact;
+      grouped[rule.category].push(`- ${rule.name} (p${rule.priority}): ${truncated}`);
     }
 
     const result = Object.entries(grouped)
@@ -93,6 +111,61 @@ export class RulesService implements OnModuleInit {
       .join('\n');
   }
 
+  /**
+   * Intent-filtered rules: only loads rule categories relevant to the current intent.
+   * Saves ~40-60% of rule tokens for most intents (security+communication always included).
+   * Falls back to full getFormattedRules() for negotiation/complaint (needs all rules).
+   */
+  async getFormattedRulesForIntent(intent: string): Promise<string> {
+    const intentCategories: Record<string, string[] | null> = {
+      greeting: ['security', 'communication', 'policy'],
+      acknowledgment: ['security', 'communication'],
+      goodbye: ['security', 'communication'],
+      return_confirmation: ['security', 'communication', 'policy', 'scheduling'],
+      logistics: ['security', 'communication', 'scheduling', 'policy'],
+      availability_check: ['security', 'communication', 'inventory', 'scheduling'],
+      equipment_question: ['security', 'communication', 'inventory'],
+      pricing_inquiry: ['security', 'communication', 'pricing', 'policy'],
+      booking_action: ['security', 'communication', 'booking', 'scheduling', 'pricing', 'policy'],
+      negotiation: null,
+      complaint: null,
+      damage_report: ['security', 'communication', 'policy', 'compliance'],
+      cancellation: ['security', 'communication', 'policy', 'booking'],
+    };
+
+    const categories = intentCategories[intent];
+    if (categories === undefined || categories === null) {
+      return this.getFormattedRules();
+    }
+
+    const cacheKey = 'intent_' + intent;
+    const cached = this.intentRulesCache[cacheKey];
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.value;
+    }
+
+    const rules = await this.getAllActive();
+    if (rules.length === 0) return 'No rules configured.';
+
+    const grouped: Record<string, string[]> = {};
+    for (const rule of rules) {
+      if (rule.priority < 3) continue;
+      const cat = (rule.category || 'other').toLowerCase();
+      if (!categories.includes(cat)) continue;
+      if (!grouped[cat]) grouped[cat] = [];
+      const truncated = rule.content.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ');
+      grouped[cat].push('- ' + truncated.substring(0, 200));
+    }
+
+    const sections = Object.entries(grouped)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([cat, items]) => '[' + cat.toUpperCase() + ']\n' + items.join('\n'));
+
+    const value = sections.join('\n\n');
+    this.intentRulesCache[cacheKey] = { value, expiresAt: Date.now() + this.RULES_CACHE_TTL };
+    return value;
+  }
+
   private async seedIfEmpty() {
     const count = await this.prisma.rule.count();
     if (count > 0) {
@@ -115,8 +188,8 @@ export class RulesService implements OnModuleInit {
       // 1-Hour Buffer Rule, Verification Handling, Extensions and Late Returns, and Uncertainty Rule
       // are covered by critical memories (Daniel's Original Rules) and omitted here to avoid duplication.
       { category: 'policy', name: 'No Refunds Outside Control', content: 'No refunds for early returns, weather cancellations, or anything outside our control. Refer renters to the refund policy at the bottom of the item listing and the Cancel Rental button which shows their eligibility breakdown. Pre-verification = full refund available. Post-verification persistent requests = escalate to Daniel.', priority: 10 },
-      { category: 'policy', name: 'Working Hours', content: 'Opening times are 10am-12pm and 7pm-9pm every day unless Daniel takes vacation. Rentals must book pickup and return within these slots. NEVER accept times outside these two windows (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm are all OFF-HOURS and must be rejected). If a renter proposes an off-hours time, tell them the available slots and ask them to choose. If renter misses 9pm cutoff, they must extend by an extra day. When suggesting pickup times, ALWAYS offer morning slot (10am-12pm) first. Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. ALWAYS proactively offer evening-before and morning-after options when discussing scheduling — these are a key service feature. DJ deck + speakers TOGETHER = delivery is MANDATORY (speakers alone or DJ alone = self-pickup OK).', priority: 10 },
-      { category: 'policy', name: 'Day Before/After Pickup', content: 'ALWAYS proactively offer these options when discussing pickup/return scheduling — do not wait for the renter to ask. Day-before evening pickup OR day-after morning return: FREE for multi-day rentals (2+ days) or any rental earning £40+ total. For short/low-value rentals (1-day under £40), a small fee applies — just quote the adjusted total naturally. Selecting BOTH (day-before pickup AND morning-after return) = counts as a full extra rental day that must be booked and paid for. Evening NEXT day (instead of morning-after) = always a full extra rental day regardless of rental value. Only possible if items are available for those dates.', priority: 9 },
+      { category: 'policy', name: 'Working Hours', content: 'Opening times are 10am-12pm and 7pm-9pm every day unless Daniel takes vacation. Rentals must book pickup and return within these slots. NEVER accept times outside these two windows (e.g. 2pm, 4pm, 6pm, 9am, 1pm, 3pm, 5pm are all OFF-HOURS and must be rejected). If a renter proposes an off-hours time, tell them the available slots and ask them to choose. If renter misses 9pm cutoff, they must extend by an extra day. When suggesting pickup times, ALWAYS offer morning slot (10am-12pm) first. Day-before evening pickup: FREE for multi-day rentals or any rental earning £40+ total. Small fee for short/low-value rentals. Only mention evening-before pickup or morning-after return if the renter explicitly asks about it or is struggling to book within standard slots — do NOT volunteer it unprompted. DJ deck + speakers TOGETHER = delivery is MANDATORY (speakers alone or DJ alone = self-pickup OK).', priority: 10 },
+      { category: 'policy', name: 'Day Before/After Pickup', content: 'ONLY mention day-before evening pickup or morning-after return if the renter explicitly asks about it, or genuinely cannot fit within standard slots. Do NOT volunteer it when a renter simply states their booking dates. When it IS relevant: Day-before evening pickup OR day-after morning return: FREE for multi-day rentals (2+ days) or any rental earning £40+ total. For short/low-value rentals (1-day under £40), a small fee applies. FRAMING: Frame positively — "we can extend to cover [day], that makes it a [N]-day booking at [£X]" — NOT as a warning ("that counts as an extra rental day"). Selecting BOTH (day-before pickup AND morning-after return) together = a full extra rental day. Evening NEXT day (instead of morning-after) = always a full extra rental day. Only possible if items are available.', priority: 9 },
       { category: 'policy', name: 'Booking Changes', content: 'You CANNOT extend, shorten, or modify bookings yourself. Any date or duration changes must be done by the RENTER through the Hygglo platform. If an extension is needed, tell the renter to request it through the platform. Never offer to extend a booking yourself — you do not have this ability.', priority: 10 },
       { category: 'policy', name: 'Listing Components', content: 'Accessories mentioned in the renter listing title (batteries, ND filters, memory cards, mounts, controllers, etc.) are INCLUDED with that listing rental. They are NOT separately available add-ons. NEVER say these are available separately or quote separate pricing for them. If a renter asks about an accessory already in their listing, confirm it is included. Only suggest additional items NOT already in their listing.', priority: 10 },
       { category: 'policy', name: 'Reviews Check', content: 'Always check renter reviews. If any individual review is 3 stars or below, escalate to Daniel for approval before accepting the rental. Include what the review said. Reviews of 4 stars are acceptable and do not need escalation. If Daniel declines, reject the rental regardless of price.', priority: 8 },

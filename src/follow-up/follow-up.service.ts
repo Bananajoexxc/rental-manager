@@ -289,6 +289,52 @@ export class FollowUpService {
       }
     } catch { /* non-critical */ }
 
+    // 1e. Skip follow-up if bot's last message mentions unavailability (catch cases where structured_state flag wasn't set)
+    try {
+      const lastBotMsg = await this.prisma.conversation.findFirst({
+        where: { chat_id: `rental:${state.rental_id}`, role: 'assistant' },
+        orderBy: { created_at: 'desc' },
+        select: { content: true },
+      });
+      if (lastBotMsg?.content) {
+        const botText = lastBotMsg.content.toLowerCase();
+        const unavailablePatterns = [
+          /(not available|unavailable|out of stock|don'?t have|don'?t currently have|no longer available)/,
+          /(fully booked|all rented out|already rented|booked out|currently on hire|currently rented)/,
+          /(unfortunately.*(?:can'?t|cannot|unable).*(?:offer|provide|help with that))/,
+        ];
+        if (unavailablePatterns.some(p => p.test(botText))) {
+          this.logger.debug(`Skipping follow-up for ${state.rental_id}: bot's last message indicates item unavailability`);
+          return;
+        }
+      }
+    } catch { /* non-critical */ }
+
+    // 1f. Skip follow-up if renter's last message signals conversation is over (disinterest/closure)
+    try {
+      const lastRenterMsg = await this.prisma.conversation.findFirst({
+        where: { chat_id: `rental:${state.rental_id}`, role: 'user' },
+        orderBy: { created_at: 'desc' },
+        select: { content: true },
+      });
+      if (lastRenterMsg?.content) {
+        const renterText = lastRenterMsg.content.toLowerCase().trim();
+        const closurePatterns = [
+          /(no\s*(thanks|thank you|worries|problem|it'?s? ?(ok|fine|alright|all good)))/,
+          /(i'?ll (look|find|search|try|go) (elsewhere|somewhere else|another|other))/,
+          /(that'?s? ?(ok|fine|alright)|never ?mind|not to worry)/,
+          /(don'?t (need|want|worry|bother)|not interested|changed my mind)/,
+          /(found (one|it|something|another)|got (one|it|sorted)|sorted (it|now|thanks))/,
+          /(thanks anyway|thank you anyway|cheers anyway)/,
+          /(all good|no need|won'?t be needing)/,
+        ];
+        if (closurePatterns.some(p => p.test(renterText))) {
+          this.logger.debug(`Skipping follow-up for ${state.rental_id}: renter's last message indicates conversation is over`);
+          return;
+        }
+      }
+    } catch { /* non-critical */ }
+
     // 2. Paused until: if set and future -> skip
     if (state.paused_until) {
       const pauseEnd = new Date(state.paused_until);
@@ -324,6 +370,20 @@ export class FollowUpService {
     }
 
     const hoursSinceRenter = (now.getTime() - lastRenterMsgTime.getTime()) / (1000 * 60 * 60);
+
+    // 3b. Skip generic inactivity follow-ups for CONFIRMED or BOOKED rentals.
+    // Once booking is confirmed or funds are reserved, "still interested?" messages are wrong.
+    // Time-specific follow-ups (evaluateTimeFollowUp) handle confirmed rentals separately above.
+    const convStage = (state.conversation_stage || '').toLowerCase();
+    const orderStep = (state.rental?.order_step || '').toUpperCase();
+    const isConfirmedOrBooked =
+      convStage === 'confirmed' ||
+      convStage === 'booked' ||
+      ['FUNDS_RESERVED', 'VERIFIED', 'BOOKED_AFTER_VERIFIED', 'DELIVERED'].includes(orderStep);
+    if (isConfirmedOrBooked) {
+      this.logger.debug(`Skipping inactivity follow-up for ${state.rental_id}: stage is ${convStage} / order_step is ${orderStep} (only time follow-ups apply)`);
+      return;
+    }
 
     // 4. Less than 3 hours -> skip (first follow-up at 3h)
     if (hoursSinceRenter < 3) {
@@ -732,7 +792,6 @@ export class FollowUpService {
           `\nItems: ${rental.title}${dateRange}` +
           `\nPickup address: ${pickupAddress}${mapsLink}` +
           `\nOpening times: 10am–12pm & 7–9pm` +
-          `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
           `\nDelivery available (separate charge) — let us know if needed.` +
           `\n\nOne last thing — what are your exact pickup and return times? (Please include AM or PM)`;
 
@@ -996,7 +1055,6 @@ export class FollowUpService {
           `Great news! I've put together ${itemNames} for your ${dateRange} booking.` +
           `\n\nPickup address: ${pickupAddress}${mapsLink}` +
           `\nOpening times: 10am–12pm & 7–9pm` +
-          `\nEvening before pickup or morning after return is usually free — both together = extra rental day.` +
           `\nDelivery available (separate charge) — let us know if needed.${discountMention}` +
           `\n\nWhat are your preferred pickup and return times? (Please include AM or PM)`;
 
@@ -1164,6 +1222,31 @@ export class FollowUpService {
       newEarnings: targetEarnings,
       error: acceptResult.success ? undefined : acceptResult.error,
     };
+  }
+
+  /**
+   * Decline a secondary rental listing on Hygglo via Playwright.
+   * Called during multi-item consolidation to close duplicate pending requests.
+   * Logs the result but does NOT throw — caller handles gracefully.
+   */
+  async declineSecondaryRental(listingId: string, account: string, rentalId: string): Promise<void> {
+    const result = await this.playwrightService.declineRental(listingId, account as HyggloAccount);
+    if (result.success) {
+      this.logger.log(`Declined secondary listing ${listingId} on Hygglo for account ${account}`);
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: rentalId,
+          decision_type: 'secondary_declined',
+          input_summary: `Multi-item consolidation: declined secondary listing ${listingId}`,
+          output_summary: 'Secondary Hygglo listing declined via Playwright',
+          confidence: 1.0,
+          action_taken: `Declined listing ${listingId} on Hygglo`,
+          notified: false,
+        },
+      }).catch(() => {});
+    } else {
+      this.logger.warn(`Failed to decline secondary listing ${listingId}: ${result.error}`);
+    }
   }
 
   /**
@@ -1610,6 +1693,66 @@ export class FollowUpService {
    */
   async checkDeliveryTCs(state: any, rental: any): Promise<void> {
     if (!rental) return;
+
+    // Skip if rental is cancelled/declined — no point sending T&Cs
+    const rentalStatus = (rental.status || '').toLowerCase();
+    if (['cancelled', 'declined', 'rejected'].includes(rentalStatus)) {
+      this.logger.debug(`Skipping delivery T&Cs for ${rental.id}: rental status is ${rentalStatus}`);
+      return;
+    }
+
+    // Skip if conversation indicates disinterest or unavailability
+    try {
+      const ss = state.structured_state as any;
+      if (ss?.unavailabilityMentioned) {
+        this.logger.debug(`Skipping delivery T&Cs for ${rental.id}: item unavailability mentioned`);
+        return;
+      }
+    } catch { /* non-critical */ }
+
+    try {
+      const lastRenterMsg = await this.prisma.conversation.findFirst({
+        where: { chat_id: `rental:${rental.id}`, role: 'user' },
+        orderBy: { created_at: 'desc' },
+        select: { content: true },
+      });
+      if (lastRenterMsg?.content) {
+        const renterText = lastRenterMsg.content.toLowerCase().trim();
+        const closurePatterns = [
+          /(no\s*(thanks|thank you|worries|problem|it'?s? ?(ok|fine|alright|all good)))/,
+          /(i'?ll (look|find|search|try|go) (elsewhere|somewhere else|another|other))/,
+          /(that'?s? ?(ok|fine|alright)|never ?mind|not to worry)/,
+          /(don'?t (need|want|worry|bother)|not interested|changed my mind)/,
+          /(found (one|it|something|another)|got (one|it|sorted)|sorted (it|now|thanks))/,
+          /(thanks anyway|thank you anyway|cheers anyway)/,
+          /(all good|no need|won'?t be needing)/,
+        ];
+        if (closurePatterns.some(p => p.test(renterText))) {
+          this.logger.debug(`Skipping delivery T&Cs for ${rental.id}: renter's last message indicates disinterest`);
+          return;
+        }
+      }
+    } catch { /* non-critical */ }
+
+    try {
+      const lastBotMsg = await this.prisma.conversation.findFirst({
+        where: { chat_id: `rental:${rental.id}`, role: 'assistant' },
+        orderBy: { created_at: 'desc' },
+        select: { content: true },
+      });
+      if (lastBotMsg?.content) {
+        const botText = lastBotMsg.content.toLowerCase();
+        const unavailablePatterns = [
+          /(not available|unavailable|out of stock|don'?t have|don'?t currently have|no longer available)/,
+          /(fully booked|all rented out|already rented|booked out|currently on hire|currently rented)/,
+          /(unfortunately.*(?:can'?t|cannot|unable).*(?:offer|provide|help with that))/,
+        ];
+        if (unavailablePatterns.some(p => p.test(botText))) {
+          this.logger.debug(`Skipping delivery T&Cs for ${rental.id}: bot's last message indicates unavailability`);
+          return;
+        }
+      }
+    } catch { /* non-critical */ }
 
     // Stage gate: only send delivery T&Cs when registry allows (QUALIFIED+)
     const followUpState = await this.prisma.follow_up_state.findUnique({

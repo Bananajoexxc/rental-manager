@@ -56,36 +56,6 @@ export class TitleParserService {
   private matchTitlePatterns(normalizedTitle: string): ParsedItem[] | null {
     const lower = normalizedTitle.toLowerCase();
 
-    // DZO Vespid 6x lens set — title doesn't list individual focal lengths
-    if (/vespid.*prime.*6x/i.test(lower) || /6x.*vespid/i.test(lower) || /vespid.*6.*lens.*set/i.test(lower)) {
-      return [
-        { item: 'DZO Vespid Prime 16mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 25mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 50mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 75mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 100mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 125mm T2.1', qty: 1 },
-      ];
-    }
-
-    // DZO Vespid 3x lens set — most common combo
-    if (/vespid.*prime.*3x/i.test(lower) || /3x.*vespid/i.test(lower) || /vespid.*3.*lens.*set/i.test(lower)) {
-      return [
-        { item: 'DZO Vespid Prime 25mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 50mm T2.1', qty: 1 },
-        { item: 'DZO Vespid Prime 75mm T2.1', qty: 1 },
-      ];
-    }
-
-    // DZO Vespid individual lenses
-    const vespidMatch = lower.match(/vespid.*prime.*?(\d+)mm/i);
-    if (vespidMatch) {
-      const fl = vespidMatch[1];
-      const tStop = fl === '16' ? 'T2.8' : 'T2.1';
-      const itemName = `DZO Vespid Prime ${fl}mm ${tStop}`;
-      return [{ item: itemName, qty: 1 }];
-    }
-
     // V-mount batteries — "v mount", "v-mount", "150 wah", "150wh"
     if (/v[\s-]?mount.*batter/i.test(lower) || /batter.*v[\s-]?mount/i.test(lower)) {
       const qtyMatch = lower.match(/(\d+)x\s*v[\s-]?mount/i) || lower.match(/(\d+)x\s.*v[\s-]?mount/i);
@@ -364,7 +334,7 @@ WIRELESS MICS — ONE brand per rental. Read the logo on the device:
 - Transmitters + receiver + lav mics = ONE set. Do not count each piece separately.
 
 BATTERIES:
-- Small rectangular with green "N" or "NP-F" text = "Sony NPF 970 batteries 2x sets" (qty: 1 regardless of count)
+- Small rectangular with green "N" or "NP-F" text = "Sony NP-FZ100 batteries 2x sets" (qty: 1 regardless of count)
 - Large rectangular with V-shaped mount = V-mount battery
 
 Include: cameras, lenses, mics, gimbals, lights, monitors, wireless transmitters, tripods
@@ -462,9 +432,31 @@ Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
     // Start with title items
     for (const item of currentItems) merged.set(item.item, item);
 
+    // Helper: detect "context accessory" items that appear in photos as props but may not be rented.
+    // When the title doesn't mention stands or V-mounts, vision seeing them in a photo is almost
+    // always the listing owner staging their gear (C-stand holding a light, V-mount powering a cam).
+    // Root cause (Mar 10 2026 — Gennaro / Pavotube): vision added C-stand + V-mount from listing
+    // photo; Gennaro only requested the tube lights. Title "Nanlite Pavotube 30x II" has no stand/power mention.
+    const titleLower = title.toLowerCase();
+    const isContextAccessory = (itemName: string): boolean => {
+      const lower = itemName.toLowerCase();
+      const isStand = lower.includes('c-stand') || lower.includes('c stand') || (lower.includes('stand') && !lower.includes('understand'));
+      const isTripod = lower.includes('tripod') || lower.includes('small rig');
+      const isVMount = lower.includes('v-mount') || lower.includes('v mount');
+      if ((isStand || isTripod) && !titleLower.includes('stand') && !titleLower.includes('tripod')) return true;
+      if (isVMount && !titleLower.includes('v-mount') && !titleLower.includes('v mount') && !titleLower.includes('battery') && !titleLower.includes('power')) return true;
+      return false;
+    };
+
     // Vision items: add new discoveries AND replace conflicting title items
     for (const visionItem of photoItems) {
       if (merged.has(visionItem.item)) continue; // Already have exact match
+
+      // Block adding context accessories when title doesn't mention them — they're just props in the photo
+      if (currentItems.length > 0 && isContextAccessory(visionItem.item)) {
+        this.logger.log(`Vision: skipping "${visionItem.item}" — context accessory not mentioned in title`);
+        continue;
+      }
 
       // Check if vision found a different variant of same product category
       // e.g. title says "Sony GM 24-70mm f2.8" but vision sees "Sony 28-70mm"

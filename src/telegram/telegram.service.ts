@@ -54,6 +54,7 @@ export interface RentalNotificationMeta {
   startDate?: Date;
   endDate?: Date;
   days?: number;
+  location?: string;
 }
 
 interface RentalNotifBufferEntry {
@@ -70,7 +71,7 @@ export interface DecisionOption {
 }
 
 export interface DecisionPromptConfig {
-  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag' | 'extra_items';
+  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag' | 'extra_items' | 'arrival' | 'payment_confirm';
   rentalId: string;
   listingId: string;
   account: HyggloAccount;
@@ -86,7 +87,7 @@ export interface DecisionPromptConfig {
 
 interface PendingDecision {
   id: string;
-  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag' | 'extra_items';
+  type: 'acquisition' | 'same_day' | 'cancel_reschedule' | 'escalation' | 'review_flag' | 'extra_items' | 'arrival' | 'payment_confirm';
   telegramMessageId: number;
   rentalId: string;
   listingId: string;
@@ -108,7 +109,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramService.name);
   private bot: any;
   private ownerChatId: string;
-  private simulationMode: { active: boolean; account: 'dbcinema' | 'leo' | null } = {
+  private simulationMode: {
+    active: boolean;
+    account: 'dbcinema' | 'leo' | null;
+    rentalContext?: {
+      rentalId: string;
+      title: string;
+      renterName: string;
+      startDate: string | null;
+      endDate: string | null;
+      renterPrice: number | null;
+      ownerPrice: number | null;
+      items: string;
+      location: string;
+      firstMessage: string;
+    };
+  } = {
     active: false,
     account: null,
   };
@@ -502,6 +518,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       startDate: rental.start_date ? new Date(rental.start_date) : undefined,
       endDate: rental.end_date ? new Date(rental.end_date) : undefined,
       days: days || undefined,
+      location: rental.listing_location || undefined,
     };
   }
 
@@ -677,6 +694,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const headerParts: string[] = [];
     if (m.renterName) headerParts.push(`👤 ${m.renterName}`);
     if (m.profit) headerParts.push(`💰 ${m.profit}`);
+    if (m.location) headerParts.push(`\ud83d\udccd ${m.location}`);
     if (m.startDate && m.endDate) {
       const fmt = (d: Date) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
       const days = m.days || Math.max(1, Math.round((new Date(m.endDate).getTime() - new Date(m.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
@@ -711,10 +729,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           break;
 
         case 'message_processed': {
+          const isDraft = d.status && String(d.status).includes('DRAFT');
+          const truncLimit = isDraft ? 2000 : 500;
           const msg = d.renterMsg ? `"${String(d.renterMsg).substring(0, 300)}${String(d.renterMsg).length > 300 ? '...' : ''}"` : '';
-          const reply = d.botReply ? String(d.botReply).substring(0, 500) : '';
+          const reply = d.botReply ? String(d.botReply).substring(0, truncLimit) : '';
           if (msg) lines.push(`💬 ${msg}`);
-          if (reply) lines.push(`🤖 ${reply}${String(d.botReply || '').length > 500 ? '...' : ''}${d.status ? '\n📋 ' + d.status : ''}`);
+          if (reply) lines.push(`🤖 ${reply}${String(d.botReply || '').length > truncLimit ? '...' : ''}${d.status ? '\n📋 ' + d.status : ''}`);
           break;
         }
 
@@ -813,28 +833,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           break;
 
         case 'contention_detected': {
-          lines.push(`⚔️ INVENTORY CONTENTION`);
-          lines.push(`Item: ${d.itemName} (${d.maxQty} units, ${d.totalDemand} demand)`);
+          const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '?';
+          const fmtGBP = (n: number) => `£${Math.round(n)}`;
+          const stageBadge = (s: string) => ({ inquiry: '💬', confirmed: '✅', pre_pickup: '📦', active: '🏃', post_return: '🔁' })[s] || '💬';
+
+          lines.push(`⚔️ Stock Contention — ${d.itemName}`);
           if (d.dateStart && d.dateEnd) {
-            const ds = new Date(d.dateStart).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-            const de = new Date(d.dateEnd).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-            lines.push(`Dates: ${ds} - ${de}`);
+            const ds = fmtDate(d.dateStart);
+            const de = fmtDate(d.dateEnd);
+            lines.push(`📅 ${ds === de ? ds : `${ds} → ${de}`}`);
           }
-          lines.push(`FAVORED (£${d.favoredRevenue || 0}):`);
-          lines.push(`  "${d.favoredTitle}" by ${d.favoredRenter} | ${d.favoredStage}`);
-          lines.push(`  → Urgency messaging active`);
-          if (d.heldCount > 0) {
-            lines.push(`HELD (${d.heldCount}):`);
-            lines.push(`${d.heldSummary || '  (details unavailable)'}`);
+          lines.push(`📦 ${d.maxQty} unit${d.maxQty !== 1 ? 's' : ''} available — ${d.totalDemand} requests competing`);
+          lines.push('');
+          lines.push(`✅ Keeping: ${d.favoredRenter} (${d.favoredAccount})`);
+          lines.push(`   ${stageBadge(d.favoredStage)} Stage: ${d.favoredStage || 'inquiry'} · ${fmtGBP(d.favoredRevenue || 0)} earnings`);
+          lines.push(`   Urgency messages active`);
+          if (d.heldCount > 0 && Array.isArray(d.heldRentalData)) {
+            lines.push('');
+            lines.push(`⏸ Paused (${d.heldCount}):`);
+            for (const h of d.heldRentalData) {
+              const crossAccountNote = h.isSameRenter ? ' ⚠️ same renter, diff account' : '';
+              lines.push(`   ${h.renter} (${h.account})${crossAccountNote}`);
+              lines.push(`   ${stageBadge(h.stage)} Stage: ${h.stage} · ${fmtGBP(h.revenue)} earnings`);
+              lines.push(`   Outbound messages paused`);
+            }
           }
           break;
         }
 
-        case 'contention_resolved':
-          lines.push(`✅ CONTENTION RESOLVED — ${d.statusLabel || 'UNKNOWN'}`);
-          lines.push(`${d.itemName} contention ended.`);
-          lines.push(`Reason: ${d.reason || 'n/a'}`);
+        case 'contention_resolved': {
+          const fmtGBP2 = (n: number) => `£${Math.round(n || 0)}`;
+          if (d.status === 'resolved_booked') {
+            lines.push(`🎯 Contention Won — ${d.itemName}`);
+            lines.push(`Favored rental booked. ${d.heldCount > 0 ? `${d.heldCount} held renter${d.heldCount > 1 ? 's' : ''} notified.` : 'No held rentals to notify.'}`);
+            if (d.favoredRevenue) lines.push(`Earnings: ${fmtGBP2(d.favoredRevenue)}`);
+          } else if (d.status === 'resolved_timeout') {
+            lines.push(`⏰ Contention Expired — ${d.itemName}`);
+            lines.push(`Favored rental went silent (12h+). Contention cleared.`);
+            lines.push(`${d.heldCount > 0 ? `${d.heldCount} held rental${d.heldCount > 1 ? 's' : ''} unpaused.` : 'No held rentals.'}`);
+          } else {
+            lines.push(`✅ Contention Cleared — ${d.itemName}`);
+            lines.push(`Competition dropped — all clear, no action needed.`);
+            if (d.heldCount > 0) lines.push(`${d.heldCount} held rental${d.heldCount > 1 ? 's' : ''} unpaused.`);
+          }
           break;
+        }
 
         case 'alt_conversion_success':
           lines.push(`🔄 ALT CONVERSION SUCCESS`);
@@ -970,6 +1013,94 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    */
   private async handleCallbackQuery(query: any): Promise<void> {
     const data = query.data;
+    // --- Simulation mode callbacks ---
+    if (data?.startsWith('sim_account:')) {
+      try { await this.bot.answerCallbackQuery(query.id); } catch {}
+      const account = data.split(':')[1] as 'dbcinema' | 'leo';
+      await this.showSimulationScenarios(query.message.chat.id, account);
+      return;
+    }
+
+    if (data?.startsWith('sim_rental:')) {
+      try { await this.bot.answerCallbackQuery(query.id); } catch {}
+      const parts = data.split(':');
+      const simAccount = parts[1] as 'dbcinema' | 'leo';
+      const rentalIdShort = parts[2];
+
+      if (rentalIdShort === 'free') {
+        this.simulationMode = { active: true, account: simAccount };
+        this.simConversationHistory = [];
+        const persona = simAccount === 'dbcinema' ? 'DB Cinema (Daniel)' : 'Leo Adams (Leo)';
+        await this.bot.sendMessage(query.message.chat.id,
+          `\ud83c\udfad *Simulation Active: ${persona}*\n` +
+          `Free chat mode (no rental context)\n` +
+          `Messages treated as renter\n` +
+          `/endsim to exit with self-assessment`,
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
+
+      // Look up full rental from cache
+      const cache = (this as any)._simRentalCache as any[] | undefined;
+      const rental = cache?.find((r: any) => r.id?.startsWith(rentalIdShort));
+
+      if (!rental) {
+        await this.bot.sendMessage(query.message.chat.id, 'Rental not found. Try /simulate again.');
+        return;
+      }
+
+      const simItems = this.parseSimItems(rental.parsed_items);
+      const itemStr = simItems.length > 0 ? simItems.join(', ') : rental.title.substring(0, 60);
+      const startDate = rental.start_date || null;
+      const endDate = rental.end_date || null;
+      const dateStr = startDate ? `${new Date(startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` + (endDate && endDate !== startDate ? `\u2013${new Date(endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : '') : 'Not set';
+      const renterPrice = rental.renter_price ? `\u00a3${rental.renter_price}` : 'Not set';
+      const ownerPrice = rental.rental_price ? `\u00a3${rental.rental_price}` : '?';
+      const simLocation = rental.listing_location || 'N/A';
+      const firstMsg = rental.first_msg?.trim() || '(no message yet)';
+      const persona = simAccount === 'dbcinema' ? 'DB Cinema (Daniel)' : 'Leo Adams (Leo)';
+
+      this.simulationMode = {
+        active: true,
+        account: simAccount,
+        rentalContext: {
+          rentalId: rental.id,
+          title: rental.title,
+          renterName: rental.renter_info?.trim() || 'Unknown',
+          startDate,
+          endDate,
+          renterPrice: rental.renter_price,
+          ownerPrice: rental.rental_price,
+          items: itemStr,
+          location: simLocation,
+          firstMessage: firstMsg,
+        },
+      };
+      this.simConversationHistory = [];
+
+      await this.bot.sendMessage(
+        query.message.chat.id,
+        `\ud83c\udfad *Simulation Active: ${persona}*\n\n` +
+        `${rental.title.substring(0, 60)}\n` +
+        `Renter: ${rental.renter_info?.trim() || '?'}\n` +
+        `Dates: ${dateStr}\n` +
+        `Price: ${renterPrice} (you get ${ownerPrice})\n` +
+        `Items: ${itemStr.substring(0, 80)}\n` +
+        `Location: ${simLocation}\n` +
+        `First msg: "${firstMsg.substring(0, 100)}"\n\n` +
+        `Type as the renter. /endsim for self-assessment.`,
+        { parse_mode: 'Markdown' },
+      );
+
+      // If there's a first message, auto-process it
+      if (firstMsg && firstMsg !== '(no message yet)') {
+        await this.handleSimulatedConversation({ ...query.message, text: firstMsg });
+      }
+
+      return;
+    }
+
     if (!data?.startsWith('dec:')) return;
 
     // Always acknowledge the callback immediately
@@ -1063,6 +1194,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (chosenOption.intent === 'ignore') {
         this.logger.log(`Decision ${decision.id} resolved as IGNORE — no message sent to renter`);
         await this.logDecision(decision, chosenOption, 'Ignored — no message sent', customText);
+        return;
+      }
+
+      // payment_confirm: fixed reply based on Daniel's YES/NO — no AI polish needed
+      if (decision.type === 'payment_confirm') {
+        let paymentReply: string;
+        if (chosenOption.intent === 'confirm_payment') {
+          paymentReply = 'Thank you, all sorted! 🙏';
+        } else {
+          // deny_payment
+          paymentReply = "We haven't received the payment yet. Could you please send it via bank transfer? Just let us know here once it's done and we'll confirm.";
+        }
+        let sent = false;
+        try {
+          sent = await this.hyggloService.sendMessage(decision.listingId, paymentReply);
+        } catch (sendErr) {
+          this.logger.warn(`Failed to send payment reply via Hygglo: ${sendErr.message}`);
+        }
+        if (sent) {
+          const chatIdPayment = `hygglo_${decision.listingId}`;
+          await this.memoryService.storeConversation(chatIdPayment, 'assistant', paymentReply, { model: 'system' });
+        }
+        const confirmEmoji = sent ? '✅' : '❌';
+        await this.bot.sendMessage(
+          this.ownerChatId,
+          `${confirmEmoji} *Sent to ${decision.renterName}:*\n${paymentReply}`,
+          { parse_mode: 'Markdown' },
+        ).catch(() => {
+          this.bot.sendMessage(this.ownerChatId, `${confirmEmoji} Sent to ${decision.renterName}:\n${paymentReply}`).catch(() => {});
+        });
+        await this.logDecision(decision, chosenOption, sent ? `Sent: "${paymentReply}"` : 'Send failed', undefined);
         return;
       }
 
@@ -1321,7 +1483,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'earnings', description: 'Monthly profit (alias for /revenue month)' },
       // Phase 3: Reminders + Simulator
       { command: 'today', description: "Today's schedule" },
-      { command: 'simulate', description: 'Simulate renter: /simulate <dbcinema|leo>' },
+      { command: 'simulate', description: 'Simulate renter conversation' },
       { command: 'endsim', description: 'Exit simulation mode' },
       // Phase 4: Delivery + Market
       { command: 'quote', description: 'Delivery quote: /quote <postcode> <items>' },
@@ -1379,7 +1541,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     // Phase 3: Today + Simulator commands
     this.bot.onText(/\/today/, (msg: any) => this.handleToday(msg));
-    this.bot.onText(/\/simulate\s+(dbcinema|leo)/, (msg: any, match: any) => this.handleSimulate(msg, match));
+    this.bot.onText(/\/simulate(?:\s+(dbcinema|leo))?/, (msg: any, match: any) => this.handleSimulate(msg, match));
     this.bot.onText(/\/endsim/, (msg: any) => this.handleEndSim(msg));
 
     // Phase 4: Delivery + Market commands
@@ -1743,7 +1905,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             additionalContext: additionalParts.join(''),
             maxTokens: 1500,
           })
-        : await this.aiService.processRoutine(userText, {
+        : await this.aiService.processComplex(userText, {
             rules,
             memories,
             conversationHistory: history,
@@ -1777,6 +1939,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     userText: string,
     account: 'dbcinema' | 'leo' | null,
     conversationHistory: { role: 'user' | 'assistant'; content: string }[],
+    simRentalContext?: {
+      rentalId: string;
+      title: string;
+      renterName: string;
+      startDate: string | null;
+      endDate: string | null;
+      renterPrice: number | null;
+      ownerPrice: number | null;
+      items: string;
+      location: string;
+      firstMessage: string;
+    },
   ): Promise<{ replyText: string; qualityInfo: string; rawContent: string } | null> {
     // SCAM DETECTION (pre-pipeline gate)
     const scamResult = this.detectSimScamPattern(userText);
@@ -1805,11 +1979,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     // === PIPELINE: Unified intelligence layers 1-7 ===
+    const simCtxStr = simRentalContext
+      ? `Rental: ${simRentalContext.title}\nRenter: ${simRentalContext.renterName}\nDates: ${simRentalContext.startDate || 'not set'} to ${simRentalContext.endDate || 'not set'}\nRenter pays: \u00a3${simRentalContext.renterPrice || '?'}\nItems: ${simRentalContext.items}\nLocation: ${simRentalContext.location || 'N/A'}`
+      : undefined;
     const pipelineResult = await this.pipelineService.process({
       message: userText,
       account: (account || 'dbcinema') as 'dbcinema' | 'leo',
       conversationHistory,
       isSimulation: true,
+      simulationRentalContext: simCtxStr,
     });
 
     // POST-PIPELINE: Validation + Quality Scoring + Repair
@@ -1912,14 +2090,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private async handleSimulatedConversation(msg: any) {
     const userText = msg.text;
     const account = this.simulationMode.account;
+    const rentalCtx = this.simulationMode.rentalContext;
 
     try {
-      const result = await this.processRenterConversation(userText, account, this.simConversationHistory);
+      const result = await this.processRenterConversation(userText, account, this.simConversationHistory, rentalCtx);
       if (!result) return;
 
+      const ctxLabel = rentalCtx ? `${rentalCtx.renterName}` : 'free';
       await this.bot.sendMessage(
         msg.chat.id,
-        `[SIM:${account}] ${result.replyText}${result.qualityInfo}`,
+        `[SIM:${account}/${ctxLabel}] ${result.replyText}${result.qualityInfo}`,
       );
     } catch (error) {
       this.logger.error(`Simulation error: ${error.message}`);
@@ -2156,7 +2336,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/quote <postcode> <items> - Delivery quote\n' +
       '/market - Market insight report\n\n' +
       '*Simulation*\n' +
-      '/simulate <dbcinema|leo> - Enter sim mode\n' +
+      '/simulate - Simulate renter conversation\n' +
       '/endsim - Exit sim mode\n\n' +
       '*Improvement*\n' +
       '/improve - Enter improvement mode (each message becomes a rule)\n' +
@@ -2895,29 +3075,108 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async handleSimulate(msg: any, match: any) {
+    private async handleSimulate(msg: any, match: any) {
     if (!this.isOwner(msg.chat.id)) {
       await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
       return;
     }
 
-    const account = match[1] as 'dbcinema' | 'leo';
-    this.simulationMode = { active: true, account };
-    this.simConversationHistory = []; // Reset history for new sim session
+    // If account already provided via /simulate dbcinema|leo, skip account selection
+    if (match && match[1]) {
+      const account = match[1] as 'dbcinema' | 'leo';
+      await this.showSimulationScenarios(msg.chat.id, account);
+      return;
+    }
 
-    const persona = account === 'dbcinema' ? 'DB Cinema Rentals (Daniel)' : 'Leo Adams (Leo)';
+    // Show account selection buttons
     await this.bot.sendMessage(
       msg.chat.id,
-      `🎭 *Simulation Mode Active*\n\n` +
-      `├ 👤 Account: ${persona}\n` +
-      `├ Messages treated as renter\n` +
-      `└ Memory storage: OFF\n\n` +
-      `Use /endsim to exit.`,
-      { parse_mode: 'Markdown' },
+      '\ud83c\udfad *Select Account for Simulation*',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '\ud83c\udfa5 DB Cinema (Daniel)', callback_data: 'sim_account:dbcinema' },
+              { text: '\ud83d\ude0e Leo Adams (Leo)', callback_data: 'sim_account:leo' },
+            ],
+          ],
+        },
+      },
     );
   }
 
-  private async handleEndSim(msg: any) {
+  /**
+   * Show pre-filled rental scenarios from real DB data for simulation.
+   */
+  private async showSimulationScenarios(chatId: string | number, account: 'dbcinema' | 'leo') {
+    try {
+      // Fetch recent rentals with first renter message
+      const rentals = await this.prisma.$queryRaw<any[]>`
+        SELECT r.id, r.title, r.renter_info, r.start_date::text, r.end_date::text,
+          r.rental_price, r.renter_price, r.account, r.listing_location, r.parsed_items,
+          (SELECT c.content FROM conversation c
+           WHERE c.chat_id = 'rental:' || r.id::text AND c.role = 'user'
+           ORDER BY c.created_at ASC LIMIT 1) as first_msg
+        FROM rental r
+        WHERE r.account = ${account}
+          AND r.renter_info IS NOT NULL
+          AND r.status IN ('accepted', 'requested', 'pending')
+        ORDER BY r.created_at DESC
+        LIMIT 8
+      `;
+
+      const persona = account === 'dbcinema' ? 'DB Cinema (Daniel)' : 'Leo Adams (Leo)';
+      const buttons: any[][] = [];
+
+      for (const r of rentals) {
+        const items = this.parseSimItems(r.parsed_items);
+        const itemShort = items.length > 0 ? items.slice(0, 2).join(', ') : r.title.substring(0, 30);
+        const dateStr = r.start_date ? ` ${new Date(r.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : '';
+        const priceStr = r.renter_price ? ` \u00a3${r.renter_price}` : '';
+        const label = `${r.renter_info?.trim() || '?'} \u2022 ${itemShort}${dateStr}${priceStr}`;
+
+        buttons.push([{
+          text: label.substring(0, 60),
+          callback_data: `sim_rental:${account}:${r.id.substring(0, 8)}`,
+        }]);
+      }
+
+      // Add "Free chat" option
+      buttons.push([{
+        text: '\u270d\ufe0f Free chat (no rental context)',
+        callback_data: `sim_rental:${account}:free`,
+      }]);
+
+      // Store rental data temporarily for callback lookup
+      (this as any)._simRentalCache = rentals;
+
+      await this.bot.sendMessage(
+        chatId,
+        `\ud83c\udfad *Simulation: ${persona}*\nSelect a rental scenario or free chat:`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: buttons },
+        },
+      );
+    } catch (err) {
+      this.logger.error(`Failed to load simulation scenarios: ${err.message}`);
+      this.simulationMode = { active: true, account };
+      this.simConversationHistory = [];
+      await this.bot.sendMessage(chatId, `\ud83c\udfad Simulation active (${account}). Scenario load failed, using free chat. /endsim to exit.`);
+    }
+  }
+
+  private parseSimItems(parsed: any): string[] {
+    if (!parsed) return [];
+    try {
+      const arr = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+      if (!Array.isArray(arr)) return [];
+      return arr.map((i: any) => i.item || i.name || '').filter(Boolean);
+    } catch { return []; }
+  }
+
+    private async handleEndSim(msg: any) {
     if (!this.isOwner(msg.chat.id)) {
       await this.bot.sendMessage(msg.chat.id, 'Unauthorized.');
       return;
@@ -2928,12 +3187,66 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    this.simulationMode = { active: false, account: null };
-    this.simConversationHistory = []; // Clear sim history
-    await this.bot.sendMessage(msg.chat.id, 'Simulation mode ended. Back to normal.');
-  }
+    const account = this.simulationMode.account;
+    const history = [...this.simConversationHistory];
+    const rentalCtx = this.simulationMode.rentalContext;
 
-  // --- Improvement mode handlers ---
+    this.simulationMode = { active: false, account: null };
+    this.simConversationHistory = [];
+
+    // Self-assessment if there was a conversation
+    if (history.length >= 2) {
+      await this.bot.sendMessage(msg.chat.id, '\u23f3 Running self-assessment...');
+
+      try {
+        const transcript = history.map(h =>
+          `${h.role === 'user' ? 'RENTER' : 'BOT'}: ${h.content}`
+        ).join('\n');
+
+        const scenarioInfo = rentalCtx
+          ? `Rental: ${rentalCtx.title}\nRenter: ${rentalCtx.renterName}\nDates: ${rentalCtx.startDate || '?'} to ${rentalCtx.endDate || '?'}\nPrice: \u00a3${rentalCtx.renterPrice || '?'}\nItems: ${rentalCtx.items}\nLocation: ${rentalCtx.location || 'N/A'}`
+          : 'Free chat (no rental context)';
+
+        const assessPrompt = `You are a quality assessor for a rental equipment business chatbot. Review this simulation conversation and give a brief, honest assessment.
+
+Account: ${account}
+${scenarioInfo}
+
+TRANSCRIPT:
+${transcript}
+
+Score each area 1-5 and give specific feedback:
+1. TONE & VOICE - Does it sound like a real person (not a bot)?
+2. ACCURACY - Correct prices, availability, compatibility info?
+3. HELPFULNESS - Did it actually answer the renter\'s question?
+4. RULE COMPLIANCE - Stock secrecy, address handling, no markdown?
+5. CONCISENESS - Short and direct, not over-explaining?
+
+Then give an OVERALL score /10 and 2-3 specific improvements.
+Keep the whole assessment under 300 words.`;
+
+        const assessment = await this.aiService.processRoutine(assessPrompt, {
+          rules: '',
+          memories: '',
+          conversationHistory: [],
+          rentalContext: '',
+          additionalContext: 'You are assessing a simulation conversation. Be honest and specific.',
+          maxTokens: 600,
+        });
+
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `\ud83c\udfad *Simulation Ended*\n\n\ud83d\udcca *Self-Assessment:*\n${assessment.content}`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (err) {
+        this.logger.warn(`Self-assessment failed: ${err.message}`);
+        await this.bot.sendMessage(msg.chat.id, `\ud83c\udfad Simulation ended. (Assessment failed: ${err.message})`);
+      }
+    } else {
+      await this.bot.sendMessage(msg.chat.id, '\ud83c\udfad Simulation ended.');
+    }
+  }
 
   private async handleImprove(msg: any) {
     const chatKey = String(msg.chat.id);
@@ -3765,7 +4078,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           CASE
             WHEN action_taken LIKE '%Sonnet%' THEN 'Sonnet'
             WHEN action_taken LIKE '%DSPy%' THEN 'DSPy'
-            ELSE 'Haiku'
+            WHEN action_taken LIKE '%gpt%' OR action_taken LIKE '%GPT%' OR action_taken LIKE '%openai%' THEN 'GPT-4.1m'
+            WHEN action_taken LIKE '%Haiku%' OR action_taken LIKE '%haiku%' THEN 'Haiku'
+            ELSE 'Other'
           END AS model,
           COUNT(*)::text AS cnt
         FROM ai_decision

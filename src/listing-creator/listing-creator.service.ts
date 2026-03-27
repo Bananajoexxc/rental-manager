@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { execSync } from 'child_process';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompetitorIntelService } from '../competitor-intel/competitor-intel.service';
@@ -1155,4 +1156,294 @@ export class ListingCreatorService {
     this.logger.log(`Reset ${result.count} listings to pending image status`);
     return result.count;
   }
+
+
+
+
+  // ────────────── PORT TO LEO: GAP DETECTION ──────────────
+
+  /**
+   * Return DB Cinema listings that Leo doesn't have, with their Hygglo images.
+   */
+  async getPortableGaps(): Promise<{ gaps: Array<{ title: string; slug: string; price: number; image: string }> }> {
+    const dbCinemaRentals = await this.prisma.$queryRaw<Array<{
+      title: string; listing_url: string; photos_urls: string[]; rental_price: number;
+    }>>`
+      SELECT DISTINCT ON (title) title, listing_url, photos_urls, rental_price
+      FROM rental
+      WHERE account = 'dbcinema'
+        AND status NOT IN ('cancelled', 'obsolete', 'consolidated')
+        AND listing_url IS NOT NULL
+      ORDER BY title, created_at DESC
+    `;
+
+    const leoRentals = await this.prisma.$queryRaw<Array<{ title: string }>>`
+      SELECT DISTINCT title FROM rental
+      WHERE account = 'leo'
+        AND status NOT IN ('cancelled', 'obsolete', 'consolidated')
+        AND listing_url IS NOT NULL
+    `;
+
+    const existingLeoMarketing = await this.prisma.marketing_listing.findMany({
+      where: { account: 'leo' },
+      select: { title: true },
+    });
+
+    const leoTitlesNorm = new Set([
+      ...leoRentals.map(r => this.normalizeForComparison(r.title)),
+      ...existingLeoMarketing.map(r => this.normalizeForComparison(r.title)),
+    ]);
+
+    const gaps: Array<{ title: string; slug: string; price: number; image: string }> = [];
+
+    for (const db of dbCinemaRentals) {
+      const dbNorm = this.normalizeForComparison(db.title);
+      let found = false;
+
+      for (const leoNorm of leoTitlesNorm) {
+        const dbWords = new Set(dbNorm.split(/\s+/).filter((w: string) => w.length > 2));
+        const leoWords = new Set(leoNorm.split(/\s+/).filter((w: string) => w.length > 2));
+        if (dbWords.size > 0 && leoWords.size > 0) {
+          let overlap = 0;
+          for (const w of dbWords) { if (leoWords.has(w)) overlap++; }
+          if (overlap / Math.max(dbWords.size, leoWords.size) > 0.5) {
+            found = true;
+            break;
+          }
+        }
+      }
+
+      if (!found) {
+        const slug = db.listing_url ? db.listing_url.replace(/\/$/, '').split('/').pop() || '' : '';
+        const image = db.photos_urls?.[0] || '';
+        gaps.push({
+          title: db.title,
+          slug,
+          price: Number(db.rental_price) || 0,
+          image,
+        });
+      }
+    }
+
+    return { gaps };
+  }
+
+  // ────────────── PORT TO LEO: EXECUTE SINGLE ──────────────
+
+  async portSingleListing(input: {
+    slug: string; title: string; image?: string; price?: number;
+  }): Promise<{ success: boolean; listingId?: string; composedImage?: string; description?: string; title?: string; dailyPrice?: number; price3days?: number; price7days?: number; estimatedValue?: number; error?: string }> {
+    const fs = require('fs');
+    const pathMod = require('path');
+    const { execSync } = require('child_process');
+
+    try {
+      const itemName = this.extractCoreItemName(input.title);
+      const listing = await this.prisma.marketing_listing.create({
+        data: {
+          title: input.title,
+          items: [{ item: itemName, qty: 1 }],
+          account: 'leo',
+          source: 'port_from_dbcinema',
+          source_competitor: 'dbcinema',
+          price_1day: input.price && input.price > 0 ? input.price : null,  // Will be updated with API prices below
+          image_status: 'pending',
+          upload_status: 'draft',
+        },
+      });
+      const listingId = listing.id;
+      const imgDir = pathMod.join(process.cwd(), 'listing-creator-images', listingId);
+      fs.mkdirSync(pathMod.join(imgDir, 'composed'), { recursive: true });
+
+      // Step 1: Download the DB Cinema listing image
+      let composedPath: string | null = null;
+      if (input.image) {
+        const srcPath = pathMod.join(imgDir, 'source.jpg');
+        const outPath = pathMod.join(imgDir, 'composed', 'listing.jpg');
+
+        const response = await fetch(input.image);
+        if (response.ok) {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          fs.writeFileSync(srcPath, buffer);
+          this.logger.log('[port] Downloaded image for ' + input.title.substring(0, 50));
+
+          // Step 2: Background swap — cut out ALL foreground, composite onto Leo gradient
+          try {
+            execSync(
+              'python3 ' + pathMod.join(process.cwd(), 'bg_swap.py') + ' "' + srcPath + '" "' + outPath + '"',
+              { timeout: 180000, encoding: 'utf-8' },
+            );
+            if (fs.existsSync(outPath)) {
+              composedPath = outPath;
+              this.logger.log('[port] Background swapped to Leo gradient');
+            }
+          } catch (bgErr: any) {
+            this.logger.warn('[port] bg_swap failed: ' + (bgErr.message || '').substring(0, 200));
+          }
+        }
+      }
+
+      // Step 3: Copy DB Cinema description, swap footer to Leo's
+      let leoDesc: string | null = null;
+      let price1day = input.price && input.price > 0 ? input.price : null;
+      let price3day: number | null = null;
+      let price7day: number | null = null;
+      if (input.slug) {
+        try {
+          const apiResponse = await fetch(
+            'https://api.hygglo.com/api/v2/product-listings/' + input.slug,
+            { headers: { Country: 'GB', Accept: 'application/json', 'User-Client': 'Hygglo-web' } },
+          );
+          if (apiResponse.ok) {
+            const data = await apiResponse.json();
+            const prod = data.product || data;
+            const dbDesc: string = prod.description || '';
+            if (dbDesc) {
+              leoDesc = this.convertDescriptionToLeo(dbDesc);
+            }
+            // Extract multi-day prices from API
+            if (Array.isArray(prod.prices)) {
+              for (const p of prod.prices) {
+                if (p.days === 1) price1day = p.price;
+                if (p.days === 3) price3day = p.price;
+                if (p.days === 7) price7day = p.price;
+              }
+            }
+          }
+        } catch (descErr: any) {
+          this.logger.warn('[port] Failed to fetch description: ' + descErr.message);
+        }
+      }
+
+      // Step 4: Update listing
+      await this.prisma.marketing_listing.update({
+        where: { id: listingId },
+        data: {
+          description: leoDesc || undefined,
+          image_status: composedPath ? 'ready' : 'pending',
+          composed_image: composedPath || undefined,
+          price_1day: price1day || undefined,
+          price_3day: price3day || undefined,
+          price_7day: price7day || undefined,
+        },
+      });
+
+      await this.loadMarketingItemsForBotGuard().catch(() => {});
+      // Fetch pricing info from the created listing for edit panel
+      const createdListing = await this.prisma.marketing_listing.findUnique({ where: { id: listingId } });
+      return {
+        success: true,
+        listingId,
+        composedImage: composedPath || undefined,
+        description: leoDesc || undefined,
+        title: input.title,
+        dailyPrice: createdListing?.price_1day ? Number(createdListing.price_1day) : (input.price || undefined),
+        price3days: createdListing?.price_3day ? Number(createdListing.price_3day) : undefined,
+        price7days: createdListing?.price_7day ? Number(createdListing.price_7day) : undefined,
+        estimatedValue: createdListing?.estimated_value ? Number(createdListing.estimated_value) : undefined,
+      };
+    } catch (e: any) {
+      this.logger.error('[port] Failed: ' + e.message);
+      return { success: false, error: e.message };
+    }
+  }
+
+  private normalizeForComparison(title: string): string {
+    return title
+      .toLowerCase()
+      .replace(/\b(rental|set|kit|hire|london|professional|cinema|like|and more)\b/g, '')
+      .replace(/[|\u2022\-\u2013\u2014"()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractCoreItemName(title: string): string {
+    let name = title.split(/\s*[|]\s*/)[0].trim();
+    name = name.replace(/\b(rental|set|kit|hire)\b/gi, '').trim();
+    if (name.length > 60) name = name.substring(0, 60).trim();
+    return name;
+  }
+
+  private async generateLeoDescriptionViaCLI(title: string, dbDescription: string): Promise<string | null> {
+    const itemName = this.extractCoreItemName(title);
+    const prompt = `You are writing a Hygglo rental listing description for Leo Adams' account.
+
+Here is the DB Cinema listing for the same item:
+TITLE: ${title}
+DESCRIPTION: ${dbDescription.substring(0, 2000)}
+
+Convert this to Leo's description format. Follow this EXACT structure:
+
+1. Start with: Included in this ${itemName} Rental Set
+   Then list items grouped by category using bullet format
+
+2. Then: About the ${itemName}
+   Write 2-3 sentences describing the item. Enthusiastic but factual.
+
+3. Then: Perfect for:
+   List 5-6 use cases
+
+4. Then: ${itemName} highlights:
+   List 5-7 key features as bullet points
+
+5. Then add this EXACT footer:
+
+First time renting? Get 20 pounds off with code: dani-2dbf0
+
+About us
+Operation times: 9am to 12pm and 5pm to 9pm
+Located near Pall Mall East, 3 min from Charing Cross
+Delivery available! Please enquire for rates
+
+DISCOUNTS
+7 days for the price of 5
+1 month for the price of 2.5 weeks
+
+ADD-ONS
+We also offer cameras, lenses, gimbals, drones, lights, LEDs, wireless mics, monitors, tripods, sliders, smoke machines, filters, and more. Ask us!
+
+RULES:
+- No specific prices
+- No competitor mentions
+- Friendly, professional tone
+- Only output the description text`;
+
+    try {
+      const { execSync } = require('child_process');
+      const result = execSync('claude --print --model haiku', {
+        input: prompt,
+        timeout: 90000,
+        encoding: 'utf-8',
+        maxBuffer: 1024 * 1024,
+      });
+      return result.trim() || null;
+    } catch (e: any) {
+      this.logger.error('claude CLI failed: ' + e.message);
+      return null;
+    }
+  }
+
+
+  /**
+   * Convert a DB Cinema description to Leo's format.
+   * Copies the item list and product info exactly, swaps only the footer.
+   */
+  private convertDescriptionToLeo(dbDesc: string): string {
+    let desc = dbDesc;
+
+    // Location swaps
+    desc = desc.replace(/Trafalgar Square/gi, 'Pall Mall East');
+    desc = desc.replace(/Tottenham Court Road/gi, 'Charing Cross');
+    desc = desc.replace(/near Statue of James II[^\n]*/gi, 'near Pall Mall East, 3 min from Charing Cross');
+
+    // Operation times: Leo uses 9am-12pm and 5pm-9pm
+    desc = desc.replace(/9am[\u2013\-]12pm and 7pm[\u2013\-]9pm/g, '9am\u201312pm and 5pm\u20139pm');
+
+    // Account name
+    desc = desc.replace(/DB Cinema Rentals?/gi, 'Leo Adams');
+    desc = desc.replace(/DB Cinema/gi, 'Leo Adams');
+
+    return desc;
+  }
+
 }

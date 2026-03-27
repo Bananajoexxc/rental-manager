@@ -112,5 +112,5 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   'cron_claude.tasks': 'message_audit',
   'cron_claude.quiet_hours_start': '2',
   'cron_claude.quiet_hours_end': '7',
-  'cron_claude.model': 'claude-sonnet-4-5-20250929',
+  'cron_claude.model': 'claude-sonnet-4-6-20250514',
 };

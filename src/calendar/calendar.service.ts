@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames, isAccessoryItem } from '../utils/item-matcher';
+import { MASTER_INVENTORY, FUNCTIONAL_EQUIVALENTS, findBestMatch, getInventoryItemNames, isAccessoryItem, extractListingQuantity } from '../utils/item-matcher';
 import { PRICING_CATALOG, getOneDayPrice } from '../data/pricing-catalog';
 import { DELIVERY_SPECS } from '../data/delivery-specs';
 import { DiagnosticService } from '../monitoring/diagnostic.service';
@@ -194,39 +194,140 @@ export class CalendarService implements OnModuleInit {
     return bookings.length === 1 ? bookings[0] : null;
   }
 
-  async checkAvailability(itemName: string, startDate: Date, endDate: Date): Promise<{ available: boolean; booked: number; maxQuantity: number; matchedItem: string | null }> {
+  async checkAvailability(itemName: string, startDate: Date, endDate: Date, excludeRentalId?: string): Promise<{ available: boolean; booked: number; confirmedBooked: number; pendingBooked: number; maxQuantity: number; matchedItem: string | null; availableFrom?: string; unavailableAfter?: string }> {
     const matched = findBestMatch(itemName, getInventoryItemNames());
     const maxQuantity = matched ? (MASTER_INVENTORY[matched] || 1) : 0;
 
     if (!matched) {
-      return { available: false, booked: 0, maxQuantity: 0, matchedItem: null };
+      return { available: false, booked: 0, confirmedBooked: 0, pendingBooked: 0, maxQuantity: 0, matchedItem: null };
     }
 
     // 1-hour buffer: extend search range by 1 hour on each side
     const bufferStart = new Date(startDate.getTime() - 60 * 60 * 1000);
     const bufferEnd = new Date(endDate.getTime() + 60 * 60 * 1000);
 
-    // Use return_date when available (actual physical return may differ from rental end_date)
+    // Only count CONFIRMED bookings toward availability.
+    // pending_review bookings are unaccepted Hygglo requests — NOT reservations.
+    // Counting them causes false "unavailable" errors (e.g. shoulder rig blocked by unaccepted requests).
+    // Optionally exclude a specific rental's bookings to avoid self-blocking.
+    const whereClause: any = {
+      item_name: matched,
+      status: 'confirmed',
+      start_date: { lt: bufferEnd },
+      OR: [
+        { return_date: { gt: bufferStart } },
+        { return_date: null, end_date: { gt: bufferStart } },
+      ],
+    };
+    if (excludeRentalId) {
+      whereClause.rental_id = { not: excludeRentalId };
+    }
+
     const overlapping = await this.prisma.booking.findMany({
-      where: {
-        item_name: matched,
-        status: 'confirmed',
-        start_date: { lt: bufferEnd },
-        OR: [
-          { return_date: { gt: bufferStart } },
-          { return_date: null, end_date: { gt: bufferStart } },
-        ],
-      },
+      where: whereClause,
+    });
+
+    // Separate query for pending_review bookings (not counted toward availability, but reported)
+    const pendingWhereClause: any = {
+      item_name: matched,
+      status: 'pending_review',
+      start_date: { lt: bufferEnd },
+      OR: [
+        { return_date: { gt: bufferStart } },
+        { return_date: null, end_date: { gt: bufferStart } },
+      ],
+    };
+    if (excludeRentalId) {
+      pendingWhereClause.rental_id = { not: excludeRentalId };
+    }
+    const pendingOverlapping = await this.prisma.booking.findMany({
+      where: pendingWhereClause,
     });
 
     const bookedQuantity = overlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
+    const confirmedBooked = overlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
+    const pendingBooked = pendingOverlapping.reduce((sum, b) => sum + (b.quantity || 1), 0);
+
+    // Compute hourly availability windows when fully booked
+    let availableFrom: string | undefined;
+    let unavailableAfter: string | undefined;
+
+    if (bookedQuantity >= maxQuantity && overlapping.length > 0) {
+      const startDay = startDate.toISOString().slice(0, 10);
+      const endDay = endDate.toISOString().slice(0, 10);
+
+      // Check if any overlapping booking returns on the requested start date
+      // → item frees up at return_time + 1hr buffer
+      const returningOnStart = overlapping
+        .filter(b => {
+          const retDate = b.return_date || b.end_date;
+          return retDate && new Date(retDate).toISOString().slice(0, 10) === startDay && b.return_time;
+        })
+        .map(b => b.return_time as string);
+
+      if (returningOnStart.length > 0) {
+        // For multi-quantity items, use earliest return (first unit freed)
+        returningOnStart.sort();
+        const earliest = returningOnStart[0];
+        const [h, m] = earliest.split(':').map(Number);
+        const bufferedHour = h + 1;
+        if (bufferedHour <= 22) {
+          availableFrom = `${String(bufferedHour).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+        }
+      }
+
+      // Check if any overlapping booking picks up on the requested end date
+      // → item must be returned before pickup_time
+      const pickingUpOnEnd = overlapping
+        .filter(b => {
+          const pickDate = b.pickup_date || b.start_date;
+          return pickDate && new Date(pickDate).toISOString().slice(0, 10) === endDay && b.pickup_time;
+        })
+        .map(b => b.pickup_time as string);
+
+      if (pickingUpOnEnd.length > 0) {
+        // Use earliest pickup (most restrictive)
+        pickingUpOnEnd.sort();
+        unavailableAfter = pickingUpOnEnd[0];
+      }
+    }
 
     return {
       available: bookedQuantity < maxQuantity,
       booked: bookedQuantity,
+      confirmedBooked,
+      pendingBooked,
       maxQuantity,
       matchedItem: matched,
+      availableFrom,
+      unavailableAfter,
     };
+  }
+
+  /**
+   * Find compatible alternatives that ARE available for the given dates.
+   * Uses FUNCTIONAL_EQUIVALENTS (same brand/mount/purpose — never cross-ecosystem).
+   */
+  async findAvailableAlternatives(
+    itemName: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<{ name: string; available: number; maxQuantity: number }[]> {
+    const equivalents = FUNCTIONAL_EQUIVALENTS[itemName];
+    if (!equivalents || equivalents.length === 0) return [];
+
+    const results: { name: string; available: number; maxQuantity: number }[] = [];
+    for (const alt of equivalents) {
+      const check = await this.checkAvailability(alt, startDate, endDate);
+      if (check.available && check.matchedItem) {
+        results.push({
+          name: check.matchedItem,
+          available: check.maxQuantity - check.booked,
+          maxQuantity: check.maxQuantity,
+        });
+      }
+    }
+    return results;
   }
 
   async getDaySchedule(date: Date) {
@@ -236,9 +337,10 @@ export class CalendarService implements OnModuleInit {
     dayEnd.setHours(23, 59, 59, 999);
 
     // Wider query: catch bookings by standard dates OR actual pickup/return dates
+    // Include pending_review so the AI sees the full picture of today's activity
     const bookings = await this.prisma.booking.findMany({
       where: {
-        status: 'confirmed',
+        status: { in: ['confirmed', 'pending_review'] },
         OR: [
           { start_date: { lte: dayEnd }, end_date: { gte: dayStart } },
           { return_date: { gte: dayStart, lte: dayEnd } },
@@ -304,10 +406,11 @@ export class CalendarService implements OnModuleInit {
     const futureDate = new Date(now);
     futureDate.setDate(futureDate.getDate() + days);
 
-    // Include bookings where actual return (return_date) extends past end_date
+    // Include BOTH confirmed AND pending_review bookings — pending ones are real demand
+    // that the AI must know about for accurate availability answers
     const bookings = await this.prisma.booking.findMany({
       where: {
-        status: 'confirmed',
+        status: { in: ['confirmed', 'pending_review'] },
         start_date: { lte: futureDate },
         OR: [
           { return_date: { gte: now } },
@@ -324,14 +427,15 @@ export class CalendarService implements OnModuleInit {
     const lines = bookings.map((b) => {
       const start = (b.pickup_date || b.start_date).toISOString().split('T')[0];
       const end = (b.return_date || b.end_date).toISOString().split('T')[0];
+      const statusTag = b.status === 'pending_review' ? ' PENDING' : ' CONFIRMED';
       const times = [
         b.pickup_time ? `pickup ${b.pickup_time}` : null,
         b.return_time ? `return ${b.return_time} on ${end}` : null,
       ].filter(Boolean).join(', ');
-      return `- ${b.item_name} x${b.quantity}: ${start} to ${end} (${b.renter_name}) [${b.account}]${times ? ` [${times}]` : ''}`;
+      return `- ${b.item_name} x${b.quantity}: ${start} to ${end} (${b.renter_name}) [${b.account}] [${statusTag}]${times ? ` [${times}]` : ''}`;
     });
 
-    return `UPCOMING BOOKINGS (next ${days} days):\n${lines.join('\n')}`;
+    return `UPCOMING BOOKINGS (next ${days} days, includes pending):\n${lines.join('\n')}`;
   }
 
   /**
@@ -846,6 +950,7 @@ export class CalendarService implements OnModuleInit {
       rental_price?: number | null;
       price_per_day?: number | null;
       status?: string | null;
+      order_step?: string | null;
     },
     extractedItems: string[],
     options?: { forceStatus?: 'pending_review' | 'confirmed' },
@@ -855,9 +960,9 @@ export class CalendarService implements OnModuleInit {
       return [];
     }
 
-    // Deduplicate and match items to inventory
+    // Match items to inventory, counting duplicates as quantity
     const matchedItems: { name: string; quantity: number }[] = [];
-    const seen = new Set<string>();
+    const qtyMap = new Map<string, number>();
 
     for (const rawItem of extractedItems) {
       const matched = findBestMatch(rawItem, getInventoryItemNames());
@@ -865,9 +970,13 @@ export class CalendarService implements OnModuleInit {
         this.logger.warn(`Skipping unrecognized item "${rawItem}" — not in MASTER_INVENTORY`);
         continue;
       }
-      if (seen.has(matched)) continue;
-      seen.add(matched);
-      matchedItems.push({ name: matched, quantity: 1 });
+      qtyMap.set(matched, (qtyMap.get(matched) || 0) + 1);
+    }
+
+    // Cap quantity at MASTER_INVENTORY max
+    for (const [name, count] of qtyMap) {
+      const maxQty = MASTER_INVENTORY[name] || 1;
+      matchedItems.push({ name, quantity: Math.min(count, maxQty) });
     }
 
     // Filter items that are irrelevant to the listing title (e.g., stock photo misidentification)
@@ -935,7 +1044,7 @@ export class CalendarService implements OnModuleInit {
     // Load ALL existing bookings for this rental upfront (single query, prevents race condition).
     // Per-item queries inside the loop are vulnerable to concurrent creation by parallel scan paths.
     const existingBookings = await this.prisma.booking.findMany({
-      where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review'] } },
+      where: { rental_id: rental.id, status: { in: ['confirmed', 'pending_review', 'completed'] } },
       select: { item_name: true },
     });
     const existingItemNames = new Set(existingBookings.map(b => b.item_name));
@@ -971,7 +1080,7 @@ export class CalendarService implements OnModuleInit {
       if (options?.forceStatus) {
         bookingStatus = !availability.available ? 'pending_review' : options.forceStatus;
       } else {
-        const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+        const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status) && (!rental.order_step || ['APPROVED', 'DELIVERED', 'RETURNED'].includes(rental.order_step));
         bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
       }
 
@@ -1094,7 +1203,7 @@ export class CalendarService implements OnModuleInit {
     const accepted = ['upcoming', 'ongoing', 'completed'];
     const wasAccepted = oldRentalStatus && accepted.includes(oldRentalStatus);
     const isNowAccepted = accepted.includes(newRentalStatus);
-    const isCancelled = ['cancelled', 'obsolete'].includes(newRentalStatus);
+    const isCancelled = ['cancelled', 'obsolete', 'consolidated'].includes(newRentalStatus);
 
     let updated = 0;
 
@@ -1276,7 +1385,7 @@ export class CalendarService implements OnModuleInit {
 
         // Create missing booking
         const availability = await this.checkAvailability(matched, rental.start_date, rental.end_date);
-        const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+        const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status) && (!rental.order_step || ['APPROVED', 'DELIVERED', 'RETURNED'].includes(rental.order_step));
         const bookingStatus = (!rentalAccepted || !availability.available) ? 'pending_review' : 'confirmed';
 
         // Revenue: split total across UNIQUE non-accessory inventory items
@@ -1295,10 +1404,11 @@ export class CalendarService implements OnModuleInit {
           ? Math.round((totalRevenue / mainParsedItems.length) * 100) / 100
           : 0;
 
+        const itemQty = Math.min(parsed.qty || 1, MASTER_INVENTORY[matched] || 1);
         await this.prisma.booking.create({
           data: {
             item_name: matched,
-            quantity: 1,
+            quantity: itemQty,
             start_date: rental.start_date,
             end_date: rental.end_date,
             renter_name: rental.renter_info || 'Unknown',
@@ -1333,6 +1443,110 @@ export class CalendarService implements OnModuleInit {
       itemsSkipped,
       details,
     };
+  }
+
+  /**
+   * Sync bookings with current extracted items for a specific rental.
+   * Called whenever extracted items change (added, removed, or swapped).
+   *
+   * Actions:
+   * 1. Update booking item_name when the extracted item resolved to a different inventory name
+   * 2. Remove pending_review bookings for items no longer in extracted items
+   * 3. Create bookings for new items that don't have bookings yet
+   */
+  async syncBookingsWithExtractedItems(rentalId: string): Promise<{ updated: number; created: number; removed: number }> {
+    const rental = await this.prisma.rental.findUnique({ where: { id: rentalId } });
+    if (!rental || !rental.start_date || !rental.end_date) {
+      return { updated: 0, created: 0, removed: 0 };
+    }
+
+    const inventoryNames = getInventoryItemNames();
+
+    // Get current extracted items, resolve to inventory names
+    const extractedItems = await this.prisma.extracteditem.findMany({
+      where: { rental_id: rentalId },
+      select: { item_name: true },
+    });
+    const resolvedItems = new Set<string>();
+    for (const ei of extractedItems) {
+      const matched = findBestMatch(ei.item_name, inventoryNames);
+      if (matched) resolvedItems.add(matched);
+    }
+
+    // Get existing bookings
+    const bookings = await this.prisma.booking.findMany({
+      where: { rental_id: rentalId, status: { in: ['confirmed', 'pending_review'] } },
+    });
+
+    let updated = 0;
+    let removed = 0;
+    let created = 0;
+    const bookedItems = new Set<string>();
+
+    for (const booking of bookings) {
+      // Resolve booking item_name to inventory name
+      const matchedBookingItem = findBestMatch(booking.item_name, inventoryNames);
+
+      if (matchedBookingItem && resolvedItems.has(matchedBookingItem)) {
+        // Item is still part of the rental — update name if it doesn't match inventory
+        bookedItems.add(matchedBookingItem);
+        if (booking.item_name !== matchedBookingItem) {
+          await this.prisma.booking.update({
+            where: { id: booking.id },
+            data: { item_name: matchedBookingItem },
+          });
+          this.logger.log(`[BookingSync] Updated booking item_name: "${booking.item_name}" → "${matchedBookingItem}" (rental ${rentalId})`);
+          updated++;
+        }
+      } else if (!matchedBookingItem || !resolvedItems.has(matchedBookingItem)) {
+        // Item is no longer part of the rental
+        if (booking.status === 'pending_review') {
+          // Safe to remove unconfirmed bookings for items no longer in the rental
+          await this.prisma.booking.update({
+            where: { id: booking.id },
+            data: { status: 'cancelled' },
+          });
+          this.logger.log(`[BookingSync] Cancelled stale booking: "${booking.item_name}" no longer in extracted items (rental ${rentalId})`);
+          removed++;
+        } else if (matchedBookingItem) {
+          // Confirmed booking — keep it but mark it as matched
+          bookedItems.add(matchedBookingItem);
+        }
+      }
+    }
+
+    // Create bookings for new items that don't have bookings yet
+    const renterName = rental.renter_info || 'Unknown';
+    const account = rental.account || 'dbcinema';
+    for (const itemName of resolvedItems) {
+      if (bookedItems.has(itemName)) continue;
+      if (isAccessoryItem(itemName)) continue;
+
+      const rentalAccepted = rental.status && ['upcoming', 'ongoing', 'completed'].includes(rental.status);
+      const bookingStatus = rentalAccepted ? 'confirmed' : 'pending_review';
+
+      await this.prisma.booking.create({
+        data: {
+          item_name: itemName,
+          quantity: 1,
+          start_date: rental.start_date,
+          end_date: rental.end_date,
+          renter_name: renterName,
+          account,
+          rental_id: rentalId,
+          status: bookingStatus,
+          notes: JSON.stringify({ synced: true }),
+        },
+      });
+      this.logger.log(`[BookingSync] Created booking for "${itemName}" (rental ${rentalId})`);
+      created++;
+    }
+
+    if (updated > 0 || created > 0 || removed > 0) {
+      this.logger.log(`[BookingSync] Rental ${rentalId}: ${updated} updated, ${created} created, ${removed} removed`);
+    }
+
+    return { updated, created, removed };
   }
 
   /**
@@ -1657,6 +1871,7 @@ export class CalendarService implements OnModuleInit {
       'GIMBALS & SUPPORT': [],
       'DRONES & ACTION CAMS': [],
       'POWER': [],
+      'DJ & SPEAKERS': [],
       'ACCESSORIES': [],
     };
 
@@ -1692,6 +1907,8 @@ export class CalendarService implements OnModuleInit {
         categories['DRONES & ACTION CAMS'].push(entry);
       } else if (n.includes('v-mount') || n.includes('npf') || n.includes('battery') || n.includes('anker') || n.includes('power')) {
         categories['POWER'].push(entry);
+      } else if (n.includes('dj') || n.includes('pioneer') || n.includes('rx3') || n.includes('jbl') || n.includes('speaker') || n.includes('partybox')) {
+        categories['DJ & SPEAKERS'].push(entry);
       } else {
         categories['ACCESSORIES'].push(entry);
       }
@@ -1709,12 +1926,14 @@ export class CalendarService implements OnModuleInit {
       }
     }
 
-    // Fetch confirmed bookings for next 14 days
+    // Fetch confirmed AND pending_review bookings for next 14 days
+    // Both types consume inventory — showing only confirmed creates a misleading picture
+    // where the AI thinks items are free when they're actually reserved by pending requests.
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 14);
     const bookings = await this.prisma.booking.findMany({
       where: {
-        status: 'confirmed',
+        status: { in: ['confirmed', 'pending_review'] },
         end_date: { gte: new Date() },
         start_date: { lte: futureDate },
       },
@@ -1722,11 +1941,12 @@ export class CalendarService implements OnModuleInit {
     });
 
     if (bookings.length > 0) {
-      lines.push('\nCURRENTLY BOOKED:');
+      lines.push('\nCURRENTLY BOOKED (confirmed + pending):');
       for (const b of bookings) {
         const start = b.start_date.toISOString().split('T')[0];
         const end = b.end_date.toISOString().split('T')[0];
-        lines.push(`- ${b.item_name} ×${b.quantity}: ${start} to ${end} (${b.renter_name})`);
+        const statusTag = b.status === 'pending_review' ? ' [PENDING]' : '';
+        lines.push(`- ${b.item_name} ×${b.quantity}: ${start} to ${end} (${b.renter_name})${statusTag}`);
       }
     } else {
       lines.push('\nCURRENTLY BOOKED: None — all items available.');
@@ -1796,8 +2016,8 @@ export class CalendarService implements OnModuleInit {
       '8-15mm Fisheye Zoom': 'Sony 11mm f2.8 fisheye',
       'Canon 8-15mm f2.8 Fisheye': 'Sony 11mm f2.8 fisheye',
       // Cinema prime lens sets (we have anamorphic sets)
-      'DZO ARLES': 'Anamorphic Blazar Remus lens set or Anamorphic Great Joy lens set',
-      'DZO Vespid': 'Anamorphic Blazar Remus lens set or Anamorphic Great Joy lens set',
+      'DZO ARLES': 'Anamorphic Blazar Remus lens set',
+      'DZO Vespid': 'Anamorphic Blazar Remus lens set',
       // Aputure lighting (not in our stock — we have Nanlite)
       'Aputure 300D II': 'Nanlite Forza 300 (daylight only, not bi-color)',
       'Aputure Amaran 300c': 'Nanlite 500B (bi-color)',

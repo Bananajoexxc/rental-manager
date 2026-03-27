@@ -26,6 +26,10 @@ export const ITEM_SPECS: ItemSpec[] = [
     specs: 'Full-frame 24.2MP Exmor R CMOS, BIONZ X processor. 4K30p (with 1.2x crop) and 1080p120. 15-stop dynamic range, ISO 100-204800 (expandable). 693 phase-detect AF points + 425 contrast AF, Eye AF. 5-axis IBIS (5 stops). Dual SD card slots. 710 shots per charge (LCD). Best for: versatile photo/video hybrid — great all-rounder for events, doc, and content creation.',
   },
   {
+    item_name: 'Sony A7 V',
+    specs: '61.0MP full-frame Exmor R CMOS sensor. BIONZ XR processor with AI processing unit. ISO 50-204800. 4K 120fps (Super 35), 4K 60fps (full-frame). 10-bit 4:2:2 internal. 5-axis IBIS (8 stops). 759 phase-detect AF points, real-time recognition AF (human/animal/bird/insect/car/train/airplane). Dual card slots (CFexpress Type A + SD UHS-II). NP-FZ100 battery (~530 shots). Sony E-mount. 723g body only. USB-C 10Gbps, HDMI Type-A, 3.5mm mic/headphone. Wi-Fi 6E + Bluetooth 5.0. Best for: hybrid photo/video, the most advanced all-rounder in our inventory.',
+  },
+  {
     item_name: 'Sony A7 II',
     specs: 'Full-frame 24.3MP Exmor CMOS, BIONZ X. 1080p60 max video (no 4K without crop workaround). 5-axis IBIS (4.5 stops). 117 phase-detect AF + 25 contrast AF. ISO 100-25600. Single SD slot. Battery: NP-FW50 (350 shots — shorter life than newer models). Best for: budget photo with stabilization, light video work. Older AF system — not ideal for fast action or pro video.',
   },
@@ -223,7 +227,7 @@ export const ITEM_SPECS: ItemSpec[] = [
   },
   {
     item_name: 'Cinebloom filter mist',
-    specs: 'Moment Cinebloom 20% diffusion filter, 82mm thread. NanoBlack particulates fused between Japanese optical glass. Blooms highlights, softens skin/digital sharpness. 20% = moderate visible glow, especially with direct light sources. Thin frame, stackable with ND/VND. Best for: cinematic halation and organic softness in-camera. The 20% is noticeably dreamier than 10%.',
+    specs: 'Moment Cinebloom 20% diffusion filter, 82mm thread. NanoBlack particulates fused between Japanese optical glass. Blooms highlights, softens skin/digital sharpness. 20% = moderate visible glow, especially with direct light sources. Thin frame, stackable with ND/VND. COMPATIBILITY: Fits 82mm thread lenses directly (GM 24-70, GM 16-35, Canon 16-35). Fits 77mm thread lenses with included step-up ring (Canon 24-105, GM 70-200, Blazar Remus anamorphics). Does NOT fit 67mm (GM 90mm), 55mm (Sony 28-70mm), or bulbous front (11mm fisheye). Best for: cinematic halation and organic softness in-camera. The 20% is noticeably dreamier than 10%.',
   },
 
   // ──────────────────────────────────────────
@@ -335,7 +339,7 @@ export const ITEM_SPECS: ItemSpec[] = [
   },
   {
     item_name: 'ND filter',
-    specs: 'Variable ND 82mm (ND2-400, 1-8.6 stops). Rotate front ring to dial density. Multi-coated optical glass, minimal color cast. Eliminates need for multiple fixed NDs. Cross-pattern artifacts near max density — stay below ND256 for clean results. Best for: controlling exposure in bright conditions, enabling wide apertures outdoors. Essential for cinematic shallow DOF in daylight.',
+    specs: 'Variable ND 82mm (ND2-400, 1-8.6 stops). Rotate front ring to dial density. Multi-coated optical glass, minimal color cast. Eliminates need for multiple fixed NDs. Cross-pattern artifacts near max density — stay below ND256 for clean results. COMPATIBILITY: Fits 82mm thread lenses directly (GM 24-70, GM 16-35, Canon 16-35). Fits 77mm thread lenses with included step-up ring (Canon 24-105, GM 70-200, Blazar Remus anamorphics). Does NOT fit 67mm (GM 90mm), 55mm (Sony 28-70mm), or bulbous front (11mm fisheye). Best for: controlling exposure in bright conditions, enabling wide apertures outdoors. Essential for cinematic shallow DOF in daylight.',
   },
   {
     item_name: '256GB card',

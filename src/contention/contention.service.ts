@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { HyggloService } from '../hygglo/hygglo.service';
-import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames } from '../utils/item-matcher';
+import { MASTER_INVENTORY, findBestMatch, getInventoryItemNames, FUNCTIONAL_EQUIVALENTS } from '../utils/item-matcher';
 
 @Injectable()
 export class ContentionService {
@@ -68,19 +68,67 @@ export class ContentionService {
     const matched = findBestMatch(itemName, getInventoryItemNames());
     if (!matched) return;
 
+    // Guard: only contend on items actually requested in this rental's listing title.
+    // Strip SEO keyword suffixes (after |, –, —) to get the core listing name.
+    // Extract distinctive tokens from the matched item (non-brand, non-generic, len >= 3).
+    // If any such tokens exist, at least one must appear in the core title.
+    // This prevents false contentions from:
+    //   - Bundle accessories (256GB card, batteries) not mentioned in the listing title
+    //   - Marketing-keyword mismatches (JBL PARTYBOX 110 → JBL Club 120 speaker)
+    const CONTENTION_BRANDS = new Set([
+      'sony', 'canon', 'nikon', 'fuji', 'dji', 'rode', 'nanlite',
+      'hollyland', 'atomos', 'jbl', 'sennheiser', 'anker', 'blackmagic', 'bmpcc', 'blazar',
+    ]);
+    const CONTENTION_GENERICS = new Set([
+      'set', 'kit', 'and', 'with', 'for', 'the', 'all', 'new',
+      'camera', 'lens', 'microphone', 'speaker', 'light', 'filter',
+      'batteries', 'battery', 'tripod', 'gimbal', 'monitor', 'drone', 'card',
+      'transmitter', 'receiver', 'wireless', 'mount', 'rig', 'slider', 'reflector',
+      'system', 'production', 'professional', 'studio',
+    ]);
+    const coreTitle = (triggerRental.title || '').split(/[|–—]/)[0]
+      .toLowerCase().replace(/[+&,×x]/g, ' ');
+    const coreTitleWords = new Set(coreTitle.split(/\s+/).filter(Boolean));
+    const matchedKeyTokens = matched.toLowerCase().split(/\s+/).filter(t =>
+      t.length >= 3 && !CONTENTION_BRANDS.has(t) && !CONTENTION_GENERICS.has(t),
+    );
+    if (matchedKeyTokens.length > 0) {
+      const titleRelevant = matchedKeyTokens.some(tok => {
+        if (coreTitleWords.has(tok)) return true;
+        for (const tw of coreTitleWords as Set<string>) {
+          if (tw.length >= 3 && (tw.includes(tok) || tok.includes(tw)) &&
+              Math.min(tok.length, tw.length) / Math.max(tok.length, tw.length) >= 0.8) return true;
+        }
+        return false;
+      });
+      if (!titleRelevant) {
+        this.logger.debug(`Contention: skipping "${matched}" — tokens [${matchedKeyTokens.join(',')}] not in core title "${(triggerRental.title || '').substring(0, 60)}"`);
+        return;
+      }
+    }
+
     const maxQty = MASTER_INVENTORY[matched] || 1;
     const startDate = triggerRental.start_date!;
     const endDate = triggerRental.end_date!;
 
-    // Check already-confirmed bookings
+    // Check already-confirmed bookings (exclude trigger rental's own bookings to avoid self-contention)
     const availability = await this.calendarService.checkAvailability(matched, startDate, endDate);
-    const confirmedBooked = availability.booked;
+    const triggerOwnBookings = await this.prisma.booking.count({
+      where: {
+        rental_id: triggerRental.id,
+        item_name: matched,
+        status: 'confirmed',
+        start_date: { lt: endDate },
+        end_date: { gt: startDate },
+      },
+    });
+    const confirmedBooked = Math.max(0, availability.booked - triggerOwnBookings);
 
     // Find ALL other active rentals wanting this item in overlapping dates
     const competitors = await this.prisma.rental.findMany({
       where: {
         id: { not: triggerRental.id },
-        status: { in: ['pending', 'upcoming', 'ongoing'] },
+        status: { in: ['pending'] }, // Exclude upcoming/ongoing � already counted by checkAvailability()
         start_date: { lt: endDate },
         end_date: { gt: startDate },
         extracted_items: {
@@ -134,14 +182,17 @@ export class ContentionService {
     const holdCount = Math.max(0, competingDemand - availableSlots);
     if (holdCount === 0) return;
 
-    // Bottom N by revenue → held
-    const heldRentals = allCompeting.slice(allCompeting.length - holdCount);
     // Top non-confirmed rental → favored (gets urgency)
     const favoredRental = allCompeting.find(r => {
       // Don't favor already-confirmed rentals (they don't need urgency)
       const step = r.order_step;
       return !step || ['REQUEST', 'APPROVED'].includes(step);
     }) || allCompeting[0];
+
+    // Bottom N by revenue → held (MUST exclude favored rental to prevent self-contention)
+    const heldRentals = allCompeting
+      .slice(allCompeting.length - holdCount)
+      .filter(r => r.id !== favoredRental.id);
 
     // Upsert contention record (idempotent for same item+overlap)
     const existing = await this.prisma.inventory_contention.findFirst({
@@ -206,11 +257,28 @@ export class ContentionService {
     });
     if (!contention || contention.status !== 'active') return false;
     if (contention.hold_message_sent_to.includes(rentalId)) return false;
+    // Never send hold message to the favored rental (self-contention guard)
+    if (contention.favored_rental_id === rentalId) return false;
 
     const rental = await this.prisma.rental.findUnique({ where: { id: rentalId } });
     if (!rental) return false;
 
-    const holdMsg = "Thanks for your interest! I'm just checking availability for those dates — I'll get back to you shortly.";
+    // Check for available functional equivalents and offer them instead of a generic hold message
+    let holdMsg: string;
+    if (rental.start_date && rental.end_date) {
+      const availableEquivalents = await this.findFunctionalEquivalents(
+        contention.item_name, rental.start_date, rental.end_date,
+      );
+      if (availableEquivalents.length > 0) {
+        const altList = availableEquivalents.join(' or ');
+        holdMsg = `The ${contention.item_name} is in high demand for those dates — but I do have the ${altList} available, which works just as well. Would that work for you?`;
+      } else {
+        holdMsg = "Thanks for your interest! I'm just checking availability for those dates — I'll get back to you shortly.";
+      }
+    } else {
+      holdMsg = "Thanks for your interest! I'm just checking availability for those dates — I'll get back to you shortly.";
+    }
+
     await this.hyggloService.sendMessage(rental.listing_id, holdMsg); // respects READ_ONLY_MODE
 
     await this.prisma.inventory_contention.update({
@@ -222,6 +290,22 @@ export class ContentionService {
 
     this.logger.log(`Sent hold message to rental ${rental.listing_id} (contention ${contentionId})`);
     return true;
+  }
+
+  /**
+   * Find available functional equivalents for a contended item.
+   * Uses the FUNCTIONAL_EQUIVALENTS map (cross-brand where items serve the same purpose).
+   */
+  async findFunctionalEquivalents(itemName: string, startDate: Date, endDate: Date): Promise<string[]> {
+    const equivalents = FUNCTIONAL_EQUIVALENTS[itemName] ?? [];
+    const available: string[] = [];
+    for (const equiv of equivalents) {
+      const result = await this.calendarService.checkAvailability(equiv, startDate, endDate);
+      if (result.available) {
+        available.push(equiv);
+      }
+    }
+    return available;
   }
 
   /**
@@ -417,14 +501,18 @@ export class ContentionService {
       await this.resolveByBooking(rentalId);
     }
 
-    // If order_step advanced past REQUEST/APPROVED, resolve as booked
-    if (orderStep && !['REQUEST', 'APPROVED'].includes(orderStep)) {
+    // If order_step advanced past REQUEST (including APPROVED), item is now committed by owner
+    // APPROVED = owner has accepted, booking is confirmed in calendar — held rentals should be told
+    if (orderStep && orderStep !== 'REQUEST') {
       const contentions = await this.prisma.inventory_contention.findMany({
         where: { status: 'active', favored_rental_id: rentalId },
       });
       for (const c of contentions) {
         await this.resolveContention(c.id, 'resolved_booked', `Order step advanced to ${orderStep}`);
       }
+
+      // Also resolve contentions blocked by this approval consuming the last inventory unit
+      await this.resolveContentionsBlockedByApproval(rentalId);
     }
 
     // Re-evaluate in case competition landscape changed
@@ -466,6 +554,40 @@ export class ContentionService {
       }
     }
 
+    // For resolved_booked: notify held rentals the item is taken, only if genuinely out of stock for their dates
+    if (status === 'resolved_booked') {
+      for (const heldId of contention.held_rental_ids) {
+        const heldRental = await this.prisma.rental.findUnique({ where: { id: heldId } });
+        if (!heldRental?.start_date || !heldRental?.end_date) continue;
+
+        const state = await this.prisma.follow_up_state.findUnique({ where: { rental_id: heldId } });
+        if (state && ['dead', 'completed'].includes(state.conversation_stage)) continue;
+
+        // Only notify if genuinely out of stock for their specific dates
+        const maxQty = MASTER_INVENTORY[contention.item_name] || 1;
+        const availability = await this.calendarService.checkAvailability(
+          contention.item_name, heldRental.start_date, heldRental.end_date,
+        );
+        if (availability.booked < maxQty) continue; // A unit freed up — no need to apologise
+
+        // Find available alternatives of similar type
+        const alternatives = await this.findAvailableAlternatives(
+          contention.item_name, heldRental.start_date, heldRental.end_date,
+        );
+
+        let bookedMsg: string;
+        if (alternatives.length > 0) {
+          const altList = alternatives.map(a => `- ${a}`).join('\n');
+          bookedMsg = `Hi! Unfortunately, the ${contention.item_name} has just been booked for those dates by another renter — sorry about that!\n\nIf you're still looking, I do have some alternatives available for those dates:\n${altList}\n\nHappy to help if any of those would work for you!`;
+        } else {
+          bookedMsg = `Hi! Unfortunately, the ${contention.item_name} has just been booked for those dates by another renter. I'm sorry I can't accommodate this one! If you need similar equipment for a different time or have other questions, feel free to get in touch.`;
+        }
+
+        await this.hyggloService.sendMessage(heldRental.listing_id, bookedMsg);
+        this.logger.log(`Sent 'item booked' apology to held rental ${heldRental.listing_id} (contention ${contentionId})`);
+      }
+    }
+
     // Notify Daniel
     await this.notifyContentionResolved(contention, status, reason);
 
@@ -496,28 +618,100 @@ export class ContentionService {
     }
   }
 
+  /**
+   * When a rental becomes APPROVED (or later), check if it consumes the last inventory unit
+   * for any item, and resolve any active contentions that are now blocked.
+   */
+  private async resolveContentionsBlockedByApproval(rentalId: string): Promise<void> {
+    try {
+      const rental = await this.prisma.rental.findUnique({
+        where: { id: rentalId },
+        include: { extracted_items: true },
+      });
+      if (!rental?.start_date || !rental?.end_date) return;
+
+      const seenItems = new Set<string>();
+      for (const ei of rental.extracted_items) {
+        const matched = findBestMatch(ei.item_name, getInventoryItemNames());
+        if (matched) seenItems.add(matched);
+      }
+
+      for (const matched of seenItems) {
+        const maxQty = MASTER_INVENTORY[matched] || 1;
+        const availability = await this.calendarService.checkAvailability(matched, rental.start_date, rental.end_date);
+        if (availability.booked < maxQty) continue; // Still slots remaining
+
+        // Item fully booked — find active contentions for overlapping dates not already resolved
+        const blockedContentions = await this.prisma.inventory_contention.findMany({
+          where: {
+            item_name: matched,
+            status: 'active',
+            date_start: { lt: rental.end_date },
+            date_end: { gt: rental.start_date },
+            favored_rental_id: { not: rentalId },
+          },
+        });
+
+        for (const c of blockedContentions) {
+          await this.resolveContention(c.id, 'resolved_booked', `Item ${matched} fully booked by rental ${rentalId} (approved)`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`resolveContentionsBlockedByApproval failed for ${rentalId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Find available alternative items of the same brand/type for the given date range.
+   * Returns up to 3 alternatives to suggest to a held renter whose item is now taken.
+   */
+  private async findAvailableAlternatives(itemName: string, startDate: Date, endDate: Date): Promise<string[]> {
+    const firstWord = itemName.split(/\s+/)[0].toLowerCase(); // brand prefix (Sony, Nanlite, DJI, etc.)
+    const alternatives: string[] = [];
+
+    for (const candidateName of getInventoryItemNames()) {
+      if (candidateName === itemName) continue;
+      if (!candidateName.toLowerCase().startsWith(firstWord)) continue;
+
+      const availability = await this.calendarService.checkAvailability(candidateName, startDate, endDate);
+      if (availability.available) {
+        alternatives.push(candidateName);
+        if (alternatives.length >= 3) break;
+      }
+    }
+
+    return alternatives;
+  }
+
   private async notifyContentionDetected(
     contention: any, favoredRental: any, heldRentals: any[],
     itemName: string, maxQty: number, confirmedBooked: number,
   ): Promise<void> {
-    const heldLines = heldRentals.map(r =>
-      `  "${r.title}" by ${r.renter_info || 'unknown'} | Stage: ${r.follow_up_state?.conversation_stage || '?'}\n  → Outbound paused`,
-    ).join('\n\n');
+    // Clean item name: strip leading quantity digits (e.g. "Tilta Nucleus Nano 2 follow focus" → "Tilta Nucleus Nano follow focus")
+    const cleanItemName = itemName.replace(/\s+\d+\s+/, ' ').replace(/\s+\d+$/, '').trim();
+
+    const heldRentalData = heldRentals.map(r => ({
+      renter: r.renter_info || 'Unknown',
+      stage: r.follow_up_state?.conversation_stage || 'inquiry',
+      revenue: r.rental_price || 0,
+      account: r.account || '?',
+      isSameRenter: (r.renter_info || '').toLowerCase() === (favoredRental.renter_info || '').toLowerCase(),
+    }));
 
     await this.telegramService.sendRentalUpdate(favoredRental.id, {
       type: 'contention_detected',
       priority: 'high',
       data: {
-        itemName,
+        itemName: cleanItemName,
         maxQty,
         confirmedBooked,
         totalDemand: confirmedBooked + heldRentals.length + 1,
-        favoredTitle: favoredRental.title,
-        favoredRenter: favoredRental.renter_info || 'unknown',
+        favoredRenter: favoredRental.renter_info || 'Unknown',
         favoredRevenue: favoredRental.rental_price || 0,
-        favoredStage: favoredRental.follow_up_state?.conversation_stage || '?',
+        favoredStage: favoredRental.follow_up_state?.conversation_stage || 'inquiry',
+        favoredAccount: favoredRental.account || '?',
         heldCount: heldRentals.length,
-        heldSummary: heldLines,
+        heldRentalData,
         dateStart: contention.date_start,
         dateEnd: contention.date_end,
       },
@@ -525,20 +719,18 @@ export class ContentionService {
   }
 
   private async notifyContentionResolved(contention: any, status: string, reason: string): Promise<void> {
-    const statusLabel = status === 'resolved_booked' ? 'BOOKED'
-      : status === 'resolved_timeout' ? 'TIMEOUT'
-      : 'CANCELLED';
+    // Clean item name
+    const rawName = contention.item_name || 'Unknown item';
+    const cleanItemName = rawName.replace(/\s+\d+\s+/, ' ').replace(/\s+\d+$/, '').trim();
 
     await this.telegramService.sendRentalUpdate(contention.favored_rental_id, {
       type: 'contention_resolved',
-      priority: 'normal',
+      priority: status === 'resolved_booked' ? 'high' : 'normal',
       data: {
-        itemName: contention.item_name,
-        statusLabel,
-        reason,
-        heldCount: contention.held_rental_ids.length,
-        favoredRevenue: contention.favored_revenue,
-        heldRevenues: contention.held_revenues,
+        itemName: cleanItemName,
+        status,
+        heldCount: contention.held_rental_ids?.length || 0,
+        favoredRevenue: contention.favored_revenue || 0,
       },
     }, {});
   }

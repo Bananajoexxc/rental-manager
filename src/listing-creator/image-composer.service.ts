@@ -218,7 +218,9 @@ export class ImageComposerService {
   body {
     width: ${CANVAS_WIDTH}px;
     height: ${CANVAS_HEIGHT}px;
-    background: linear-gradient(155deg, #C69660 0%, #D4A574 25%, #E2BF94 60%, #DEBB8A 100%);
+    background: ${account === 'leo'
+      ? 'linear-gradient(135deg, #5574a0 0%, #79b5bd 50%, #3d8878 100%)'
+      : 'linear-gradient(135deg, #ebdaea 0%, #e3b883 25%, #f781b1 75%, #e5ded8 100%)'};
     overflow: hidden;
     position: relative;
   }

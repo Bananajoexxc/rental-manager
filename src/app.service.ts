@@ -34,6 +34,7 @@ interface BookingRow {
 /** A unique rental = one renter + date range, possibly with multiple items */
 interface GroupedRental {
   rentalId: string | null;
+  allRentalIds: string[];
   renter: string;
   account: string;
   items: string[];
@@ -116,6 +117,7 @@ export class AppService {
       if (existing) {
         if (!isAccessory) existing.items.push(b.item_name);
         existing.earnings += b.revenue || 0;
+        if (b.rental_id && !existing.allRentalIds.includes(b.rental_id)) existing.allRentalIds.push(b.rental_id);
         // Expand date range to cover all items
         if (b.start_date < existing.startDate) existing.startDate = b.start_date;
         if (b.end_date > existing.endDate) existing.endDate = b.end_date;
@@ -126,6 +128,7 @@ export class AppService {
       } else {
         groups.set(groupKey, {
           rentalId: b.rental_id,
+          allRentalIds: b.rental_id ? [b.rental_id] : [],
           renter: b.renter_name,
           account: b.account,
           items: isAccessory ? [] : [b.item_name],
@@ -212,6 +215,7 @@ export class AppService {
       status: { in: ['completed', 'ongoing', 'upcoming'] },
       rental_price: { not: null, gt: 0 },
       start_date: { not: null },
+
     };
     if (account) rentalWhere.account = account;
 
@@ -220,8 +224,9 @@ export class AppService {
       select: {
         start_date: true, end_date: true, rental_price: true, renter_info: true, listing_id: true,
         status: true,
+        order_step: true,
         bookings: {
-          where: { status: 'confirmed' },
+          where: { status: { in: ['confirmed', 'completed'] } },
           select: { pickup_date: true },
           take: 1,
         },
@@ -235,6 +240,9 @@ export class AppService {
       // Upcoming rentals require at least 1 confirmed booking to count in revenue.
       // Without confirmed bookings, the rental is unvalidated (phantom).
       if (r.status === 'upcoming' && r.bookings.length === 0) continue;
+      // Phantom completed: owner accepted (APPROVED) but renter never paid.
+      if (r.status === 'completed' && (r as any).order_step === 'APPROVED') continue;
+      if (r.status === 'completed' && r.bookings.length === 0) continue;
       const key = `${(r as any).listing_id}|${r.renter_info}|${r.start_date.toISOString().split('T')[0]}`;
       const existing = deduped.get(key);
       if (!existing || (r.rental_price || 0) > (existing.rental_price || 0)) {
@@ -280,8 +288,8 @@ export class AppService {
 
     // Rental details for expandable tiles (photos, names, items, earnings)
     const detailRentalIds = [...new Set([
-      ...ongoingRentals.map(r => r.rentalId),
-      ...upcomingRentals.map(r => r.rentalId),
+      ...ongoingRentals.flatMap(r => r.allRentalIds),
+      ...upcomingRentals.flatMap(r => r.allRentalIds),
     ])].filter(Boolean);
 
     const detailRentals = detailRentalIds.length > 0
@@ -297,7 +305,18 @@ export class AppService {
     const rentalDetailMap = new Map(detailRentals.map(r => [r.id, r]));
 
     const mapRentalDetail = (grouped: GroupedRental) => {
-      const detail = grouped.rentalId ? rentalDetailMap.get(grouped.rentalId) : null;
+      // Collect product photos from ALL linked rentals (multi-item groups span multiple listings)
+      const allPhotos: string[] = [];
+      for (const rid of grouped.allRentalIds) {
+        const detail = rentalDetailMap.get(rid);
+        if (detail?.photos_urls) {
+          for (const url of detail.photos_urls) {
+            if (url.includes('/products/') && !allPhotos.includes(url)) {
+              allPhotos.push(url);
+            }
+          }
+        }
+      }
       return {
         renter: grouped.renter,
         items: grouped.items,
@@ -305,7 +324,8 @@ export class AppService {
         startDate: grouped.startDate,
         endDate: grouped.endDate,
         account: grouped.account,
-        photo: getProductPhoto(detail?.photos_urls) || null,
+        photo: allPhotos[0] || null,
+        photos: allPhotos,
         pickupTime: grouped.pickupTime,
         returnTime: grouped.returnTime,
         pickupDate: grouped.pickupDate,
@@ -314,12 +334,13 @@ export class AppService {
     };
 
     // === Pending verification rentals (display only — NOT in any earnings/count calculations) ===
-    // "Pending" = owner accepted on Hygglo, but platform is verifying the renter.
-    // Detected via order_step='VERIFIED' (the VERIFIED step is active, meaning awaiting docs/ID).
-    // Exclude rentals whose start_date has already passed — verification was aborted/expired.
+    // Only show rentals the owner has APPROVED but platform is still verifying the renter.
+    // FUNDS_RESERVED/REQUEST = renter just sent a request (card pre-authorized), NOT committed.
+    // Only VERIFIED = owner approved, platform verifying renter identity.
     const pendingVerificationRentals = await this.prisma.rental.findMany({
       where: {
-        order_step: 'VERIFIED',
+        order_step: { in: ['VERIFIED', 'BOOKED_AFTER_VERIFIED'] },
+        status: { notIn: ['cancelled', 'completed', 'obsolete', 'consolidated'] },
         start_date: { gte: todayStart },
         ...(account ? { account } : {}),
       },
@@ -333,7 +354,7 @@ export class AppService {
     // Group by renter+date (one person on one date = one pending visit)
     const pendingVisitMap = new Map<string, {
       renter: string; items: string[]; startDate: Date; endDate: Date;
-      account: string; photo: string | null; earnings: number;
+      account: string; photo: string | null; photos: string[]; earnings: number;
     }>();
     for (const r of pendingVerificationRentals) {
       const renterNorm = (r.renter_info || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -346,15 +367,19 @@ export class AppService {
         if (r.end_date && (!existing.endDate || r.end_date > existing.endDate)) {
           existing.endDate = r.end_date;
         }
-        if (!existing.photo) { const pp = getProductPhoto(r.photos_urls); if (pp) existing.photo = pp; }
+        const pp = getProductPhoto(r.photos_urls);
+        if (pp && !existing.photos.includes(pp)) existing.photos.push(pp);
+        if (!existing.photo) existing.photo = pp;
       } else {
+        const pendingPhoto = getProductPhoto(r.photos_urls);
         pendingVisitMap.set(key, {
           renter: r.renter_info || 'Unknown',
           items: [r.title],
           startDate: r.start_date!,
           endDate: r.end_date!,
           account: r.account || 'dbcinema',
-          photo: getProductPhoto(r.photos_urls) || null,
+          photo: pendingPhoto || null,
+          photos: pendingPhoto ? [pendingPhoto] : [],
           earnings: r.rental_price || 0,
         });
       }
@@ -488,7 +513,7 @@ export class AppService {
       // which may be the evening before or morning after the Hygglo booking dates
       const effectiveStart = (b as any).pickup_date || b.start_date;
       const effectiveEnd = (b as any).return_date || b.end_date;
-      const key = `${renterNorm}|${b.account}|${effectiveStart.toISOString().split('T')[0]}`;
+      const key = (b as any).rental_id || `${renterNorm}|${b.account}|${effectiveStart.toISOString().split('T')[0]}`;
 
       let notesObj: any = null;
       try { notesObj = (b as any).notes ? JSON.parse((b as any).notes) : null; } catch { /* ignore */ }
@@ -972,9 +997,21 @@ export class AppService {
         }
       }
 
+      // Check DBCINEMA30 loyalty eligibility (7+ reviews, 5.0 avg, most recent review from us)
+      let loyaltyDiscountText = '';
+      try {
+        const eligibility = await this.couponService.checkLoyaltyEligibility(rental.listing_id, account);
+        if (eligibility.eligible) {
+          loyaltyDiscountText = ' You also qualify for our exclusive loyalty discount — use code DBCINEMA30 for 30% off your next booking!';
+          this.logger.log('LOYALTY_DISCOUNT: Renter ' + renterName + ' eligible for DBCINEMA30 (' + eligibility.totalReviews + ' reviews, ' + eligibility.averageRating + ' avg)');
+        }
+      } catch (err) {
+        this.logger.warn('Loyalty discount check failed: ' + err.message);
+      }
+
       thankYouText = account === 'leo'
-        ? `Hey! Thanks so much for renting with me, really appreciate it! Hope the gear worked out great for your project.${voucherText}` + (voucherText ? '' : ` If you'd like to rent again, use code db15off for 15% off your next booking.`) + ` Cheers!` + reviewRequest
-        : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production.${voucherText}` + (voucherText ? '' : ` As a thank you, here's 15% off your next rental — just use code db15off when booking.`) + ` Looking forward to working with you again!` + reviewRequest;
+        ? `Hey! Thanks so much for renting with me, really appreciate it! Hope the gear worked out great for your project.${voucherText}${loyaltyDiscountText}` + (voucherText || loyaltyDiscountText ? '' : ` If you'd like to rent again, use code db15off for 15% off your next booking.`) + ` Cheers!` + reviewRequest
+        : `Thanks for choosing DB Cinema Rentals! We hope the equipment performed perfectly for your production.${voucherText}${loyaltyDiscountText}` + (voucherText || loyaltyDiscountText ? '' : ` As a thank you, here's 15% off your next rental — just use code db15off when booking.`) + ` Looking forward to working with you again!` + reviewRequest;
 
       try {
         thankYouSent = await this.hyggloService.sendMessage(rental.listing_id, thankYouText, !!body.dashboardApproved);

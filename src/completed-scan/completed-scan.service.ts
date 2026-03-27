@@ -9,6 +9,7 @@ import { MemoryService } from '../memory/memory.service';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { CalendarService } from '../calendar/calendar.service';
 import { TitleParserService } from '../revenue/title-parser.service';
+import { ItemResolverService } from '../item-resolver/item-resolver.service';
 import { RentalScannerService } from '../rental-scanner/rental-scanner.service';
 
 @Injectable()
@@ -25,6 +26,7 @@ export class CompletedScanService {
     private renterProfileService: RenterProfileService,
     private calendarService: CalendarService,
     private titleParserService: TitleParserService,
+    private itemResolverService: ItemResolverService,
     @Optional() @Inject(forwardRef(() => RentalScannerService)) private rentalScannerService: RentalScannerService,
   ) {}
 
@@ -187,7 +189,7 @@ export class CompletedScanService {
       `Keep the reply concise and natural. If it's a serious issue, recommend escalating.`;
 
     try {
-      const response = await this.aiService.processRoutine(prompt, { rules });
+      const response = await this.aiService.processLightweight(prompt, { rules });
 
       // Send the reply (gated by READ_ONLY_MODE)
       const readOnly = process.env.READ_ONLY_MODE === 'true';
@@ -260,7 +262,8 @@ export class CompletedScanService {
               let parsedUpdate: any = {};
               if (!existingRental.parsed_items) {
                 try {
-                  parsedUpdate.parsed_items = await this.titleParserService.parseTitleWithAI(rental.title) as any;
+                  const resolved = await this.itemResolverService.resolveItems(rental.listingId, rental.title);
+                  parsedUpdate.parsed_items = resolved.map(r => ({ item: r.item, qty: r.qty })) as any;
                 } catch { /* non-critical */ }
               }
 
@@ -278,7 +281,8 @@ export class CompletedScanService {
               // Parse items from title using AI
               let parsedItems: any = null;
               try {
-                parsedItems = await this.titleParserService.parseTitleWithAI(rental.title);
+                const resolved = await this.itemResolverService.resolveItems(rental.listingId, rental.title);
+                parsedItems = resolved.map(r => ({ item: r.item, qty: r.qty }));
               } catch { /* non-critical */ }
 
               // Create new rental + bookings

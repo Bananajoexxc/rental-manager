@@ -11,6 +11,9 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // Set global API prefix
+  app.setGlobalPrefix('api');
+
   // Enable graceful shutdown
   app.enableShutdownHooks();
 

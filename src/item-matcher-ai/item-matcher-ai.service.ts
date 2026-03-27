@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import * as crypto from 'crypto';
@@ -44,7 +44,7 @@ interface CircuitBreaker {
 // --- Service ---
 
 @Injectable()
-export class ItemMatcherAiService implements OnModuleInit {
+export class ItemMatcherAiService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ItemMatcherAiService.name);
   private client: Anthropic;
   private model: string;
@@ -75,7 +75,7 @@ export class ItemMatcherAiService implements OnModuleInit {
   ) {
     const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
     this.client = new Anthropic({ apiKey: apiKey || '' });
-    this.model = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20250514';
+    this.model = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20251001';
 
     // Pre-compute inventory data
     this.inventoryNames = getInventoryItemNames();

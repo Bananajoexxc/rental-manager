@@ -214,6 +214,7 @@ export const OWNED_ITEM_COSTS: Record<string, number> = {
   'Canon EF 16-35mm f2.8': 600,
   // Camera bodies
   'Sony FX3': 3300,
+  'Sony A7 V': 2699,  // retail new-buy price
   'Sony A7 III': 1200,
   'Sony A7 II': 600,
   'Fujifilm X100 VI': 1400,
@@ -248,7 +249,7 @@ export const OWNED_ITEM_COSTS: Record<string, number> = {
   'Rode Video Mic Go': 50,
   'Rode Wireless Mic Pro set': 250,
   'Rode Video Mic Pro Plus': 200,
-  'Audio boom mic Sennheiser': 300,
+  'Audio boom mic Sennheiser': 777,  // full kit: MKE 600 + boom pole + shock mount + Zoom H5 + XLR + windshield + SD
   'DJI Wireless Mics': 250,
   'DJI Mic 2 wireless': 280,
   'JBL wireless microphones': 100,

@@ -5,7 +5,7 @@ import { AiService, ToolHandlers } from '../ai/ai.service';
 import { RulesService } from '../rules/rules.service';
 import { MemoryService } from '../memory/memory.service';
 import { TelegramService, DecisionPromptConfig } from '../telegram/telegram.service';
-import { HyggloService } from '../hygglo/hygglo.service';
+import { HyggloService, HyggloAccount } from '../hygglo/hygglo.service';
 import { BlacklistService } from '../blacklist/blacklist.service';
 import { DemandService } from '../demand/demand.service';
 import { CalendarService } from '../calendar/calendar.service';
@@ -19,7 +19,7 @@ import { ErrorLogService } from '../monitoring/error-log.service';
 import { VisionService } from '../vision/vision.service';
 import { findBestMatch, getInventoryItemNames, validateListingAgainstInventory, validateListingItems, extractListingQuantity, normalizeItemName, MASTER_INVENTORY } from '../utils/item-matcher';
 import { PRICING_CATALOG, formatFilteredPricingForAI, getItemPrice } from '../data/pricing-catalog';
-import { checkAcquisitionOpportunity, findAcquisitionMatch } from '../data/acquisition-costs';
+import { checkAcquisitionOpportunity } from '../data/acquisition-costs';
 import { checkCompatibilityConflicts, detectMissingEssentials, formatCompatibilityForAI } from '../data/item-compatibility';
 import { RenterProfileService } from '../renter-profile/renter-profile.service';
 import { FollowUpService } from '../follow-up/follow-up.service';
@@ -32,6 +32,7 @@ import { PlaywrightService } from '../playwright/playwright.service';
 import { ContentionService } from '../contention/contention.service';
 import { RentalScannerService } from '../rental-scanner/rental-scanner.service';
 import { getVerifiedItems } from '../data/listing-photo-reference';
+import { detectMarketingListing, buildMarketingListingContext } from '../data/marketing-redirects';
 import { filterResponse } from '../pipeline/filter';
 import { enforceContract, surgicalContractFix } from '../pipeline/contract';
 import { classifyMessage } from '../pipeline/classify';
@@ -243,7 +244,7 @@ export class AutonomousService {
     const lower = message.toLowerCase().trim();
 
     // Match arrival-related phrases
-    const arrivalPatterns = /\b(arrived|i'?m here|im here|i am here|here now|outside|at the door|downstairs|at the spot|at the location|at the pickup|at the meeting|i'?ve arrived|just arrived|just got here|waiting outside|i'?m at|we'?re here|at trafalgar|by the statue)\b/i;
+    const arrivalPatterns = /\b(arrived|i'?m here|im here|i am here|here now|outside|at the door|downstairs|at the spot|at the location|at the pickup|at the meeting|i'?ve arrived|just arrived|just got here|waiting outside|i'?m at|we'?re here|at trafalgar|by the statue|waiting here|i'?m waiting|been waiting|standing here|stood here|i'?m standing|we'?re waiting|we are waiting|already here|i am waiting)\b/i;
 
     if (!arrivalPatterns.test(lower)) return;
 
@@ -254,6 +255,16 @@ export class AutonomousService {
 
     if (bookings.length === 0) return;
 
+    // Date-aware phase detection: use rental dates to determine pickup vs return context.
+    // This prevents "Outside" on the return day being misidentified as pickup confirmation
+    // when pickup_arrival_confirmed was never set (renter didn't say the trigger word on pickup day).
+    const now = new Date();
+    const startDate = rental.start_date ? new Date(rental.start_date) : null;
+    const endDate = rental.end_date ? new Date(rental.end_date) : null;
+    const todayStr = now.toDateString();
+    const isReturnDay = endDate && now.toDateString() === endDate.toDateString();
+    const isPastPickupDay = startDate && now > new Date(startDate.getTime() + 12 * 60 * 60 * 1000); // >12h after pickup start
+
     // Batch: collect IDs for pickup and return confirmations
     const returnIds: string[] = [];
     const pickupIds: string[] = [];
@@ -261,7 +272,13 @@ export class AutonomousService {
     const pickupBookings: typeof bookings = [];
 
     for (const booking of bookings) {
-      if (booking.pickup_arrival_confirmed && !booking.return_arrival_confirmed) {
+      if (booking.return_arrival_confirmed) continue; // already done
+
+      // Prefer date-based phase over flag-based: if today is the return day or past pickup day,
+      // treat as return arrival regardless of whether pickup_arrival_confirmed is set.
+      const forceReturnContext = (isReturnDay || isPastPickupDay) && !booking.return_arrival_confirmed;
+
+      if (forceReturnContext || (booking.pickup_arrival_confirmed && !booking.return_arrival_confirmed)) {
         returnIds.push(booking.id);
         returnBookings.push(booking);
       } else if (!booking.pickup_arrival_confirmed) {
@@ -274,7 +291,7 @@ export class AutonomousService {
     if (returnIds.length > 0) {
       await this.prisma.booking.updateMany({
         where: { id: { in: returnIds } },
-        data: { return_arrival_confirmed: true },
+        data: { return_arrival_confirmed: true, pickup_arrival_confirmed: true },
       });
     }
     if (pickupIds.length > 0) {
@@ -284,19 +301,23 @@ export class AutonomousService {
       });
     }
 
+    const readOnlyWarning = process.env.READ_ONLY_MODE === 'true'
+      ? '\n\n⚠️ Bot reply blocked (READ_ONLY) — reply manually on Hygglo now!'
+      : '';
+
     // Notifications still per-booking (different messages per renter)
     for (const booking of returnBookings) {
       this.logger.log(`Return arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
       await this.telegramService.sendRentalUpdate(rental.id, {
-        type: 'info', priority: 'normal',
-        data: { message: `✅ ${booking.renter_name} confirmed return arrival` },
+        type: 'info', priority: 'critical',
+        data: { message: `📍 ${booking.renter_name} is OUTSIDE for return — go meet them now!${readOnlyWarning}` },
       }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
     }
     for (const booking of pickupBookings) {
       this.logger.log(`Pickup arrival confirmed via chat for ${booking.renter_name} (booking ${booking.id})`);
       await this.telegramService.sendRentalUpdate(rental.id, {
         type: 'info', priority: 'critical',
-        data: { message: `📍 ${booking.renter_name} has arrived for pickup — head to the meeting point!` },
+        data: { message: `📍 ${booking.renter_name} has arrived for pickup — head to the meeting point!${readOnlyWarning}` },
       }, { rentalTitle: rental.title, renterName: booking.renter_name, account: rental.account });
     }
   }
@@ -367,6 +388,22 @@ export class AutonomousService {
 
     // 1. Hygglo status
     parts.push(`Hygglo status: ${rental.status || 'unknown'}`);
+
+    // 1b. Order step — critical for knowing if renter has already sent booking request
+    if (rental.order_step) {
+      const orderStepDescriptions: Record<string, string> = {
+        REQUEST: 'Renter has sent initial request — awaiting owner approval',
+        APPROVED: 'Owner approved — renter may be completing verification steps',
+        FUNDS_RESERVED: '⚠️ BOOKING REQUEST ALREADY SENT — renter funds are held by Hygglo. Do NOT ask them to "send the request" or "send it through" — they already have. Confirm availability, answer questions, and if ready to accept, tell them you will go ahead and accept.',
+        VERIFIED: 'Renter fully verified — ready for owner to accept on platform',
+        BOOKED_AFTER_VERIFIED: 'Fully verified and accepted — rental is confirmed',
+        DELIVERED: 'Gear has been delivered/handed over to renter',
+        RETURNED: 'Gear has been returned by renter',
+        REVIEWED: 'Rental complete — renter has left a review',
+      };
+      const stepDesc = orderStepDescriptions[rental.order_step] ?? rental.order_step;
+      parts.push(`Booking step: ${rental.order_step} — ${stepDesc}`);
+    }
 
     // 2. Follow-up state flags
     try {
@@ -635,6 +672,33 @@ export class AutonomousService {
       this.logger.debug(`Extra items AI extraction failed: ${err.message}`);
       return [];
     }
+  }
+
+  /**
+   * Detect when renter claims to have sent payment (bank transfer, Revolut, etc.).
+   * Returns true if the message signals a payment was just sent.
+   */
+  private detectPaymentSent(message: string): boolean {
+    const paymentSentPatterns: RegExp[] = [
+      /\bi'?ve?\s+sent\b/i,
+      /\bjust\s+sent\b/i,
+      /\bsent\s+it\b/i,
+      /\bpayment\s+(?:sent|done|complete|completed|made|transferred|gone\s+through)\b/i,
+      /\btransfer(?:red)?\s+(?:the\s+)?(?:money|funds|payment|amount)\b/i,
+      /\bi'?ve?\s+(?:made|done|completed)\s+(?:the\s+)?(?:payment|transfer|bank\s+transfer)\b/i,
+      /\b(?:bank\s+transfer|revolut|payment)\s+(?:is\s+)?(?:done|sent|complete|made)\b/i,
+      /\bsent\s+(?:the\s+)?(?:money|funds|payment|transfer)\b/i,
+      /\bi\s+sent\b/i,
+    ];
+    // Exclude scam-like patterns (someone asking Daniel to send money)
+    const falsePositivePatterns: RegExp[] = [
+      /\bplease\s+send\b/i,
+      /\bcan\s+you\s+send\b/i,
+      /\bsend\s+(?:me|us)\b/i,
+      /\bneed\s+(?:you\s+to\s+)?send\b/i,
+    ];
+    if (falsePositivePatterns.some(p => p.test(message))) return false;
+    return paymentSentPatterns.some(p => p.test(message));
   }
 
   /**
@@ -1143,6 +1207,18 @@ export class AutonomousService {
       let onNewRentalInventoryWarning = '';
       if (!isOnNewRentalAccepted) {
         try {
+          // MARKETING LISTING: Known redirect — skip all inventory analysis, go straight to conversion
+          const marketingRedirect = detectMarketingListing(rental.title || '');
+          if (marketingRedirect) {
+            onNewRentalInventoryWarning = buildMarketingListingContext(marketingRedirect, rental.title || '');
+            // Store real alternative for follow-up conversion tracking
+            const altPrice = getItemPrice(marketingRedirect.realAlternative);
+            this.followUpService.mergeStructuredState(rental.id, {
+              alternatives_offered: true,
+              alternative_items: [{ original: marketingRedirect.marketingItem, alternative: marketingRedirect.realAlternative, dailyPrice: altPrice?.daily_price_max ?? null }],
+            } as any).catch(() => {});
+            this.logger.log(`Marketing listing detected: "${marketingRedirect.marketingItem}" → "${marketingRedirect.realAlternative}" for ${rental.title}`);
+          } else {
           // PHOTO REFERENCE OVERRIDE: Check listing-photo-reference before title matching
           // This prevents SEO noise like "(like BMPCC 6K Full Frame)" from causing false inventory matches
           const photoRef = rental.listing_id ? getVerifiedItems(rental.listing_id) : null;
@@ -1310,6 +1386,13 @@ export class AutonomousService {
               } catch { /* non-critical */ }
             }
           }
+
+          // Sync bookings with extracted items — ensures booking item_names match
+          // inventory names and stale bookings for removed items are cleaned up
+          try {
+            await this.calendarService.syncBookingsWithExtractedItems(rental.id);
+          } catch { /* non-critical */ }
+        } // end else (not a marketing listing)
         } catch {
           // Non-critical
         }
@@ -1414,6 +1497,44 @@ export class AutonomousService {
         onNewRentalLowValueCtx +
         previousConversationContext;
 
+      // AVAILABILITY GUARD (onNewRental): Check calendar for extracted items
+      let onNewRentalAvailabilityCtx = '';
+      try {
+        if (rental.start_date && rental.end_date) {
+          const newRentalExtracted = await this.prisma.extracteditem.findMany({
+            where: { rental_id: rental.id },
+            select: { item_name: true },
+          });
+          if (newRentalExtracted.length > 0) {
+            const availLines: string[] = [];
+            for (const ei of newRentalExtracted) {
+              const avail = await this.calendarService.checkAvailability(
+                ei.item_name, rental.start_date, rental.end_date, rental.id,
+              );
+              if (!avail.available) {
+                availLines.push(
+                  `- ${avail.matchedItem || ei.item_name}: UNAVAILABLE (${avail.booked}/${avail.maxQuantity} booked for these dates)`,
+                );
+              } else {
+                availLines.push(
+                  `- ${avail.matchedItem || ei.item_name}: Available (${avail.booked}/${avail.maxQuantity} booked)`,
+                );
+              }
+            }
+            if (availLines.length > 0) {
+              onNewRentalAvailabilityCtx =
+                `\n\n--- CALENDAR AVAILABILITY (AUTHORITATIVE) ---\n` +
+                availLines.join('\n') + '\n' +
+                `If any item is UNAVAILABLE, do NOT claim it is available in your message. ` +
+                `Say it is "booked out for those dates" and suggest alternative dates if possible.`;
+              // availability injected into analysisPrompt below
+            }
+          }
+        }
+      } catch (availErr) {
+        this.logger.debug(`onNewRental availability check failed: ${(availErr as Error).message}`);
+      }
+
       // 2. Ask Claude to analyze and decide
       let returningContext = '';
       if (isReturningRenter && renterProfileId) {
@@ -1439,6 +1560,7 @@ export class AutonomousService {
         `- Does the pricing seem right based on our inventory?\n` +
         returningContext +
         activeRentalContext +
+        onNewRentalAvailabilityCtx +
         (hasExistingChat
           ? `- There is ALREADY an ongoing conversation with this renter (see chat history above). ` +
             `Do NOT send a generic welcome message — it would be out of context and awkward. ` +
@@ -1610,6 +1732,7 @@ export class AutonomousService {
                 item.item_name,
                 rental.start_date,
                 rental.end_date,
+                rental.id,
               );
               if (!avail.available) {
                 allAvailable = false;
@@ -1798,8 +1921,8 @@ export class AutonomousService {
         // Redirect all other pending to this chat
         for (const secondary of sameAccountPending) {
           const redirectMessage =
-            `Hey! I've got this request — I'll handle everything together in your ${primary.title} chat to keep things simple. ` +
-            `Head over there and we'll get it sorted!`;
+            `Hey! I've combined your request with your other enquiries — handling everything together in the ${primary.title} chat. ` +
+            `I'll close this one and sort it all from there.`;
 
           try {
             if (!this.isWriteBlocked(secondary.listing_id)) {
@@ -1807,6 +1930,15 @@ export class AutonomousService {
             }
           } catch (err) {
             this.logger.warn(`Failed to send cross-scan redirect for ${secondary.title}: ${(err as Error).message}`);
+          }
+
+          // Decline secondary listing on Hygglo via Playwright
+          try {
+            const account = (secondary.account || 'dbcinema') as HyggloAccount;
+            await this.playwrightService.declineRental(secondary.listing_id, account);
+            this.logger.log(`Declined secondary listing ${secondary.listing_id} on Hygglo`);
+          } catch (err) {
+            this.logger.warn(`Failed to decline secondary listing ${secondary.listing_id}: ${(err as Error).message}`);
           }
 
           // Mark secondary as consolidated
@@ -1827,23 +1959,28 @@ export class AutonomousService {
               data: {
                 rental_id: secondary.id,
                 decision_type: 'analyze',
-                input_summary: `cross_scan_consolidated: redirected to primary chat (${primary.title})`,
-                output_summary: `Renter has ${allPending.length} pending requests. Consolidated into primary rental (highest earner).`,
+                input_summary: `cross_scan_consolidated: declined + redirected to primary chat (${primary.title})`,
+                output_summary: `Renter has ${allPending.length} pending requests. Consolidated into primary rental (highest earner). Hygglo listing declined.`,
                 confidence: 1.0,
-                action_taken: `Sent redirect to primary chat: ${primary.title}`,
+                action_taken: `Declined Hygglo listing, redirected to primary: ${primary.title}`,
                 notified: true,
               },
             });
           } catch { /* non-critical */ }
         }
 
-        // Send consolidation message in primary (current) chat
-        const itemList = allPending.map((r, i) => `${i + 1}. ${r.title}`).join('\n');
+        // Send assertive consolidation message in primary (current) chat — present the bundle, don't ask permission
+        const itemList = allPending.map((r, i) => {
+          const price = r.rental_price ? ` (£${r.rental_price})` : '';
+          return `${i + 1}. ${r.title}${price}`;
+        }).join('\n');
+        const totalValue = allPending.reduce((sum, r) => sum + (r.rental_price || 0), 0);
+        const totalLine = totalValue > 0 ? `\n\nTotal: £${totalValue.toFixed(2)}` : '';
         const consolidationMessage =
-          `Hey ${firstName}! I can see you've sent ${allPending.length} rental requests:\n` +
-          `${itemList}\n\n` +
-          `It's easier to coordinate everything in one chat — can you send me a full list of what you need and the dates? ` +
-          `I'll sort it all out here.`;
+          `Hey ${firstName}! I can see you've sent ${allPending.length} separate requests — I've pulled them all together here:\n\n` +
+          `${itemList}` +
+          totalLine + '\n\n' +
+          `Everything looks good on my end. Just confirm you're happy with all of these and I'll get it all sorted at once.`;
 
         // Attach multi-item context so the AI knows about all items
         (rental as any)._multiItemContext = {
@@ -1870,10 +2007,10 @@ export class AutonomousService {
 
       } else {
         // Current rental is NOT the primary — an existing rental earns more
-        // Redirect current to primary chat
+        // Redirect current to primary chat and decline it on Hygglo
         const redirectMessage =
-          `Hey! I've got this request — I'll handle everything together in your ${primary.title} chat to keep things simple. ` +
-          `Head over there and we'll get it sorted!`;
+          `Hey! I've combined your request with your other enquiries — handling everything together in the ${primary.title} chat. ` +
+          `I'll close this one and sort it all from there.`;
 
         try {
           if (!this.isWriteBlocked(rental.listing_id)) {
@@ -1881,6 +2018,15 @@ export class AutonomousService {
           }
         } catch (err) {
           this.logger.warn(`Failed to send cross-scan redirect for current ${rental.title}: ${(err as Error).message}`);
+        }
+
+        // Decline current listing on Hygglo
+        try {
+          const account = (rental.account || 'dbcinema') as HyggloAccount;
+          await this.playwrightService.declineRental(rental.listing_id, account);
+          this.logger.log(`Declined current listing ${rental.listing_id} on Hygglo (consolidating to primary)`);
+        } catch (err) {
+          this.logger.warn(`Failed to decline current listing ${rental.listing_id}: ${(err as Error).message}`);
         }
 
         // Mark current as consolidated
@@ -1895,12 +2041,11 @@ export class AutonomousService {
           });
         } catch { /* non-critical */ }
 
-        // Notify primary chat about new request
+        // Notify primary chat about the additional item — assertive, already listed
         try {
           if (!this.isWriteBlocked(primary.listing_id)) {
             const notifyMessage =
-              `I noticed you also have a new request for ${rental.title} — shall I add that to what we're handling here? ` +
-              `Let me know everything you need and I'll sort it all out.`;
+              `I've also got a new request from you for ${rental.title} — I've added it to this chat so we can handle everything together here.`;
             await this.hyggloService.sendMessage(primary.listing_id, notifyMessage);
           }
         } catch (err) {
@@ -2245,6 +2390,7 @@ export class AutonomousService {
             itemName,
             rental.start_date,
             rental.end_date,
+            rental.id,
           );
           if (!avail.available) {
             allAvailable = false;
@@ -2295,6 +2441,73 @@ export class AutonomousService {
     }
   }
 
+  /** Close a losing cross-account rental and redirect the renter to the winner account. */
+  private async suppressCrossAccountRental(
+    loser: { id: string; listing_id: string; account: string | null; renter_info: string | null; rental_price: any },
+    winner: { id: string; account: string | null; rental_price: any },
+  ) {
+    const renterName = loser.renter_info || 'there';
+    const firstName = renterName.split(' ')[0];
+    const winnerLabel = winner.account === 'dbcinema' ? 'our main account' : 'our other listing';
+    const message =
+      `Hi ${firstName}! I can see you've also sent a request on ${winnerLabel}. ` +
+      `I'll handle everything through that chat — makes it easier to coordinate. ` +
+      `Please continue the conversation there!`;
+
+    try {
+      await this.hyggloService.sendMessage(loser.listing_id, message);
+    } catch (err) {
+      this.logger.warn(`Cross-account suppress: failed to send redirect on ${loser.listing_id}: ${err.message}`);
+    }
+
+    try {
+      await this.prisma.rental.update({ where: { id: loser.id }, data: { status: 'consolidated' } });
+    } catch (err) {
+      this.logger.warn(`Cross-account suppress: failed to consolidate ${loser.id}: ${err.message}`);
+    }
+
+    try {
+      await this.calendarService.cascadeRentalStatusToBookings(loser.id, 'consolidated');
+    } catch { /* non-critical */ }
+
+    try {
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: loser.id,
+          decision_type: 'cross_account_duplicate',
+          input_summary: `Same renter "${renterName}" has messages on both ${loser.account} (£${loser.rental_price}) and ${winner.account} (£${winner.rental_price})`,
+          output_summary: `Suppressed ${loser.account} rental — keeping ${winner.account} (higher earnings)`,
+          confidence: 1.0,
+          action_taken: 'consolidated_cross_account',
+          notified: true,
+        },
+      });
+    } catch { /* non-critical */ }
+
+    // Log winner decision for full audit trail (previously missing — only loser was logged)
+    try {
+      await this.prisma.ai_decision.create({
+        data: {
+          rental_id: winner.id,
+          decision_type: 'cross_account_duplicate',
+          input_summary: `Same renter "${renterName}" had duplicate on ${loser.account} (£${loser.rental_price})`,
+          output_summary: `Retained as winner — ${loser.account} rental consolidated`,
+          confidence: 1.0,
+          action_taken: `winner_retained_over_${loser.account}`,
+          notified: true,
+        },
+      });
+    } catch { /* non-critical */ }
+
+    try {
+      await this.telegramService.sendProactiveMessage(
+        `🔄 Cross-account msg dedup:\nRenter: ${renterName}\n` +
+        `${loser.account} (£${loser.rental_price}) → closed\n` +
+        `${winner.account} (£${winner.rental_price}) → kept`,
+      );
+    } catch { /* non-critical */ }
+  }
+
   async onNewMessages(messages: HyggloMessage[]) {
     const newMsgs = messages.filter(m => m.isNew);
     if (newMsgs.length === 0) return;
@@ -2305,6 +2518,55 @@ export class AutonomousService {
       const existing = byRental.get(msg.rentalId) || [];
       existing.push(msg);
       byRental.set(msg.rentalId, existing);
+    }
+
+    // Cross-account dedup: if same renter has messages on multiple accounts, process only the most profitable
+    if (byRental.size > 1) {
+      const listingIds = Array.from(byRental.keys());
+      const rentalRecords = await this.prisma.rental.findMany({
+        where: { listing_id: { in: listingIds }, status: { not: 'consolidated' } },
+        select: { id: true, listing_id: true, account: true, renter_info: true, rental_price: true },
+      });
+
+      // Group by renter (case-insensitive)
+      const byRenter = new Map<string, typeof rentalRecords>();
+      for (const r of rentalRecords) {
+        if (!r.renter_info || !r.account) continue;
+        const key = r.renter_info.trim().toLowerCase();
+        const group = byRenter.get(key) || [];
+        group.push(r);
+        byRenter.set(key, group);
+      }
+
+      // For any renter with multiple accounts, suppress the less profitable one
+      for (const group of byRenter.values()) {
+        const accounts = new Set(group.map(r => r.account));
+        if (accounts.size < 2) continue;
+
+        // Pick winner: highest rental_price, DB Cinema as tiebreaker
+        const winner = group.reduce((best, curr) => {
+          const bestPrice = Number(best.rental_price) || 0;
+          const currPrice = Number(curr.rental_price) || 0;
+          if (currPrice > bestPrice) return curr;
+          if (currPrice === bestPrice && curr.account === 'dbcinema') return curr;
+          return best;
+        });
+
+        for (const r of group) {
+          if (r.listing_id === winner.listing_id) continue;
+          this.logger.log(
+            `🔄 Cross-account msg dedup: suppressing ${r.account} (£${r.rental_price}) ` +
+            `for ${r.renter_info} — keeping ${winner.account} (£${winner.rental_price})`,
+          );
+          byRental.delete(r.listing_id);
+          // Close the losing rental (async, non-blocking)
+          const loser = r;
+          const win = winner;
+          this.suppressCrossAccountRental(loser, win).catch(err =>
+            this.logger.warn(`Failed to suppress cross-account rental ${loser.id}: ${err.message}`),
+          );
+        }
+      }
     }
 
     const tasks: Promise<void>[] = [];
@@ -2360,21 +2622,32 @@ export class AutonomousService {
       }
 
       // DATABASE-LEVEL DEDUP: Check if an ai_decision was already created for this exact message
-      // within the last 60 seconds. This catches race conditions where concurrent scan cycles
-      // both pass the in-memory check before either creates a decision record.
-      const msgContentHash = msg.content.substring(0, 200);
+      // within the last 10 minutes. Extended window catches post-restart duplicates where the
+      // startup window re-surfaces messages that were already processed before the restart.
+      // For combined messages (batched across a restart), also checks each constituent line.
       try {
-        const recentDecision = await this.prisma.ai_decision.findFirst({
-          where: {
-            input_summary: { contains: msgContentHash.substring(0, 100) },
-            decision_type: 'message',
-            created_at: { gte: new Date(Date.now() - 120_000) },
-          },
-          select: { id: true },
-        });
-        if (recentDecision) {
-          this.logger.debug(`DB dedup: skipping message for rental ${msg.rentalId} — decision ${recentDecision.id} already exists`);
-          return;
+        const linesToCheck = msg.content.split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length >= 15)
+          .map(l => l.substring(0, 100));
+        // Always check the full content hash as first option
+        const hashesToCheck = [msg.content.substring(0, 100), ...linesToCheck].filter(
+          (v, i, arr) => arr.indexOf(v) === i, // deduplicate
+        );
+
+        for (const checkHash of hashesToCheck) {
+          const recentDecision = await this.prisma.ai_decision.findFirst({
+            where: {
+              input_summary: { contains: checkHash },
+              decision_type: 'message',
+              created_at: { gte: new Date(Date.now() - 600_000) }, // 10-minute window
+            },
+            select: { id: true },
+          });
+          if (recentDecision) {
+            this.logger.debug(`DB dedup: skipping message for rental ${msg.rentalId} — decision ${recentDecision.id} already exists (matched: "${checkHash.substring(0, 40)}...")`);
+            return;
+          }
         }
       } catch (dedupErr) {
         // Non-critical — continue processing if dedup check fails
@@ -2419,6 +2692,33 @@ export class AutonomousService {
               }
             }
           }
+          return;
+        }
+
+        // Skip cancelled rentals — don't draft positive responses for dead deals
+        if ((rental.status || '').toLowerCase() === 'cancelled') {
+          this.logger.debug(`Skipping AI response for cancelled rental ${rental.title} (id=${rental.id})`);
+          // Store the message in conversation history for reference but don't draft a response
+          await this.prisma.ai_decision.create({
+            data: {
+              rental_id: rental.id,
+              decision_type: 'message',
+              input_summary: `[CANCELLED RENTAL] ${msg.content.substring(0, 200)}`,
+              output_summary: 'Message received on cancelled rental — no response drafted',
+              confidence: 1.0,
+              action_taken: 'cancelled_rental_skip',
+              was_sent: false,
+            },
+          });
+          // Notify Daniel in case the renter needs manual attention
+          this.telegramService.sendProactiveMessage(
+            `📩 Message on CANCELLED rental:\n` +
+            `├ 📦 ${rental.title}\n` +
+            `├ 👤 ${msg.sender || rental.renter_info || 'Unknown'}\n` +
+            `└ 💬 "${msg.content.substring(0, 200)}"`,
+            undefined,
+            { force: true },
+          ).catch(() => {});
           return;
         }
 
@@ -2533,6 +2833,43 @@ export class AutonomousService {
           });
 
           return;
+        }
+
+        // Payment-sent detection — renter claims to have sent money: notify Daniel with YES/NO
+        if (this.detectPaymentSent(msg.content)) {
+          this.logger.log(`Payment-sent message detected from ${msg.sender} on ${rental.title}`);
+          await this.telegramService.sendDecisionPrompt({
+            type: 'payment_confirm',
+            rentalId: String(rental.id),
+            listingId: msg.rentalId,
+            account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+            renterName: msg.sender || rental.renter_info || 'Unknown',
+            renterLastMessage: msg.content,
+            contextSummary: `Payment-sent claim from ${msg.sender} on ${rental.title}: "${msg.content.substring(0, 200)}"`,
+            displayText:
+              `💰 *PAYMENT SENT CLAIM*\n\n` +
+              `├ 📦 ${rental.title}\n` +
+              `├ 👤 ${msg.sender || rental.renter_info || 'Unknown'}\n` +
+              `└ 💬 "${msg.content.substring(0, 200)}"\n\n` +
+              `Did you receive the payment?`,
+            options: [
+              {
+                label: 'Yes, received',
+                emoji: '✅',
+                intent: 'confirm_payment',
+                aiInstruction: '',
+              },
+              {
+                label: 'No, not received',
+                emoji: '❌',
+                intent: 'deny_payment',
+                aiInstruction: '',
+              },
+            ],
+            holdMessageSent: false,
+          });
+          // Log the detection but don't return — let AI pipeline also run so renter gets an ack
+          // We don't return here; the AI will say something like "Got it, thanks" while Daniel is notified
         }
 
         // Follow-up tracking: reset counters on renter message
@@ -3064,6 +3401,26 @@ export class AutonomousService {
           this.logger.debug(`Coupon context load failed: ${cpErr.message}`);
         }
 
+        // Proactive DBCINEMA30 validation when renter mentions the loyalty code
+        let loyaltyCodeValidation = '';
+        if (/dbcinema30/i.test(msg.content)) {
+          try {
+            const acct = (rental.account || 'dbcinema') as 'dbcinema' | 'leo';
+            const validation = await this.couponService.validateLoyaltyCode(
+              rental.listing_id, acct,
+            );
+            if (validation.valid) {
+              const minEarnings = acct === 'leo' ? 25 : 20;
+              loyaltyCodeValidation = `\nDBCINEMA30 VALIDATED: This renter qualifies for 30% off. Apply the discount. Minimum owner earnings threshold (\u00a3${minEarnings}) still applies after discount — if 30% off would bring earnings below \u00a3${minEarnings}, cap the discount so earnings stay at \u00a3${minEarnings}.`;
+            } else {
+              loyaltyCodeValidation = `\nDBCINEMA30 INVALID: ${validation.reason}. Politely tell the renter the code is not currently valid for their account. Do NOT apply any discount. Suggest they keep renting with us to qualify.`;
+            }
+            this.logger.log(`DBCINEMA30 validation for ${rental.listing_id}: ${validation.valid ? 'VALID' : 'INVALID - ' + validation.reason}`);
+          } catch (loyaltyErr) {
+            this.logger.warn(`DBCINEMA30 validation error: ${loyaltyErr.message}`);
+          }
+        }
+
         const pricingInstruction = hasPricingIntent
           ? `The renter is asking about pricing. Reference the pricing catalog to give an accurate estimate. ` +
             `Say "approximately £X/day based on our current listings". ` +
@@ -3386,6 +3743,38 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
         // Block 2: COMMERCIAL (pricing + delivery + upsell + discount + same-day)
         const isEarlyStage = ['inquiry', 'interest', 'qualified'].includes(currentStage);
         const isLateStage = ['booking_sent', 'awaiting_verification', 'confirmed', 'dead'].includes(currentStage);
+        // POST-RETURN / FORGOTTEN ITEM DETECTION
+        // When a completed rental receives a message, inject POST-RETURN context and detect forgotten items.
+        let postReturnContext = '';
+        const isCompletedRental = rentalStatusLower === 'completed';
+        if (isCompletedRental) {
+          const forgottenItemPattern = /\b(left|forgot|forgot to|i left|left my|left it|still in|still there|i think i left|i put it|placed it|left behind|i put my|my .* still|did you find|you found|have you got my|is (?:my|it) still|can you check|check (the )?bag)\b/i;
+          const isForgottenItem = forgottenItemPattern.test(msg.content);
+
+          if (isForgottenItem) {
+            this.logger.warn(`FORGOTTEN ITEM detected on completed rental ${rental.id} — alerting Daniel`);
+            postReturnContext =
+              `\n--- POST-RETURN: FORGOTTEN ITEM ---\n` +
+              `This rental is COMPLETED — the gear has been returned. The renter says they left something behind.\n` +
+              `YOUR RESPONSE: Acknowledge calmly, say you'll check the bag/case right away, and confirm what was found as soon as you can. Do NOT give packing instructions. Do NOT mention the rental is over. Be warm and reassuring.\n` +
+              `CRITICAL: Daniel has been alerted and will physically check the returned bag.\n`;
+            // Fire Daniel alert
+            this.telegramService.sendProactiveMessage(
+              `⚠️ FORGOTTEN ITEM — ${rental.renter_info || 'Renter'} thinks they left something in returned gear.\n` +
+              `Rental: ${(rental.title || '').split(/\s*[|–—]\s*/)[0].trim()}\n` +
+              `Message: "${msg.content.substring(0, 200)}"\n` +
+              `Action needed: Check the returned bag/case now.`,
+              undefined,
+              { force: true },
+            ).catch(() => {});
+          } else {
+            postReturnContext =
+              `\n--- POST-RETURN RENTAL ---\n` +
+              `This rental is COMPLETED — the gear has already been returned. Do NOT give pickup/return logistics or packing instructions.\n` +
+              `If the renter has a question about their rental, answer helpfully and briefly. If they mention leaving something behind, say you'll check immediately.\n`;
+          }
+        }
+
         // Anti-upsell instruction when context is inappropriate
         const antiUpsell = (suppressUpsell || isLateStage)
           ? 'Do NOT suggest additional items, accessories, or upgrades in this response. Just answer what the renter asked — keep it focused and concise.'
@@ -3479,13 +3868,64 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           this.logger.debug(`Preflight reasoning failed: ${preflightErr.message}`);
         }
 
+        // MARKETING LISTING FAST PATH: Skip all availability checks for items we don't own
+        // Inject strong conversion context instead of wasting tokens on non-existent stock
+        let marketingConversionContext = '';
+        const msgMarketingRedirect = detectMarketingListing(rental.title || '');
+        if (msgMarketingRedirect) {
+          marketingConversionContext = buildMarketingListingContext(msgMarketingRedirect, rental.title || '');
+          extractedItemNames = []; // Don't check availability for non-existent items
+          this.logger.debug(`Marketing listing fast path: "${msgMarketingRedirect.marketingItem}" → "${msgMarketingRedirect.realAlternative}"`);
+        }
+
+        // AVAILABILITY GUARD (pre-prompt): Check calendar for extracted items and inject hard facts
+        // Prevents AI from hallucinating availability for overbooked items
+        let calendarAvailabilityBlock = '';
+        const _unavailableItemsForGuard: string[] = [];
+        try {
+          if (extractedItemNames.length > 0 && rental.start_date && rental.end_date) {
+            const availFacts: string[] = [];
+            for (const itemName of extractedItemNames) {
+              const avail = await this.calendarService.checkAvailability(
+                itemName, rental.start_date, rental.end_date, rental.id,
+              );
+              if (!avail.available) {
+                _unavailableItemsForGuard.push(avail.matchedItem || itemName);
+                availFacts.push(
+                  `- ${avail.matchedItem || itemName}: UNAVAILABLE (${avail.booked}/${avail.maxQuantity} booked)` +
+                  (avail.availableFrom ? ` -- available from ${avail.availableFrom} on start date` : ''),
+                );
+              } else {
+                availFacts.push(
+                  `- ${avail.matchedItem || itemName}: Available (${avail.booked}/${avail.maxQuantity} booked)`,
+                );
+              }
+            }
+            if (availFacts.length > 0) {
+              calendarAvailabilityBlock =
+                `\n--- CALENDAR AVAILABILITY (AUTHORITATIVE -- DO NOT CONTRADICT) ---\n` +
+                availFacts.join('\n') + '\n' +
+                (_unavailableItemsForGuard.length > 0
+                  ? `HARD RULE: The following items are CONFIRMED UNAVAILABLE for the requested dates: ${_unavailableItemsForGuard.join(', ')}. ` +
+                    `You MUST NOT say these items are "available", "actually in stock", "free", or "can be booked". ` +
+                    `If the renter asks, say the item is "currently booked out for those dates" and suggest alternative dates or items.\n`
+                  : '');
+            }
+          }
+        } catch (availErr) {
+          this.logger.debug(`Calendar availability pre-check failed: ${(availErr as Error).message}`);
+        }
+
         const messagePrompt =
           `A renter sent a message on the ${businessName} account. Draft a reply.\n\n` +
           `${persona}\n\n` +
           `Renter: ${msg.sender}\n` +
           `Their message: "${msg.content}"\n` +
           `Rental: ${rental.title}\n\n` +
+          (postReturnContext ? `${postReturnContext}\n` : '') +
+          (marketingConversionContext ? `${marketingConversionContext}\n` : '') +
           (itemAvailabilityBlock ? `${itemAvailabilityBlock}\n` : '') +
+          (calendarAvailabilityBlock ? `${calendarAvailabilityBlock}\n` : '') +
           (verifiedListingItem ? `${verifiedListingItem}\n` : '') +
           (commercialBlock ? `${commercialBlock}\n` : '') +
           (stageRenterBlock ? `${stageRenterBlock}\n` : '') +
@@ -3523,8 +3963,29 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           ownerEarnings = bookingRevenue._sum.revenue || null;
         } catch { /* optional */ }
 
+        // Fetch booking status to tell the AI whether the booking is confirmed/paid
+        let bookingStatusLabel = 'unknown';
+        try {
+          const latestBooking = await this.prisma.booking.findFirst({
+            where: { rental_id: rental.id },
+            orderBy: { created_at: 'desc' },
+            select: { status: true },
+          });
+          if (latestBooking) {
+            const bs = (latestBooking.status || '').toLowerCase();
+            if (bs === 'confirmed' || bs === 'accepted') {
+              bookingStatusLabel = 'CONFIRMED AND PAID';
+            } else if (bs === 'pending' || bs === 'pending_review') {
+              bookingStatusLabel = 'pending (awaiting confirmation)';
+            } else {
+              bookingStatusLabel = bs;
+            }
+          }
+        } catch { /* non-critical */ }
+
         let rentalContextStr = `Current rental: ${rental.title}\n` +
           `Status: ${rental.status}\n` +
+          `Booking: ${bookingStatusLabel}\n` +
           `Renter: ${rental.renter_info || 'Unknown'}\n` +
           `Dates: ${startDateStr} to ${endDateStr}${days ? ` (${days} day${days > 1 ? 's' : ''})` : ' (dates not yet set — renter has not submitted a request)'}\n` +
           `NOTE: Both start and end dates are rental days (inclusive). Minimum rental is always 1 day.\n`;
@@ -3657,19 +4118,22 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
         let lowValueInstruction = '';
         if (estimatedProfit && estimatedProfit < accountMinimum) {
           lowValueInstruction =
-            `\n--- LOW VALUE RENTAL (CRITICAL) ---\n` +
-            `Estimated earnings: ~£${estimatedProfit}. Minimum earnings threshold: £${accountMinimum}.\n` +
-            `This rental is BELOW the minimum. Follow these phases IN ORDER:\n\n` +
-            `PHASE 1 — Upsell first (always try this first):\n` +
-            `1. Ask what they're shooting — use this to suggest relevant add-ons (lenses, audio, lighting, filters, batteries)\n` +
-            `2. Mention complementary items naturally: "Most people shooting with this also grab a..." \n` +
-            `3. If they only want the single item, still quote it but mention bundle value: "Happy to help! The [item] is ~£X/day. Just so you know, we often bundle it with [accessory] which works out better value"\n\n` +
-            `PHASE 2 — Minimum price option (only if renter clearly declines all add-ons):\n` +
-            `4. Offer: "For this rental the booking total would need to come to at least £${accountMinimum} — would that work?"\n` +
-            `   Frame as standard pricing, NOT as a "minimum". Never say "minimum" to the renter.\n` +
-            `   NEVER mention platform fees, service fees, or any fee structure. Just state the price.\n` +
-            `5. If they agree, include <memory>MINIMUM_PRICE_ACCEPTED</memory> in your response\n` +
-            `6. Do NOT accept or confirm until either upsell succeeds, renter agrees to adjusted price, or Daniel approves\n`;
+            `\n=== LOW VALUE RENTAL — READ THIS BEFORE WRITING ANYTHING ===\n` +
+            `Estimated earnings: ~£${estimatedProfit}. Minimum: £${accountMinimum}.\n\n` +
+            `HARD RULE: DO NOT open your reply by confirming the item is "free", "available", "sorted", or "confirmed".\n` +
+            `DO NOT say "the booking is confirmed", "that works", "you're all set", or anything implying the rental is proceeding.\n` +
+            `The rental CANNOT proceed at this price. Your job is to raise the value first.\n\n` +
+            `PHASE 1 — Upsell (required BEFORE confirming anything):\n` +
+            `1. Acknowledge their question briefly, then IMMEDIATELY pivot to upsell.\n` +
+            `   Example: "The [item] is free for that date — before locking it in, what are you shooting? Most people pair this with a [complementary item] which could be really useful for..."\n` +
+            `2. Suggest 1-2 specific complementary items from our inventory that fit their use case.\n` +
+            `3. If they only want the single item: quote it, then naturally add "We often rent this with [X], which makes the day a lot smoother — happy to add that for £Y."\n\n` +
+            `PHASE 2 — Minimum price (only if renter clearly declines all add-ons):\n` +
+            `4. Offer: "For this rental the booking total would need to come to £${accountMinimum} minimum — would that work for you?"\n` +
+            `   Frame as standard pricing. NEVER say "minimum". NEVER mention platform fees.\n` +
+            `5. If they agree, include <memory>MINIMUM_PRICE_ACCEPTED</memory> in your response.\n\n` +
+            `NEVER confirm, accept, or say the item/booking is sorted until: add-on added OR renter agrees to £${accountMinimum} OR Daniel approves.\n` +
+            `=== END LOW VALUE RULE ===\n`;
         }
 
         // DSPy INTEGRATION: Only use when trained (0 examples = untrained = skip)
@@ -3773,7 +4237,7 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
             ...[inventoryContext, scheduleContext, vacationContext, blacklistContext].filter(Boolean),
             // COMMERCIAL (supplementary): coupons, loyalty vouchers, delivery quotes, low-value guidance
             // Low-value instruction is a business rule (minimum order), NOT optional upselling — always inject
-            ...[couponContext, loyaltyVoucherContext, deliveryQuoteContext, lowValueInstruction].filter(Boolean),
+            ...[couponContext, loyaltyCodeValidation, loyaltyVoucherContext, deliveryQuoteContext, lowValueInstruction].filter(Boolean),
             // CONVERSATION: summary, urgency, welcome-back, multi-rental coordination
             ...[conversationSummary, urgencyContext, welcomeBackContext, multiRentalContext].filter(Boolean),
             // TIME REFERENCES: help AI resolve relative times against rental dates
@@ -3790,6 +4254,18 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           toolHandlers,
         });
 
+        // LOW-VALUE GUARD: If AI still confirms availability/sorted for a below-minimum rental,
+        // log a warning. The strengthened instruction should prevent it, but this catches escapes.
+        if (lowValueInstruction) {
+          const respLower = response.content.toLowerCase();
+          const confirmsWithoutUpsell =
+            /\b(is free|is available|that'?s? (sorted|confirmed|booked|done)|you'?re (all set|sorted)|booking (confirmed|is confirmed)|available for those dates)\b/i.test(response.content) &&
+            !/\b(what are you shooting|what'?s? the shoot|pair|complement|also (grab|add|consider)|most people|bundle|add.{0,30}for)\b/i.test(respLower);
+          if (confirmsWithoutUpsell) {
+            this.logger.warn(`LOW_VALUE_MINIMUM_BYPASS: Rental ${rental.id} (£${estimatedProfit} < £${accountMinimum}) — AI confirmed availability without upsell attempt. Response: "${response.content.substring(0, 120)}"`);
+          }
+        }
+
         // POST-PROCESSING: Clean formatting artifacts before validation
         response.content = response.content
           .replace(/\]\]+/g, '')                 // Strip orphaned ]] brackets
@@ -3798,6 +4274,94 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Strip markdown links, keep text
           .replace(/^\s+|\s+$/g, '')             // Trim leading/trailing whitespace
           .replace(/  +/g, ' ');                 // Collapse double spaces
+
+        // AVAILABILITY CONTRADICTION GUARD (post-generation): Block messages that claim
+        // unavailable items are available, contradicting CalendarService data
+        if (_unavailableItemsForGuard.length > 0) {
+          const _respLower = response.content.toLowerCase();
+          const _contradictionPatterns = [
+            /actually.{0,30}(available|in stock|free|can be booked)/i,
+            /good news.{0,40}(available|in stock|free)/i,
+            / is (available|in stock|free to rent)/i,
+            /happy to confirm.{0,30}(available|availability)/i,
+            /can confirm.{0,30}(available|in stock)/i,
+            /sorry for (the |any )?confusion.{0,40}(available|in stock)/i,
+            /available after all/i,
+            /turns out.{0,30}(available|in stock)/i,
+            /checked and.{0,30}(available|it'?s free)/i,
+          ];
+          let _hasContradiction = false;
+          let _contradictionDetail = '';
+          for (const _uItem of _unavailableItemsForGuard) {
+            const _itemLower = _uItem.toLowerCase();
+            const _itemWords = _itemLower.split(/\s+/);
+            const _shortName = _itemWords.length > 1 ? _itemWords.slice(-2).join(' ') : _itemLower;
+            if (_respLower.includes(_shortName)) {
+              for (const _pat of _contradictionPatterns) {
+                if (_pat.test(response.content)) {
+                  _hasContradiction = true;
+                  _contradictionDetail = `AI claimed "${_uItem}" is available but CalendarService says UNAVAILABLE`;
+                  break;
+                }
+              }
+            }
+            if (_hasContradiction) break;
+          }
+          if (_hasContradiction) {
+            this.logger.warn(`AVAILABILITY CONTRADICTION BLOCKED: ${_contradictionDetail}. Draft: "${response.content.substring(0, 150)}"`);
+            // Escalate to owner via Telegram
+            this.telegramService.sendDecisionPrompt({
+              type: 'escalation',
+              rentalId: String(rental.id),
+              listingId: msg.rentalId,
+              account: (rental.account as 'dbcinema' | 'leo') || 'dbcinema',
+              renterName: msg.sender || rental.renter_info || 'Unknown',
+              renterLastMessage: msg.content,
+              contextSummary: `AVAILABILITY CONTRADICTION: ${_contradictionDetail}`,
+              displayText:
+                `*AVAILABILITY CONTRADICTION BLOCKED*\n\n` +
+                `Rental: ${rental.title}\n` +
+                `Renter: ${msg.sender || rental.renter_info || 'Unknown'}\n` +
+                `Message: "${msg.content.substring(0, 200)}"\n` +
+                `Draft (blocked): "${response.content.substring(0, 200)}"\n\n` +
+                `Reason: ${_contradictionDetail}`,
+              options: [
+                { label: 'Send anyway', emoji: 'Y', intent: 'respond', aiInstruction: '' },
+                { label: 'Rewrite', emoji: 'R', intent: 'respond', aiInstruction: `Rewrite this reply. The item is UNAVAILABLE for the requested dates. Do NOT say it is available. Say it is booked out and suggest alternatives.` },
+                { label: 'Ignore', emoji: 'X', intent: 'ignore', aiInstruction: '' },
+              ],
+              holdMessageSent: false,
+              recommendedReply: response.content,
+            } as any).catch(err => this.logger.warn(`Failed to send contradiction escalation: ${err.message}`));
+
+            // Record as blocked
+            await this.prisma.ai_decision.create({
+              data: {
+                rental_id: rental.id,
+                decision_type: 'message',
+                input_summary: `Message from ${msg.sender}: "${msg.content.substring(0, 200)}"`,
+                output_summary: `BLOCKED - availability contradiction: ${_contradictionDetail}. Draft: "${response.content.substring(0, 200)}"`,
+                confidence: 0.0,
+                action_taken: `BLOCKED - availability contradiction`,
+                was_sent: false,
+              },
+            });
+
+            // Notify on Telegram
+            await this.telegramService.sendRentalUpdate(rental.id, {
+              type: 'message_processed', priority: 'high',
+              data: {
+                renterMsg: msg.content,
+                botReply: response.content,
+                status: 'BLOCKED (availability contradiction)',
+              },
+            }, { rentalTitle: rental.title, renterName: msg.sender || 'Unknown', account: rental.account }).catch(
+              err => this.logger.debug(`Contradiction notification failed: ${err.message}`),
+            );
+
+            return;
+          }
+        }
 
         // PIPELINE SAFETY NET: Apply FILTER + CONTRACT from pipeline (catches physical presence,
         // fabricated quotes, internal actions, upsell violations, intent contract breaches)
@@ -4607,7 +5171,8 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
     const transcript = messages
       .map(m => {
         const role = m.sender ? (m.sender === 'Owner' ? 'Owner' : 'Renter') : (m.role === 'assistant' ? 'Owner' : 'Renter');
-        return `${role}: ${m.content}`;
+        const ts = m.timestamp ? ` [${new Date(m.timestamp).toISOString().replace('T', ' ').substring(0, 16)}]` : '';
+        return `${role}${ts}: ${m.content}`;
       })
       .join('\n');
 
@@ -4690,7 +5255,8 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
     const endDateStr = rental.end_date ? new Date(rental.end_date).toISOString().split('T')[0] : '?';
 
     const extractionPrompt =
-      `You are extracting the FINAL AGREED pickup and return times from a rental equipment chat.\n\n` +
+      `You are extracting the FINAL AGREED pickup and return times from a rental equipment chat.\n` +
+      `Current date/time: ${new Date().toISOString().replace("T", " ").substring(0, 16)} UTC\n\n` +
       `Equipment: ${rental.title}\n` +
       `Rental period: ${startDateStr} to ${endDateStr}\n\n` +
       `=== CONVERSATION ===\n${transcript}\n=== END ===\n\n` +
@@ -4702,7 +5268,7 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
       `- Pickup and return are SEPARATE events — extract each independently from the conversation.\n` +
       `- If only one time was mentioned for "collection" or "pickup and return", use it for both.\n` +
       `- The same HH:MM can appear for BOTH pickup and return (e.g., "11am pickup" AND "11am return" on different days).\n` +
-      `- Convert vague times: "morning" = 10:00, "afternoon" = 14:00, "evening" = 19:00, "noon" = 12:00.\n` +
+      `- Convert vague times: "morning" = 10:00, "evening" = 19:00, "noon" = 12:00. There is no afternoon slot — if renter said "afternoon", flag in NOTES.\n` +
       `- If AM/PM is missing, infer from context (rental pickups are usually daytime: 8-11 = AM, 12-21 = as-is).\n` +
       `- Times like "7pm" = 19:00, "10am" = 10:00, "6.30" with PM context = 18:30.\n` +
       `- If no times were discussed at all, output NONE for both.\n` +
@@ -4714,7 +5280,9 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
       `- Pickup can be the EVENING BEFORE the rental starts (e.g., evening of ${startDateStr} minus 1 day).\n` +
       `- Return can be the MORNING AFTER the rental ends (e.g., morning of ${endDateStr} plus 1 day).\n` +
       `- Determine the actual date for pickup and return from context (day mentioned, "tomorrow", "next day", etc).\n` +
-      `- If no specific date context, ALWAYS default pickup to ${startDateStr} and return to ${endDateStr}. NEVER output NONE for dates — use the rental period dates as the default.\n\n` +
+      `- Messages include timestamps [YYYY-MM-DD HH:MM] — use these to resolve "today", "tonight", "tomorrow" relative to when the message was sent.\n` +
+      `- Example: if a renter says "tonight 8pm" in a message timestamped [2026-03-09], pickup date = 2026-03-09, not the rental start date.\n` +
+      `- If no specific date context AND no timestamps help, default pickup to ${startDateStr} and return to ${endDateStr}. NEVER output NONE for dates.\n\n` +
       `DELIVERY METHOD DETECTION:\n` +
       `- Determine if pickup and/or return is via Addison Lee courier DELIVERY or in-person COLLECTION.\n` +
       `- ONLY mark as DELIVERY if the courier was ACTUALLY BOOKED/CONFIRMED in the conversation.\n` +

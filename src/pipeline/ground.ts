@@ -82,7 +82,12 @@ export function buildKnownFacts(facts: FactPack): string[] {
   // Availability
   if (facts.availability) {
     for (const item of facts.availability.items) {
-      entries.push(`${item.item}: ${item.available ? 'available' : 'unavailable'} (${item.booked}/${item.maxQuantity} booked)`);
+      let status = item.available ? 'available' : 'unavailable';
+      const timeNotes: string[] = [];
+      if (item.availableFrom) timeNotes.push(`available from ${item.availableFrom}`);
+      if (item.unavailableAfter) timeNotes.push(`must return before ${item.unavailableAfter}`);
+      const timeSuffix = timeNotes.length > 0 ? ` (${timeNotes.join(', ')})` : '';
+      entries.push(`${item.item}: ${status}${timeSuffix} (${item.booked}/${item.maxQuantity} booked)`);
     }
   }
 
@@ -93,7 +98,7 @@ export function buildKnownFacts(facts: FactPack): string[] {
   if (isPostBooking) {
     entries.push('Pickup location: ' + (acct === 'leo' ? '5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret' : 'Statue of James II, 11 Trafalgar Square, London WC2N 5DN'));
   } else {
-    entries.push('Pickup location: Central London near ' + (acct === 'leo' ? 'Charing Cross' : 'Trafalgar Square') + ' — exact address sent after booking confirmed');
+    entries.push('Pickup location: ' + (acct === 'leo' ? 'near Charing Cross Road in Central London' : 'Trafalgar Square, Central London') + ' — exact address sent after booking confirmed');
   }
 
   // What the agent IS and ISN'T

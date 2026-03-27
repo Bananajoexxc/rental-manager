@@ -16,50 +16,10 @@ export class MarketService {
   ) {}
 
   async scrapeTopLondonAccounts(): Promise<number> {
-    this.logger.log('Scraping Fat Llama market data...');
-    let savedCount = 0;
-
-    const searchTerms = [
-      'camera rental london',
-      'sony fx3 rental london',
-      'drone rental london',
-      'lighting rental london',
-      'gimbal rental london',
-      'dj equipment rental london',
-    ];
-
-    for (const term of searchTerms) {
-      try {
-        const resp = await axios.get('https://fatllama.com/search', {
-          params: { q: term, lat: 51.508, lng: -0.1281 },
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; market-research)' },
-          timeout: 10000,
-        });
-
-        if (typeof resp.data === 'string') {
-          // Parse basic listing data from HTML
-          const listings = this.parseListingsFromHtml(resp.data);
-          for (const listing of listings) {
-            await this.prisma.market_snapshot.create({
-              data: {
-                competitor: listing.lender || 'unknown',
-                item_name: listing.title || term,
-                price_daily: listing.price,
-                review_count: listing.reviews,
-                avg_rating: listing.rating,
-                listing_url: listing.url,
-              },
-            });
-            savedCount++;
-          }
-        }
-      } catch (error) {
-        this.logger.warn(`Market scrape failed for "${term}": ${error.message}`);
-      }
-    }
-
-    this.logger.log(`Scraped ${savedCount} market listings`);
-    return savedCount;
+    // DISABLED: Fat Llama rebranded to Hygglo. This scraper targets dead URLs.
+    // Competitor intel is handled by competitor-intel.service.ts using the Hygglo API.
+    this.logger.warn('MarketService.scrapeTopLondonAccounts() is disabled - Fat Llama no longer exists.');
+    return 0;
   }
 
   private parseListingsFromHtml(html: string): { title?: string; price?: number; reviews?: number; rating?: number; lender?: string; url?: string }[] {
@@ -146,7 +106,7 @@ export class MarketService {
   }
 
   // Sunday 6pm - before the weekly summary at 8pm
-  @Cron('0 18 * * 0')
+  // @Cron('0 18 * * 0') // DISABLED: Fat Llama scraper is dead
   async weeklyMarketScrape() {
     this.logger.log('Running weekly market scrape...');
 
@@ -175,7 +135,7 @@ export class MarketService {
     if (recent) return recent.content;
 
     // Generate fresh
-    await this.scrapeTopLondonAccounts();
-    return this.generateWeeklyReport();
+    // Fat Llama scraper is dead - return a message instead of scraping
+    return 'Market scraping is disabled (Fat Llama rebranded to Hygglo). Use competitor-intel for market data.';
   }
 }
