@@ -822,6 +822,29 @@ export function filterResponse(
     }
   }
 
+  // --- 23. LOW-VALUE RENTAL: Block acceptance without upsell ---
+  if (factPack?.lowValueInstruction) {
+    const acceptsLowValue = /(available|free for|sorted|confirmed|all set|good to go|booked for you|locked in|reserved for you)/i.test(text);
+    const hasUpsellOrMinimum = /(what are you shooting|what.{0,5}the shoot|pair|complement|also.{0,5}(grab|add|consider)|most people|bundle|add.{0,30}for|minimum|booking total|together with)/i.test(text);
+    if (acceptsLowValue && !hasUpsellOrMinimum) {
+      const minMatch = (factPack.lowValueInstruction as string).match(/Minimum:.{0,3}(\d+)/);
+      const minimum = minMatch ? minMatch[1] : '25';
+      text = "That's available for those dates! What are you shooting? Most people pair this with a complementary item - happy to suggest something. Our minimum booking is £" + minimum + ".";
+      issues.push({ type: 'LOW_VALUE_BLOCK' as any, detail: 'Response confirmed sub-minimum rental without upsell. Rewritten.', action: 'rewritten' });
+    }
+  }
+
+  // --- 24. TIME WITHOUT LOCATION: Always pair time slots with pickup location ---
+  if (/(10\s*am|10am|7\s*-?\s*9\s*pm|7pm|morning.{0,10}slot|evening.{0,10}slot)/i.test(text) &&
+      !/(trafalgar|charing cross|pall mall|central london|meeting point|address|5BF|WC2N)/i.test(text)) {
+    const acct = factPack?.rental?.account || account || 'dbcinema';
+    const locationArea = acct === 'leo'
+      ? 'near Charing Cross Road in Central London'
+      : 'at Trafalgar Square, Central London';
+    text = text.replace(/((?:10am[- ]?12pm|7[- ]?9pm)[^.?!]*?)([.?!])/i, '$1 ' + locationArea + '$2');
+    issues.push({ type: 'TIME_WITHOUT_LOCATION' as any, detail: 'Injected pickup location with time slots.', action: 'rewritten' });
+  }
+
   return {
     response: text,
     issues,

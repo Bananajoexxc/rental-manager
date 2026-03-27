@@ -3933,6 +3933,7 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           `${itemAvailabilityBlock || hasPricingIntent || isEarlyStage ? `INVENTORY: ${getInventoryItemNames().join(', ')}.\n` : ''}` +
           `${['inquiry', 'interest'].includes(currentStage) ? 'If renter hasn\'t said what the shoot is for, ask casually.\n' : ''}` +
           `RETURN CLOSURE RULE: If the renter asks you to mark the rental as returned or close/end it, explain that the equipment is still being inspected and you usually aim to close open rentals within 24–72 hours after return, though in edge cases it might take a bit longer. Do NOT mark anything as returned yourself.\n` +
+          `YOUR PICKUP LOCATION: ${accountName === 'leo' ? 'near Charing Cross Road in Central London' : 'Trafalgar Square, Central London'}. ALWAYS mention this when discussing pickup times or slots.\n` +
           `Lead with the answer. Short paragraphs. Plain text, no markdown. No preamble.`;
 
         // URGENCY CONTEXT: How soon does the rental start?
@@ -4128,6 +4129,8 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
             `   Example: "The [item] is free for that date — before locking it in, what are you shooting? Most people pair this with a [complementary item] which could be really useful for..."\n` +
             `2. Suggest 1-2 specific complementary items from our inventory that fit their use case.\n` +
             `3. If they only want the single item: quote it, then naturally add "We often rent this with [X], which makes the day a lot smoother — happy to add that for £Y."\n\n` +
+            `DO NOT suggest SD cards, batteries, chargers, straps, cables, or lens caps as add-ons - these are INCLUDED FREE with every camera rental. Suggest actual equipment: lenses, lights, microphones, tripods, gimbals, monitors.
+` +
             `PHASE 2 — Minimum price (only if renter clearly declines all add-ons):\n` +
             `4. Offer: "For this rental the booking total would need to come to £${accountMinimum} minimum — would that work for you?"\n` +
             `   Frame as standard pricing. NEVER say "minimum". NEVER mention platform fees.\n` +
@@ -4254,18 +4257,16 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           toolHandlers,
         });
 
-        // LOW-VALUE GUARD: If AI still confirms availability/sorted for a below-minimum rental,
-        // log a warning. The strengthened instruction should prevent it, but this catches escapes.
+                // LOW-VALUE GUARD: HARD BLOCK - if AI confirms availability without upselling, rewrite the response
         if (lowValueInstruction) {
           const respLower = response.content.toLowerCase();
-          const confirmsWithoutUpsell =
-            /\b(is free|is available|that'?s? (sorted|confirmed|booked|done)|you'?re (all set|sorted)|booking (confirmed|is confirmed)|available for those dates)\b/i.test(response.content) &&
-            !/\b(what are you shooting|what'?s? the shoot|pair|complement|also (grab|add|consider)|most people|bundle|add.{0,30}for)\b/i.test(respLower);
-          if (confirmsWithoutUpsell) {
-            this.logger.warn(`LOW_VALUE_MINIMUM_BYPASS: Rental ${rental.id} (£${estimatedProfit} < £${accountMinimum}) — AI confirmed availability without upsell attempt. Response: "${response.content.substring(0, 120)}"`);
+          const confirmsAvailability = /(available|free for|sorted|confirmed|all set|good to go|booked for you|locked in|reserved)/i.test(response.content);
+          const hasUpsellAttempt = /(what are you shooting|what.{0,5}the shoot|pair|complement|also.{0,5}(grab|add|consider)|most people|bundle|add.{0,30}for|minimum|booking total|together with)/i.test(respLower);
+          if (confirmsAvailability && !hasUpsellAttempt) {
+            this.logger.warn("LOW_VALUE_HARD_BLOCK: Rental " + rental.id + " (GBP" + estimatedProfit + " < GBP" + accountMinimum + ") - AI confirmed without upsell. REWRITING.");
+            response.content = "That's available for those dates! What are you shooting? Most people pair this with a complementary item - happy to suggest something that'd work well for your setup.";
           }
         }
-
         // POST-PROCESSING: Clean formatting artifacts before validation
         response.content = response.content
           .replace(/\]\]+/g, '')                 // Strip orphaned ]] brackets
@@ -4368,7 +4369,12 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
         try {
           const pipelineClassification = classifyMessage(msg.content, conversationHistory);
           // L6 FILTER
-          const filterResult = filterResponse(response.content, conversationHistory, msg.content, rental.account || 'dbcinema', currentStage);
+          // Build minimal factPack for filter (low-value + location enforcement)
+          const filterFactPack = {
+            lowValueInstruction: lowValueInstruction || undefined,
+            rental: { account: rental.account || 'dbcinema' },
+          };
+          const filterResult = filterResponse(response.content, conversationHistory, msg.content, rental.account || 'dbcinema', currentStage, filterFactPack);
           if (filterResult.issues.length > 0) {
             response.content = filterResult.response;
             this.logger.debug(`[Autonomous] Pipeline FILTER: ${filterResult.issues.length} issues fixed: ${filterResult.issues.map(i => i.type).join(', ')}`);
