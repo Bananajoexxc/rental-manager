@@ -296,10 +296,11 @@ function buildHardTruths(
     const startDate = facts.rental.startDate || undefined;
     const endDate = facts.rental.endDate || undefined;
     if (startDate) {
+      const pickupArea = facts.rental.account === 'leo' ? 'near Charing Cross Road' : 'at Trafalgar Square';
       truths.push('RENTAL DATES: Starts ' + startDate + (endDate ? ', ends ' + endDate : '') + '. ' +
         'Pickup is on the START date (not the day before). ' +
         'Do NOT suggest pickup on ' + (startDate ? 'the day before unless the renter specifically asks about evening-before pickup' : 'a different date') + '. ' +
-        'Quote times for the actual start date: 10am-12pm or 7-9pm.');
+        'Quote times for the actual start date: 10am-12pm or 7-9pm ' + pickupArea + '.');
     }
   }
 

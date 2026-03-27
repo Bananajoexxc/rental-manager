@@ -148,7 +148,7 @@ export interface FactPack {
 
 // Layer 5: Verification result
 export interface VerificationIssue {
-  type: 'PRICE_MISMATCH' | 'ITEM_MISMATCH' | 'AVAILABILITY_LIE' | 'UNVERIFIED_UNAVAILABILITY' | 'UPSELL_VIOLATION' | 'REPETITION';
+  type: 'PRICE_MISMATCH' | 'ITEM_MISMATCH' | 'AVAILABILITY_LIE' | 'UNVERIFIED_UNAVAILABILITY' | 'UPSELL_VIOLATION' | 'REPETITION' | 'LOW_VALUE_ACCEPTANCE';
   detail: string;
 }
 

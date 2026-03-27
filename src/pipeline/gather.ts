@@ -247,6 +247,18 @@ export async function gatherFacts(
       renterPrice: rental.renter_price,
       days,
     };
+    // LOW-VALUE RENTAL DETECTION
+    const ACCOUNT_MIN: Record<string, number> = { dbcinema: 20, leo: 25 };
+    const accountMinimum = ACCOUNT_MIN[facts.rental.account] || 20;
+    const estimatedEarnings = facts.rental.rentalPrice || null;
+    if (estimatedEarnings && estimatedEarnings < accountMinimum) {
+      facts.lowValueInstruction =
+        '\n=== LOW VALUE RENTAL — HARD BLOCK ===\n' +
+        'Owner earnings: ~£' + estimatedEarnings + '. Minimum: £' + accountMinimum + '.\n' +
+        'DO NOT confirm this rental at current price. DO NOT say "available", "sorted", "confirmed", or "all set".\n' +
+        'Instead: (1) Suggest complementary add-on items, (2) If declined, state minimum booking total of £' + accountMinimum + '.\n' +
+        '=== END LOW VALUE BLOCK ===\n';
+    }
   }
 
   // --- Determine what on-demand facts are needed ---

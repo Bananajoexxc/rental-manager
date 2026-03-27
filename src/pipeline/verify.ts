@@ -137,6 +137,19 @@ export function verifyResponse(response: string, facts: FactPack): VerificationR
     }
   }
 
+
+  // 6. LOW-VALUE ACCEPTANCE CHECK
+  if (facts.lowValueInstruction) {
+    const acceptancePatterns = /\b(available|free|sorted|confirmed|all set|booked|good to go|locked in|reserved|that works|sounds good|happy to confirm)\b/i;
+    const upsellPatterns = /\b(also|add|pair|bundle|complement|suggest|recommend|together with|minimum|booking total)\b/i;
+    if (acceptancePatterns.test(response) && !upsellPatterns.test(response)) {
+      issues.push({
+        type: 'LOW_VALUE_ACCEPTANCE',
+        detail: 'Response confirms a sub-minimum rental without upselling or stating minimum',
+      });
+    }
+  }
+
   return {
     passed: issues.length === 0,
     issues,

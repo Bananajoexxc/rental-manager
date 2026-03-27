@@ -17,7 +17,7 @@ import { QUALIFY_PATTERNS } from './patterns';
  */
 
 export interface FilterIssue {
-  type: 'PHYSICAL_PRESENCE' | 'FABRICATED_QUOTE' | 'INTERNAL_ACTION' | 'PLATFORM_LEAK' | 'TIME_LOGIC' | 'SELF_CONTRADICTION' | 'TIMESTAMP' | 'FORMATTING' | 'MARKETING_ITEM_AVAILABLE' | 'INVALID_TIME_ACCEPTED' | 'PROACTIVE_DELIVERY' | 'QUALIFY_QUESTION_SPAM' | 'CHAIN_OF_THOUGHT' | 'EQUIPMENT_SUBSTITUTION' | 'TIMING_CAPITULATION' | 'NON_INVENTORY_ADDON' | 'MISSED_ARRIVAL' | 'PROACTIVE_EXTRA_DAY_WARNING' | 'VAGUE_CONFIRMED_LOCATION' | 'PRICE_HALLUCINATION' | 'ACCESSORY_CHARGED_SEPARATELY' | 'PREMATURE_CONFIRMATION' | 'FALSE_ACTION_CLAIM';
+  type: 'PHYSICAL_PRESENCE' | 'FABRICATED_QUOTE' | 'INTERNAL_ACTION' | 'PLATFORM_LEAK' | 'TIME_LOGIC' | 'SELF_CONTRADICTION' | 'TIMESTAMP' | 'FORMATTING' | 'MARKETING_ITEM_AVAILABLE' | 'INVALID_TIME_ACCEPTED' | 'PROACTIVE_DELIVERY' | 'QUALIFY_QUESTION_SPAM' | 'CHAIN_OF_THOUGHT' | 'EQUIPMENT_SUBSTITUTION' | 'TIMING_CAPITULATION' | 'NON_INVENTORY_ADDON' | 'MISSED_ARRIVAL' | 'PROACTIVE_EXTRA_DAY_WARNING' | 'VAGUE_CONFIRMED_LOCATION' | 'PRICE_HALLUCINATION' | 'ACCESSORY_CHARGED_SEPARATELY' | 'PREMATURE_CONFIRMATION' | 'FALSE_ACTION_CLAIM' | 'LOW_VALUE_BLOCK';
   detail: string;
   action: 'stripped' | 'rewritten' | 'flagged' | 'block';
 }
@@ -800,6 +800,27 @@ export function filterResponse(
     }
   }
 
+
+
+  // --- 23. LOW-VALUE RENTAL: Block acceptance without upsell ---
+  if (factPack?.lowValueInstruction) {
+    const acceptsLowValue = /\b(available|free for|sorted|confirmed|all set|booked for you|good to go|locked in|reserved for you)\b/i.test(text);
+    const hasUpsellOrMinimum = /\b(also|add|pair|bundle|minimum|booking total|complement|together with|suggest|recommend)\b/i.test(text);
+    if (acceptsLowValue && !hasUpsellOrMinimum) {
+      const minMatch = factPack.lowValueInstruction.match(/Minimum: £(\d+)/);
+      const minimum = minMatch ? minMatch[1] : '25';
+      // Rewrite the acceptance into an upsell nudge
+      text = text.replace(
+        /^(Hey|Hi|Hello)?[^.!?]*?(available|free|sorted|confirmed)[^.!?]*[.!?]/i,
+        "I'd love to help with that! Before confirming, most people pair this with a complementary item for their shoot. What are you working on? Our minimum booking is £" + minimum + '.'
+      );
+      issues.push({
+        type: 'LOW_VALUE_BLOCK',
+        detail: 'Blocked acceptance of sub-minimum rental. Rewrote to upsell/minimum notice (GBP ' + minimum + ').',
+        action: 'rewritten',
+      });
+    }
+  }
 
   return {
     response: text,
