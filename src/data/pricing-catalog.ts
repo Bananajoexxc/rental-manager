@@ -126,6 +126,7 @@ export const PRICING_CATALOG: PricingEntry[] = [
   { item_name: 'V-mount 150mAh', category: 'power', daily_price_min: 20, daily_price_max: 28, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'Anker Power Station F2000', category: 'power', daily_price_min: 25, daily_price_max: 35, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'Sony NP-FZ100 batteries 2x sets', category: 'power', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
+  { item_name: 'Sony NP-F970 batteries 2x sets', category: 'power', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
   { item_name: 'DJI gimbal battery', category: 'power', daily_price_min: 5, daily_price_max: 8, is_bundle: false, multi_day_notes: '3 days ~2.5x, 7 days ~5x' },
 
   // ──────────────────────────────────────────

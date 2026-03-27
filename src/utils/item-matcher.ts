@@ -350,6 +350,7 @@ export const ACCESSORY_ITEMS = new Set([
   '256GB card',
   'DJI gimbal battery',
   'Sony NP-FZ100 batteries 2x sets',
+  'Sony NP-F970 batteries 2x sets',
   'V-mount 95mAh',
   'V-mount 150mAh',
   'Suction cups',
@@ -439,6 +440,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   'V-mount 95mAh': 2,
   'V-mount 150mAh': 4,
   'Sony NP-FZ100 batteries 2x sets': 4,
+  'Sony NP-F970 batteries 2x sets': 4,
   'DJI gimbal battery': 3,
   'Anker Power Station F2000': 1,
   // Support & gimbals

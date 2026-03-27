@@ -4116,6 +4116,10 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
             }
           } catch { /* non-critical */ }
         }
+        // Last-resort fallback: use renter_price * 0.64 if no other estimate
+        if (!estimatedProfit && rental.renter_price) {
+          estimatedProfit = Math.round(rental.renter_price * 0.64);
+        }
         let lowValueInstruction = '';
         if (estimatedProfit && estimatedProfit < accountMinimum) {
           lowValueInstruction =

@@ -250,7 +250,7 @@ export async function gatherFacts(
     // LOW-VALUE RENTAL DETECTION
     const ACCOUNT_MIN: Record<string, number> = { dbcinema: 20, leo: 25 };
     const accountMinimum = ACCOUNT_MIN[facts.rental.account] || 20;
-    const estimatedEarnings = facts.rental.rentalPrice || null;
+    const estimatedEarnings = facts.rental.rentalPrice || (facts.rental.renterPrice ? Math.round(facts.rental.renterPrice * 0.64) : null);
     if (estimatedEarnings && estimatedEarnings < accountMinimum) {
       facts.lowValueInstruction =
         '\n=== LOW VALUE RENTAL — HARD BLOCK ===\n' +

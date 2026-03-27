@@ -97,7 +97,7 @@ export const CANONICAL_MAP: Record<string, string> = {
   'DJI RS3 Pro': 'DJI RS3 Pro gimbal',
   'DJI RS 3 Pro': 'DJI RS3 Pro gimbal',
   'DJI RS3': 'DJI RS3 Pro gimbal',
-  'Sony NPF 970 batteries 2x sets': 'Sony NP-FZ100 batteries 2x sets',
+  'Sony NPF 970 batteries 2x sets': 'Sony NP-F970 batteries 2x sets',
   'Sony NP-FZ100 battery': 'Sony NP-FZ100 batteries 2x sets',
 };
 

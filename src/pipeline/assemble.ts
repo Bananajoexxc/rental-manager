@@ -240,6 +240,7 @@ function buildHardTruths(
       'No strap included with FX3 (cinema camera, not photo camera).\n' +
       'EXTRA batteries or cards beyond the base kit can be added for a fee if renter asks.');
     truths.push('BOOM MIC SET (2 available): Each includes Sennheiser MKE 600 + boom pole + shock mount + Zoom H5 recorder + XLR cable + dead cat windshield + SD card. Full kit value £777. All included in the rental price — never charge for individual components.');
+    truths.push("BATTERY TYPES: NP-FZ100 = Sony mirrorless camera batteries (FX3, A7 III, A7 V, A7 II). NP-F970/NPF-970 = DIFFERENT battery type for monitors (Atomos Ninja), LED panels, and external devices. These are NOT interchangeable. Never suggest NP-F970 as a camera battery or associate them with camera kits.");
     // Inject available listings so bot knows what camera+lens combos exist
     const listingRef = getCompactListingReference();
     if (listingRef) {
