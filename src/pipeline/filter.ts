@@ -802,6 +802,15 @@ export function filterResponse(
 
 
 
+  // --- 22b. GEAR RECEIPT CONFIRMATION: Never confirm gear was received back ---
+  {
+    const confirmsReceipt = /(all received|got it back|equipment received|gear received|all good on the return|return(ed)? (complete|successful|confirmed)|everything.{0,15}(back|returned|received)|thanks for (returning|dropping|bringing).{0,20}(back|it)|received.{0,10}(back|thanks)|cheers for (returning|dropping|bringing))/i.test(text);
+    if (confirmsReceipt) {
+      text = "Thanks, give me a moment!";
+      issues.push({ type: 'GEAR_RECEIPT_CONFIRMED' as any, detail: 'Bot confirmed gear receipt. Daniel must inspect first. Replaced with hold message.', action: 'rewritten' });
+    }
+  }
+
   // --- 23. LOW-VALUE RENTAL: Block acceptance without upsell ---
   if (factPack?.lowValueInstruction) {
     const acceptsLowValue = /\b(available|free for|sorted|confirmed|all set|booked for you|good to go|locked in|reserved for you)\b/i.test(text);
@@ -819,6 +828,15 @@ export function filterResponse(
         detail: 'Blocked acceptance of sub-minimum rental. Rewrote to upsell/minimum notice (GBP ' + minimum + ').',
         action: 'rewritten',
       });
+    }
+  }
+
+  // --- 22b. GEAR RECEIPT CONFIRMATION: Never confirm gear was received back ---
+  {
+    const confirmsReceipt = /(all received|got it back|equipment received|gear received|all good on the return|return(ed)? (complete|successful|confirmed)|everything.{0,15}(back|returned|received)|thanks for (returning|dropping|bringing).{0,20}(back|it)|received.{0,10}(back|thanks)|cheers for (returning|dropping|bringing))/i.test(text);
+    if (confirmsReceipt) {
+      text = "Thanks, give me a moment!";
+      issues.push({ type: 'GEAR_RECEIPT_CONFIRMED' as any, detail: 'Bot confirmed gear receipt. Daniel must inspect first. Replaced with hold message.', action: 'rewritten' });
     }
   }
 
