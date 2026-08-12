@@ -274,8 +274,9 @@ export const OWNED_ITEM_COSTS: Record<string, number> = {
   'ND filter': 100,
   'Cinebloom filter mist': 80,
   '256GB card': 30,
-  'CF Express Type A card': 120,
+  'CF Express Type A card': 200,  // avg price across 1x 160GB + 2x 320GB
   // Accessories
+  'SmallRig FX3 cage': 150,
   'Suction cups': 40,
   // Mount adapters
   'PL to Sony E mount': 200,

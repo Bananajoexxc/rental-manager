@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import axios from 'axios';
-import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
 import { RevenueService } from '../revenue/revenue.service';
+import { AiService } from '../ai/ai.service';
 import { getItemPrice, getOneDayPrice, PRICING_CATALOG } from '../data/pricing-catalog';
 import { findBestMatch, getInventoryItemNames, isAccessoryItem, MASTER_INVENTORY } from '../utils/item-matcher';
 
@@ -189,17 +189,13 @@ function isValidCompetitorMatch(inventoryItem: string, competitorTitle: string):
 @Injectable()
 export class CompetitorIntelService {
   private readonly logger = new Logger(CompetitorIntelService.name);
-  private readonly claude: Anthropic;
-  private readonly model: string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly revenueService: RevenueService,
-  ) {
-    this.claude = new Anthropic({ apiKey: this.configService.get('ANTHROPIC_API_KEY') });
-    this.model = this.configService.get('CLAUDE_MODEL_COMPLEX') || 'claude-sonnet-4-6-20250514';
-  }
+    private readonly aiService: AiService,
+  ) {}
 
   // ────────────── SCRAPING ──────────────
 
@@ -928,19 +924,11 @@ Format your response as JSON array:
 [{"title":"...","description":"...","opportunityType":"pricing_gap|inventory_gap|service_gap|bundle_idea","confidence":"high|medium|low"}]`;
 
     try {
-      const response = await this.claude.messages.create({
-        model: this.model,
-        max_tokens: 2000,
-        system: 'You are a camera rental business strategist. Respond ONLY with the JSON array requested. No preamble, no disclaimers, no role refusals.',
-        messages: [{ role: 'user', content: prompt }],
-      });
+      const aiPrompt = `You are a camera rental business strategist. Respond ONLY with the JSON array requested. No preamble, no disclaimers, no role refusals.\n\n${prompt}`;
+      const response = await this.aiService.processExtraction(aiPrompt, { maxTokens: 2000 });
+      const content = response.content;
 
-      const content = response.content
-        .filter(b => b.type === 'text')
-        .map(b => (b as Anthropic.TextBlock).text)
-        .join('\n');
-
-      this.logger.log(`Insight AI: model=${this.model}, in=${response.usage.input_tokens}, out=${response.usage.output_tokens}`);
+      this.logger.log(`Insight AI: model=${response.model}, in=${response.inputTokens}, out=${response.outputTokens}`);
 
       // Parse JSON from response
       const jsonMatch = content.match(/\[[\s\S]*\]/);
@@ -1113,19 +1101,11 @@ Format as JSON array:
 [{"title":"...","description":"...","type":"new_acquisition|add_unit|bundle_listing|addon|gear_switch","estimatedCost":"£X","estimatedReturn":"£X/mo","confidence":"high|medium|low"}]`;
 
     try {
-      const response = await this.claude.messages.create({
-        model: this.model,
-        max_tokens: 3000,
-        system: 'You are a camera rental business investment advisor. Respond ONLY with the JSON array requested. No preamble.',
-        messages: [{ role: 'user', content: prompt }],
-      });
+      const aiPrompt = `You are a camera rental business investment advisor. Respond ONLY with the JSON array requested. No preamble.\n\n${prompt}`;
+      const response = await this.aiService.processExtraction(aiPrompt, { maxTokens: 3000 });
+      const content = response.content;
 
-      const content = response.content
-        .filter(b => b.type === 'text')
-        .map(b => (b as Anthropic.TextBlock).text)
-        .join('\n');
-
-      this.logger.log(`Budget insights (${budget}): model=${this.model}, in=${response.usage.input_tokens}, out=${response.usage.output_tokens}`);
+      this.logger.log(`Budget insights (${budget}): model=${response.model}, in=${response.inputTokens}, out=${response.outputTokens}`);
 
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       let recommendations: any[] = [];

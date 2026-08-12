@@ -269,6 +269,7 @@ export class RenterProfileService {
     end_date: Date | null;
     rental_price: number | null;
     account: string | null;
+    listing_location: string | null;
   }[]> {
     const PENDING_STATUSES = ['pending', 'pending_review', 'upcoming'];
 
@@ -287,6 +288,7 @@ export class RenterProfileService {
                 end_date: true,
                 rental_price: true,
                 account: true,
+                listing_location: true,
               },
             },
           },

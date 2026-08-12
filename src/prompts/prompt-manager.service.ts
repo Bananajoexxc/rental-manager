@@ -1180,12 +1180,17 @@ FORBIDDEN (even post-confirmation): "the Pret", "outside the Pret", "the gallery
     const isConfirmed = stage === 'confirmed';
     const isDead = stage === 'dead';
 
-    // ALL components always included — keeps system prompt IDENTICAL across calls
-    // so Anthropic's 5-min prompt cache is reusable. The ~2-3K extra tokens per call
-    // ($0.008) is far cheaper than the 25% cache write penalty on every miss.
-    // Old intent-gating saved ~2-4K tokens but broke cache reuse (21.7% hit rate).
+    // Stage-gated context components. We partition the cache into THREE stable
+    // variants (not per-intent) so each variant accumulates enough in-window hits
+    // to stay warm. Prior per-intent gating fragmented cache to 21.7% hit rate;
+    // per-stage gating has far lower variance (stages change slowly, intents jump).
+    //
+    //   pre-confirmed  -> all components (negotiation still possible)
+    //   confirmed      -> drop enquiry_handling (pre-booking shopping guidance, N/A now)
+    //   dead           -> drop pricing/inventory/delivery/compat/enquiry
+    //                     (rental cancelled; tail chatter only — no upsell needed)
     if (contextType === 'message' || contextType === 'analysis') {
-      const contextComponents: string[] = [
+      const allContextComponents: string[] = [
         'pricing_domain',
         'delivery_domain',
         'compatibility_rules',
@@ -1195,6 +1200,19 @@ FORBIDDEN (even post-confirmation): "the Pret", "outside the Pret", "the gallery
         'time_booking_rules',
         'enquiry_handling',
       ];
+
+      // Which components to DROP at each stage (empty = keep all).
+      const dropAtConfirmed = new Set(['enquiry_handling']);
+      const dropAtDead = new Set([
+        'pricing_domain',
+        'delivery_domain',
+        'compatibility_rules',
+        'inventory_knowledge',
+        'enquiry_handling',
+      ]);
+
+      const droppedSet = isDead ? dropAtDead : (isConfirmed ? dropAtConfirmed : new Set<string>());
+      const contextComponents = allContextComponents.filter(n => !droppedSet.has(n));
 
       for (const name of contextComponents) {
         const content = this.cachedComponents.get(name);

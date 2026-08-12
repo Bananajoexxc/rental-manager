@@ -2,7 +2,7 @@
  * OpenAI AI Service — Drop-in replacement using GPT-4.1 mini.
  *
  * Implements the same interface (processRoutine, processComplex, processAdaptive,
- * processExtraction, processExtractionComplex, processLightweight) so the pipeline
+ * processExtraction, processLightweight, processRoutineWithThinking) so the pipeline
  * and all consumers work without changes.
  *
  * Key advantages vs Gemini:
@@ -362,18 +362,19 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
     return this.callOpenAI(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true }, context.maxTokens || 150);
   }
 
-  async processExtractionComplex(
-    userMessage: string,
-    context: Omit<AiContext, 'rules' | 'memories'> = {},
-  ): Promise<AiResponse> {
-    return this.callOpenAI(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true, maxTokens: 1024 }, 1024);
-  }
-
   async processLightweight(
     userMessage: string,
     context: AiContext = {},
   ): Promise<AiResponse> {
     return this.callOpenAI(userMessage, context, 200);
+  }
+
+  // OpenAI has no thinking primitive — alias the Haiku-thinking tier to complex
+  async processRoutineWithThinking(
+    userMessage: string,
+    context: AiContext = {},
+  ): Promise<AiResponse> {
+    return this.processComplex(userMessage, context);
   }
 
   // ─── Core OpenAI API call with retry ───

@@ -957,25 +957,73 @@ export class SellRecommenderService {
       const cached = cacheMap.get(itemName);
       const purchasePrice = getOwnedItemCost(itemName);
 
-      // Conservative price: 25th percentile from sold_prices array
-      let resalePrice: number | null = null;
-      let sampleCount = 0;
+      // Researched price overrides (Apr 2026, MPB/eBay UK -5% from MPB sources)
+      const PRICE_OVERRIDES: Record<string, number> = {
+        'Sony FX3': 3135,              // MPB £3,300 -5%
+        'Sony A7 III': 665,            // MPB £700 -5%
+        'Sony A7 II': 380,             // MPB -5%
+        'Sony GM 24-70mm f2.8': 900,   // MPB £950 -5%
+        'Sony GM 16-35mm f2.8': 900,   // MPB £950 -5%
+        'Sony GM 70-200mm f2.8': 1140, // MPB £1,200 -5%
+        'Sony GM 90mm f2.8': 450,      // MPB £475 -5%
+        'Fujifilm X100 VI': 1450,      // holds value, high demand
+        'BMPCC 6K Pro': 900,           // CameraPriceBuster ~£950 -5%
+        'BMPCC 6K Full Frame': 1615,   // £1,700 -5%
+        'DJI RS3 Pro gimbal': 335,     // MPB £350 -5%
+        'DJI Mavic 3 Pro': 1045,       // MPB £1,100 -5%
+        'DJI Mini 4 Pro': 450,         // MPB £475 -5%
+        'DJI Osmo Action Pro 5': 225,  // MPB £235 -5%
+        'GoPro 12 Hero': 205,          // MPB £215 -5%
+        'Atomos Ninja V': 285,         // CameraPriceBuster £300 -5%
+        'Nanlite Forza 300': 335,      // ~£350 -5%
+        'Nanlite Pavotube 30x II': 285,// ~£300 -5%
+        'Nanlite 500B': 430,           // estimate ~£450 -5%
+        'Rode Wireless Mic Pro set': 190, // ~£200 -5%
+        'Hollyland Mars 4K transmitter': 260, // ~£275 -5%
+        'Hollyland Pyro S transmitter': 330,  // holds value
+        'Hollyland 7-inch monitor': 305,      // ~£320 -5%
+        'DJ RX3 Pioneer controller': 1235,    // £1,300 -5%
+        'JBL Club 120 speaker': 210,   // ~£220 -5%
+        'Anker Power Station F2000': 760, // ~£800 -5%
+        'Anamorphic Blazar Remus 33mm': 665, // ~£700 -5%
+        'Anamorphic Blazar Remus 45mm': 665,
+        'Anamorphic Blazar Remus 65mm': 665,
+        'Anamorphic Blazar Remus 100mm': 665,
+        'Tilta Nucleus Nano 2 follow focus': 210, // ~£220 -5%
+        'Tilta shoulder rig': 135,
+        'Motorized slider': 190,       // ~£200 -5%
+        'Smoke Ninja Pro hazer': 170,
+        'DJI Wireless Mics': 135,
+        'DJI Mic 2 wireless': 135,
+        'Rode Video Mic Pro Plus': 80,
+        'Audio boom mic Sennheiser': 55,  // kit depreciates fast
+        'LED light panels RGB': 55,
+        'Ambitful RGB light tubes 2x set': 85,
+        'Sony 28-70mm': 100,
+        'Sony 11mm f2.8 fisheye': 370,   // niche, holds value
+        'Canon EF 24-105mm f4': 350,
+        'Canon EF 16-35mm f2.8': 260,
+        'Small rig tripod': 75,
+        'JBL PartyBox 110': 210,
+      };
 
-      if (cached) {
+      // Conservative price: use override if available, else 25th percentile from sold_prices
+      let resalePrice: number | null = PRICE_OVERRIDES[itemName] || null;
+      let sampleCount = resalePrice ? 1 : 0;
+
+      if (cached && !PRICE_OVERRIDES[itemName]) {
+        // Only use scraped data if no manual override exists
         sampleCount = cached.sample_count;
         const soldPrices = cached.sold_prices as number[] | null;
 
         if (soldPrices && soldPrices.length >= 4) {
-          // 25th percentile
           const sorted = [...soldPrices].sort((a, b) => a - b);
           const idx = Math.floor(sorted.length * 0.25);
           resalePrice = Math.round(sorted[idx]);
         } else if (cached.min_price != null) {
-          // Few samples — use min as conservative
           resalePrice = cached.min_price;
         } else if (cached.median_price != null) {
-          // Fallback to median (manual imports have sample_count=1)
-          resalePrice = Math.round(cached.median_price * 0.85); // 15% below median for conservatism
+          resalePrice = Math.round(cached.median_price * 0.85);
         }
 
         if (cached.scraped_at) {
@@ -986,6 +1034,26 @@ export class SellRecommenderService {
       }
 
       if (resalePrice != null) {
+        pricedCount++;
+      } else if (purchasePrice && purchasePrice > 0) {
+        // No eBay data — use researched manual resale estimates (Apr 2026)
+        const MANUAL_RESALE: Record<string, number> = {
+          'Sony A7 V': 2375,         // MPB £2,500 -5%
+          'CF Express Type A card': 160,
+          'SmallRig FX3 cage': 100,
+          'V-mount 95mAh': 80,
+          'V-mount 150mAh': 150,
+          'ND filter': 60,
+          'DJI gimbal battery': 35,
+          'Cinebloom filter mist': 50,
+          '256GB card': 20,
+          'PL to Sony E mount': 130,
+          'PL to EF mount': 100,
+          'PL to RF mount': 100,
+          'PL to L mount': 100,
+          'Suction cups': 25,
+        };
+        resalePrice = MANUAL_RESALE[itemName] || Math.round(purchasePrice * 0.75);
         pricedCount++;
       } else {
         unpricedItems.push(itemName);

@@ -39,8 +39,8 @@ services:
     container_name: rental-manager-db
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-rental_manager}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_USER=${POSTGRES_USER:-ai}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ai}
       - POSTGRES_DB=${POSTGRES_DB:-rental_manager}
     volumes:
       - postgres-data:/var/lib/postgresql/data

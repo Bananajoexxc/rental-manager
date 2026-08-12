@@ -34,7 +34,7 @@ import { RenterProfileModule } from './renter-profile/renter-profile.module';
 import { FollowUpModule } from './follow-up/follow-up.module';
 import { VerificationModule } from './verification/verification.module';
 import { CompletedScanModule } from './completed-scan/completed-scan.module';
-import { AutolearnModule } from './autolearn/autolearn.module';
+import { ConfigManagerModule } from './config/config-manager.module';
 import { LostRevenueModule } from './lost-revenue/lost-revenue.module';
 import { CompetitorIntelModule } from './competitor-intel/competitor-intel.module';
 import { CouponModule } from './coupon/coupon.module';
@@ -84,7 +84,7 @@ import { ItemResolverModule } from "./item-resolver/item-resolver.module";
     FollowUpModule,
     VerificationModule,
     CompletedScanModule,
-    AutolearnModule,
+    ConfigManagerModule,
     LostRevenueModule,
     CompetitorIntelModule,
     CouponModule,

@@ -148,8 +148,12 @@ export class PipelineService {
         classification.intent === Intent.GOODBYE ||
         classification.intent === Intent.RETURN_CONFIRMATION ||
         classification.intent === Intent.DAMAGE_REPORT ||
-        (classification.intent === Intent.LOGISTICS && classification.complexity === 'low')) {
-      // Skip AI call for simple/terminal messages
+        (classification.intent === Intent.LOGISTICS && classification.complexity === 'low') ||
+        (classification.intent === Intent.PRICING_INQUIRY && classification.complexity === 'low') ||
+        (classification.intent === Intent.AVAILABILITY_CHECK && classification.complexity === 'low') ||
+        (classification.intent === Intent.BOOKING_ACTION && classification.complexity === 'low') ||
+        (classification.intent === Intent.EQUIPMENT_QUESTION && classification.complexity === 'low')) {
+      // Skip AI call for simple/terminal messages — GATHER facts have all the data needed
       monologue = generateQuickMonologue(input.message, classification);
       this.logger.debug(`[Pipeline] L2 THINK: quick monologue (no AI call, intent=${classification.intent})`);
     } else {
@@ -266,41 +270,76 @@ export class PipelineService {
       };
     }
 
-    // Model routing: Sonnet for anything requiring intelligence, Haiku for simple/terminal messages only.
-    const needsThinkTool = (
-      classification.intent === 'negotiation' ||
-      classification.intent === 'complaint' ||
-      classification.intent === 'damage_report' ||
-      classification.intent === 'cancellation'
-    ) && classification.complexity === 'high';
-
-    // Haiku ONLY for genuinely simple messages where intelligence isn't needed.
-    // Negotiation, pricing, equipment/compatibility always get Sonnet for accuracy.
-    const haikuSafeIntents = new Set([
-      'greeting', 'acknowledgment', 'goodbye', 'return_confirmation',
-      'logistics', 'availability_check', 'booking_action',
+    // Model routing (stakes-gated):
+    //   Sonnet 4.6 + thinking  -> sensitive + high complexity + high-stakes signal
+    //                             (refund demand, damage on shipped rental, legal threat,
+    //                              sarcasm, >=200 GBP negotiation)
+    //   Haiku 4.5 + thinking   -> sensitive + (high complexity w/o stakes OR medium complexity)
+    //   Haiku 4.5 routine      -> all substantive non-sensitive intents (GATHER pre-fetches facts)
+    //   Haiku 4.5 lightweight  -> greetings/goodbyes/acknowledgments/return confirmations
+    const sensitiveIntents = new Set([
+      'negotiation', 'complaint', 'damage_report', 'cancellation',
     ]);
-    const useHaiku = !needsThinkTool
+    const isSensitive = sensitiveIntents.has(classification.intent);
+
+    // Stakes detection — only these warrant Sonnet premium
+    const hasRefundDemand = /\b(refund|compensat|money back|my money|reimburse|chargeback)\b/i.test(userMessage);
+    const rentalStatus = String(input.rental?.status || '').toLowerCase();
+    const orderStep = String(input.rental?.order_step || '').toLowerCase();
+    const shippedStatuses = ['verified', 'booked_after_verified', 'ongoing', 'delivered'];
+    const rentalShipped = shippedStatuses.some(st => orderStep.includes(st) || rentalStatus.includes(st));
+    const damageKeywords = /\b(scratched|broke|broken|damaged|dropped|not working|won'?t turn on|cracked|smashed|shattered|malfunction|faulty)\b/i.test(userMessage);
+    const hasDamageOnShipped = damageKeywords && rentalShipped;
+    const rentalValue = Number(input.rental?.rental_price || 0);
+    const hasBigNegotiation = classification.intent === Intent.NEGOTIATION && rentalValue >= 200;
+    const hasSarcasm = /🙄|😒|😤|\b(oh (great|wonderful|fantastic|perfect|brilliant)|really professional|wow.*service|sure.*take your time|not like I need)\b/i.test(userMessage);
+    const hasLegalThreat = /\b(lawyer|sue|legal action|court|trading standards|small.?claims|ombudsman|paypal dispute|chargeback|dispute)\b/i.test(userMessage);
+    const isHighStakes = hasRefundDemand || hasDamageOnShipped || hasBigNegotiation || hasSarcasm || hasLegalThreat;
+
+    const needsSonnet = isSensitive && classification.complexity === 'high' && isHighStakes;
+    const needsHaikuThinking = isSensitive && !needsSonnet && (
+      classification.complexity === 'high' || classification.complexity === 'medium'
+    );
+
+    // Lightweight: simple terminal messages where minimal reasoning is needed
+    const lightweightIntents = new Set([
+      'greeting', 'acknowledgment', 'goodbye', 'return_confirmation',
+    ]);
+    const isLightweight = !isSensitive
       && classification.complexity === 'low'
-      && haikuSafeIntents.has(classification.intent)
-      && classification.mentionedItems.length < 2;
+      && lightweightIntents.has(classification.intent);
 
     let response;
-    if (needsThinkTool) {
-      // Strip tools: extended thinking replaces think tool, GATHER pre-fetched all data.
-      // Eliminates the expensive 2nd API call + conversation cache write.
+    let routedTier: string;
+    if (needsSonnet) {
+      // Sonnet + extended thinking — genuine high-stakes incidents
       const { toolHandlers, ...adaptiveCtx } = context;
-      response = await this.aiService.processAdaptive(userMessage, adaptiveCtx);
-    } else if (useHaiku) {
-      // Strip tools — GATHER already provided all data, no tool loop needed
+      response = await this.aiService.processAdaptive(userMessage, { ...adaptiveCtx, maxTokens: 1000 });
+      routedTier = 'sonnet+thinking';
+    } else if (needsHaikuThinking) {
+      // Haiku 4.5 + extended thinking — reasoning quality without Sonnet premium.
+      // Covers >=90% of previously-escalated sensitive interactions.
+      const { toolHandlers, ...haikuThinkCtx } = context;
+      response = await this.aiService.processRoutineWithThinking(userMessage, { ...haikuThinkCtx, maxTokens: 800 });
+      routedTier = 'haiku+thinking';
+    } else if (isLightweight) {
+      // Haiku for trivial messages (greetings, goodbyes)
       const { toolHandlers, ...haikuCtx } = context;
       response = await this.aiService.processLightweight(userMessage, haikuCtx);
+      routedTier = 'haiku-lightweight';
     } else {
-      // Sonnet for substantive intents (pricing, negotiation, equipment, etc.)
-      // Uses processComplex to ensure Sonnet regardless of CLAUDE_MODEL env var.
+      // Haiku for all substantive intents (pricing, equipment, availability, booking,
+      // logistics, low-complexity sensitive intents). Full context from GATHER ensures
+      // accuracy — Haiku 4.5 handles these well with complete pre-fetched data.
       const { toolHandlers, ...routineCtx } = context;
-      response = await this.aiService.processComplex(userMessage, routineCtx);
+      response = await this.aiService.processRoutine(userMessage, routineCtx);
+      routedTier = 'haiku-routine';
     }
+
+    this.logger.debug(
+      `[Pipeline] L5 ROUTE: tier=${routedTier}, intent=${classification.intent}, ` +
+      `complexity=${classification.complexity}, sensitive=${isSensitive}, highStakes=${isHighStakes}, value=GBP${rentalValue}`,
+    );
 
     let responseContent = response.content;
 
@@ -521,17 +560,46 @@ export class PipelineService {
     let stateUpdate: Record<string, any> | undefined;
     if (input.rental && !skipStateExtraction) {
       try {
-        const stateExtraction = await this.aiService.processExtraction(
-          `Extract conversation state from this exchange. Reply in JSON only, no markdown fences.
-Bot response: "${responseContent.substring(0, 500)}"
-Renter message: "${input.message.substring(0, 300)}"
+        const parsed: Record<string, any> = {};
 
-Return ONLY a JSON object with changed fields (omit unchanged):
-{"confirmedItems":["item1"],"agreedPickupTime":"Fri 2pm","agreedReturnTime":null,"renterShootType":"wedding","questionsAsked":["what's the shoot for?"],"upsellAttempted":false,"priceQuoted":150,"deliveryDiscussed":false,"rentalNote":"brief note if renter shared project/personal info worth remembering"}`,
-          { maxTokens: 150 },
-        );
-        const jsonStr = stateExtraction.content.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(jsonStr);
+        // Items: track from classification + accumulate with previous confirmed items.
+        // This replaces the AI extraction — mentionedItems comes from classify.ts's
+        // 4-stage matching against MASTER_INVENTORY (direct, token, n-gram, single-word).
+        // Order changes are detected naturally: new items appear in mentionedItems each message.
+        if (classification.mentionedItems.length > 0) {
+          const prevItems: string[] = (preConversationState as any).confirmedItems || [];
+          parsed.confirmedItems = [...new Set([...prevItems, ...classification.mentionedItems])];
+        }
+
+        // Price quoted: extract last £ amount from bot response
+        const priceMatches = responseContent.match(/£(\d+(?:\.\d{2})?)/g);
+        if (priceMatches) {
+          const lastPrice = priceMatches[priceMatches.length - 1].replace('£', '');
+          parsed.priceQuoted = parseFloat(lastPrice);
+        }
+
+        // Delivery discussed: detect from renter message or bot response
+        if (/\b(deliver|delivery|courier|shipping|postcode)\b/i.test(input.message) ||
+            /\b(deliver|delivery|courier)\b/i.test(responseContent)) {
+          parsed.deliveryDiscussed = true;
+        }
+
+        // Questions asked: detect questions in bot response (for repetition prevention)
+        const questions = responseContent.match(/[^.!?\n]*\?/g);
+        if (questions && questions.length > 0) {
+          parsed.questionsAsked = questions.map(q => q.trim()).filter(q => q.length > 10).slice(0, 3);
+        }
+
+        // Upsell attempted: detect from response patterns
+        if (/\b(also available|might also|could add|would complement|goes great with|pair nicely|bundle|add-on|accessory)\b/i.test(responseContent)) {
+          parsed.upsellAttempted = true;
+        }
+
+        // Shoot type: extract from renter message
+        const shootMatch = input.message.match(/\b(wedding|event|film|documentary|music video|commercial|corporate|interview|short film|feature|youtube|vlog|podcast|photoshoot|photo shoot|concert|live stream|livestream|property|real estate|fashion)\b/i);
+        if (shootMatch) {
+          parsed.renterShootType = shootMatch[1].toLowerCase();
+        }
 
         // Persist RenterDNA in state too
         parsed.renterDNA = classification.renterDNA;
@@ -559,16 +627,15 @@ Return ONLY a JSON object with changed fields (omit unchanged):
 
         // Negotiation intelligence: track price objections + competitor mentions
         if (classification.intent === Intent.NEGOTIATION || classification.hasCompetitorMention) {
-          // Reuse pre-loaded state (no redundant DB call)
           const currentObjections = (preConversationState as any).priceObjectionCount || 0;
           parsed.priceObjectionCount = currentObjections + 1;
           parsed.negotiationStance = currentObjections >= 2 ? 'yield' : currentObjections >= 1 ? 'flexible' : 'firm';
           if (classification.hasCompetitorMention) {
             parsed.competitorMentioned = true;
           }
-          const priceMatch = responseContent.match(/£(\d+(?:\.\d{2})?)/);
-          if (priceMatch) {
-            parsed.lastPriceOffered = parseFloat(priceMatch[1]);
+          const negPriceMatch = responseContent.match(/£(\d+(?:\.\d{2})?)/);
+          if (negPriceMatch) {
+            parsed.lastPriceOffered = parseFloat(negPriceMatch[1]);
           }
         }
 

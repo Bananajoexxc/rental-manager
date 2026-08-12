@@ -1,13 +1,25 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CONFIG_DEFAULTS } from './autolearn.types';
+
+const CONFIG_DEFAULTS: Record<string, string> = {
+  'cron_claude.enabled': 'false',
+  'cron_claude.frequency_minutes': '240',
+  'cron_claude.tasks': 'message_audit',
+  'cron_claude.quiet_hours_start': '2',
+  'cron_claude.quiet_hours_end': '7',
+  'cron_claude.model': 'claude-sonnet-4-6-20250514',
+  'validation.price_floor': '5',
+  'validation.price_ceiling': '500',
+  'notify_new_booking.telegram.enabled': 'false',
+  'notify_new_booking.activity.enabled': 'true',
+};
 
 @Injectable()
 export class ConfigManagerService implements OnModuleInit {
   private readonly logger = new Logger(ConfigManagerService.name);
   private cache = new Map<string, string>();
   private lastRefresh = new Date(0);
-  private readonly CACHE_TTL_MS = 60_000; // 1 minute
+  private readonly CACHE_TTL_MS = 60_000;
 
   constructor(private prisma: PrismaService) {}
 

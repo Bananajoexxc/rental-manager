@@ -639,8 +639,9 @@ export async function gatherFacts(
       return m;
     });
 
-    // Token budget: keep messages within ~2000 tokens (8000 chars)
-    const HISTORY_CHAR_BUDGET = 8000;
+    // Token budget: keep messages within ~1250 tokens (5000 chars).
+    // Compressed history + first/last preservation + summary fallback ensure context is retained.
+    const HISTORY_CHAR_BUDGET = 5000;
     let charCount = 0;
     const budgeted: typeof compressedHistory = [];
     if (compressedHistory.length >= 2) {

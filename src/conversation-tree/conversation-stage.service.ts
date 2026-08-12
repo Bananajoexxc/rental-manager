@@ -825,11 +825,12 @@ Don't reference the silence or sound disappointed.`,
   // ══════════════════════════════════════════════
 
   /**
-   * Cron: Every 5 minutes, reconcile conversation stages with rental status.
+   * Cron: Every 15 minutes, reconcile conversation stages with rental status.
    * 1. Sync with Hygglo status changes (accepted/cancelled) without a new message.
    * 2. Mark conversations DEAD when renter engaged then ghosted (>48h silence after bot replied).
+   * Pipeline captures stages in real-time — this cron is a safety net for external status changes.
    */
-  @Cron('*/5 * * * *')
+  @Cron('*/15 * * * *')
   async reconcileStages(): Promise<void> {
     try {
       // Get all active follow_up_states that aren't already terminal

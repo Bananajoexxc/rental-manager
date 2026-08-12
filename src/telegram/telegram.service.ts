@@ -22,8 +22,6 @@ import { QualityScorerService } from '../evaluation/quality-scorer.service';
 import { ConversationStageService } from '../conversation-tree/conversation-stage.service';
 import { RecommendationService } from '../recommendations/recommendation.service';
 import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
-import { AutolearnService } from '../autolearn/autolearn.service';
-import { CorrectionDetectorService } from '../autolearn/correction-detector.service';
 import { HyggloAccount } from '../hygglo/hygglo.service';
 import { LostRevenueService } from '../lost-revenue/lost-revenue.service';
 import { PipelineService } from '../pipeline/pipeline.service';
@@ -38,7 +36,8 @@ export type RentalSectionType =
   | 'blacklist' | 'scam' | 'damage' | 'verification_failure'
   | 'pipeline_error' | 'info'
   | 'contention_detected' | 'contention_resolved'
-  | 'alt_conversion_success' | 'alt_conversion_failed' | 'alt_conversion_blocked';
+  | 'alt_conversion_success' | 'alt_conversion_failed' | 'alt_conversion_blocked'
+  | 'booking_confirmed';
 
 export interface RentalNotificationSection {
   type: RentalSectionType;
@@ -201,8 +200,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private qualityScorerService: QualityScorerService,
     private conversationStageService: ConversationStageService,
     private recommendationService: RecommendationService,
-    @Inject(forwardRef(() => AutolearnService)) private autolearnService: AutolearnService,
-    @Inject(forwardRef(() => CorrectionDetectorService)) private correctionDetector: CorrectionDetectorService,
     private lostRevenueService: LostRevenueService,
     private pipelineService: PipelineService,
     @Inject(forwardRef(() => FollowUpService)) private followUpService: FollowUpService,
@@ -286,7 +283,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.registerConversationHandler();
 
     // Interactive decision system: handle inline keyboard button presses
-    this.bot.on('callback_query', (query: any) => this.handleCallbackQuery(query));
+    this.bot.on('callback_query', (query: any) => {
+      this.handleCallbackQuery(query).catch(err => {
+        this.logger.error(`Unhandled error in callback_query: ${err.message}`);
+      });
+    });
 
     // Cleanup expired decisions every 30 minutes
     setInterval(() => this.cleanupExpiredDecisions(), 30 * 60 * 1000);
@@ -644,6 +645,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       verification_failure: (d) => `Verification failed ${d.count || '?'}x`,
       pipeline_error: (d) => `Error: ${d.error || d.message || '?'}`,
       info: (d) => d.text || 'Info',
+      booking_confirmed: (d) => d.earnings != null
+        ? `🎉 Woohoo! ${this.briefItem(d.item)} — £${Math.round(d.earnings)} · ${this.getAccountFirstName(d.account)}`
+        : `🎉 Woohoo! ${this.briefItem(d.item)} confirmed · ${this.getAccountFirstName(d.account)}`,
     };
 
     const summarizer = summaryMap[section.type];
@@ -664,6 +668,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (this.activityLog.length > this.ACTIVITY_LOG_MAX) {
       this.activityLog = this.activityLog.slice(-this.ACTIVITY_LOG_MAX);
     }
+  }
+
+  /**
+   * Record a "booking confirmed" event straight to the dashboard Live Activity
+   * feed, bypassing sendRentalUpdate()/sendProactiveMessage() and calling the
+   * internal recordActivity() directly. No Telegram traffic is generated here.
+   *
+   * CALLER CONTRACT: only call this when sendRentalUpdate() was NOT already
+   * invoked for the same booking-confirmed event (e.g. when Telegram push for
+   * bookings is disabled, or the booking has no rental_id). sendRentalUpdate()
+   * already calls recordActivity() internally — calling both for the same
+   * event double-records it in the activity feed / notifications panel. See
+   * PrismaService.handleBookingConfirmed() for the gating logic.
+   */
+  recordBookingConfirmedActivity(data: { earnings: number | null; renter: string; item: string; account: string }): void {
+    this.recordActivity(
+      { type: 'booking_confirmed', priority: 'high', data },
+      { rentalTitle: data.item, renterName: data.renter, account: data.account },
+    );
   }
 
   /**
@@ -713,6 +736,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       blacklist: 14, scam: 15,
       contention_detected: 16, contention_resolved: 17,
       alt_conversion_success: 18, alt_conversion_failed: 19, alt_conversion_blocked: 20,
+      booking_confirmed: -1,
     };
     const sorted = [...entry.sections].sort((a, b) => (displayOrder[a.type] ?? 99) - (displayOrder[b.type] ?? 99));
 
@@ -729,12 +753,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           break;
 
         case 'message_processed': {
-          const isDraft = d.status && String(d.status).includes('DRAFT');
+          const statusStr = d.status ? String(d.status) : '';
+          const isReadOnlyBlock = /read-only/i.test(statusStr);
+          const isDraft = statusStr.includes('DRAFT') || isReadOnlyBlock;
           const truncLimit = isDraft ? 2000 : 500;
           const msg = d.renterMsg ? `"${String(d.renterMsg).substring(0, 300)}${String(d.renterMsg).length > 300 ? '...' : ''}"` : '';
           const reply = d.botReply ? String(d.botReply).substring(0, truncLimit) : '';
-          if (msg) lines.push(`💬 ${msg}`);
-          if (reply) lines.push(`🤖 ${reply}${String(d.botReply || '').length > truncLimit ? '...' : ''}${d.status ? '\n📋 ' + d.status : ''}`);
+          if (isReadOnlyBlock) {
+            // Read-only mode: make the draft unmistakable. Daniel sees what the
+            // bot would have sent but no message reaches the renter.
+            lines.push('🔒 READ-ONLY — would-have-sent (not delivered to renter)');
+            if (msg) lines.push(`💬 ${msg}`);
+            if (reply) lines.push(`🤖 ${reply}${String(d.botReply || '').length > truncLimit ? '...' : ''}`);
+          } else {
+            if (msg) lines.push(`💬 ${msg}`);
+            if (reply) lines.push(`🤖 ${reply}${String(d.botReply || '').length > truncLimit ? '...' : ''}${statusStr ? '\n📋 ' + statusStr : ''}`);
+          }
           break;
         }
 
@@ -832,6 +866,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           lines.push(`ℹ️ ${d.text || ''}`);
           break;
 
+        case 'booking_confirmed': {
+          const accountLabel = this.getAccountLabel(d.account);
+          const greeting = d.earnings != null
+            ? `🎉 Woohoo! You just booked £${Math.round(d.earnings)} on ${accountLabel}!`
+            : `🎉 Woohoo! New booking confirmed on ${accountLabel}!`;
+          lines.push(greeting);
+          if (d.renter || d.item) lines.push(`${d.renter || ''}${d.renter && d.item ? ' — ' : ''}${d.item || ''}`);
+          break;
+        }
+
         case 'contention_detected': {
           const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '?';
           const fmtGBP = (n: number) => `£${Math.round(n)}`;
@@ -909,6 +953,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (account === 'dbcinema') return 'DB Cinema';
     if (account === 'leo') return 'Leo Adams';
     return account;
+  }
+
+  /** Tight, first-name-only account label for compact notifications (distinct from getAccountLabel()). */
+  private getAccountFirstName(account?: string): string {
+    if (!account) return '';
+    if (account === 'dbcinema') return 'DB Cinema';
+    if (account === 'leo') return 'Leo';
+    return account;
+  }
+
+  /**
+   * Clean and shorten an item title for a tight one-line notification: keep
+   * only the first segment before a separator, strip parenthetical asides
+   * (e.g. "(similar to X)"), and cap the length.
+   */
+  private briefItem(item?: string): string {
+    if (!item) return '';
+    let s = item.split(/\s*[|–—]\s*/)[0];
+    s = s.replace(/\s*\((?:like|similar to|comparable to|replaces|vs|or)\s[^)]+\)/gi, '');
+    s = s.trim();
+    if (s.length > 30) {
+      s = s.slice(0, 30).trim() + '…';
+    }
+    return s;
   }
 
   // --- Interactive Decision System ---
@@ -1563,12 +1631,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.onText(/\/improve$/, (msg: any) => this.handleImprove(msg));
     this.bot.onText(/\/endimprove/, (msg: any) => this.handleEndImprove(msg));
 
-    // AutoLearn Engine
-    this.bot.onText(/\/autolearn$/, (msg: any) => this.handleAutolearn(msg));
-    this.bot.onText(/\/veto\s+(\S+)(?:\s+(.+))?/, (msg: any, match: any) => this.handleVeto(msg, match));
-    this.bot.onText(/\/autolearn_pause/, (msg: any) => this.handleAutolearnPause(msg));
-    this.bot.onText(/\/autolearn_resume/, (msg: any) => this.handleAutolearnResume(msg));
-
     // Vacation / Owner unavailability
     this.bot.onText(/\/vacation\s+cancel\s+(\S+)/, (msg: any, match: any) => this.handleVacationCancel(msg, match));
     this.bot.onText(/\/vacation$/, (msg: any) => this.handleVacationList(msg));
@@ -1651,11 +1713,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
 
       await this.handleConversation(msg);
-
-      // Passive correction detection (non-blocking)
-      this.correctionDetector.processMessage(msg.text, false).catch(err =>
-        this.logger.debug(`Correction detector: ${err.message}`),
-      );
     });
   }
 
@@ -1895,7 +1952,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Business strategy conversations use Sonnet with generous token budget
+      // Business strategy conversations use Sonnet (deep analysis needed),
+      // regular owner chat uses Haiku
       const response = isBusinessQuery
         ? await this.aiService.processComplex(userText, {
             rules,
@@ -1905,7 +1963,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             additionalContext: additionalParts.join(''),
             maxTokens: 1500,
           })
-        : await this.aiService.processComplex(userText, {
+        : await this.aiService.processRoutine(userText, {
             rules,
             memories,
             conversationHistory: history,
@@ -3326,11 +3384,6 @@ Keep the whole assessment under 300 words.`;
 
       await this.rulesService.addRule(category, uniqueName, text, 8);
 
-      // Log explicit teaching signal in AutoLearn audit trail
-      this.correctionDetector.processMessage(text, true).catch(err =>
-        this.logger.debug(`Correction detector (explicit): ${err.message}`),
-      );
-
       await this.bot.sendMessage(
         msg.chat.id,
         `✅ Rule stored\n\n` +
@@ -3354,56 +3407,6 @@ Keep the whole assessment under 300 words.`;
         await this.bot.sendMessage(msg.chat.id, `Failed to store rule: ${fallbackErr.message}`);
       }
     }
-  }
-
-  // --- AutoLearn Engine commands ---
-
-  private async handleAutolearn(msg: any) {
-    try {
-      const status = await this.autolearnService.getStatus();
-      const stateEmoji = status.paused ? '⏸️' : (status.enabled ? '✅' : '❌');
-      const stateText = status.paused ? 'Paused' : (status.enabled ? 'Active' : 'Disabled');
-
-      await this.bot.sendMessage(
-        msg.chat.id,
-        `*AutoLearn Engine* ${stateEmoji}\n\n` +
-        `Status: ${stateText}\n` +
-        `Proposals today: ${status.todayProposals}\n` +
-        `Pending: ${status.pendingProposals}\n` +
-        `Reworking: ${status.reworkingProposals}\n` +
-        `Failed (needs review): ${status.failedProposals}\n` +
-        `Quality (24h): ${status.qualityTrend?.toFixed(2) || 'N/A'}\n\n` +
-        `Commands:\n` +
-        `/veto <id> [reason] - Veto a proposal\n` +
-        `/autolearn\\_pause - Pause cycles\n` +
-        `/autolearn\\_resume - Resume cycles`,
-        { parse_mode: 'Markdown' },
-      );
-    } catch (err) {
-      await this.bot.sendMessage(msg.chat.id, `AutoLearn status error: ${err.message}`);
-    }
-  }
-
-  private async handleVeto(msg: any, match: any) {
-    const shortId = match[1];
-    const reason = match[2] || undefined;
-
-    try {
-      const result = await this.autolearnService.vetoProposal(shortId, reason);
-      await this.bot.sendMessage(msg.chat.id, result);
-    } catch (err) {
-      await this.bot.sendMessage(msg.chat.id, `Veto failed: ${err.message}`);
-    }
-  }
-
-  private async handleAutolearnPause(msg: any) {
-    await this.autolearnService.pause();
-    await this.bot.sendMessage(msg.chat.id, 'AutoLearn paused. Use /autolearn\\_resume to resume.');
-  }
-
-  private async handleAutolearnResume(msg: any) {
-    await this.autolearnService.resume();
-    await this.bot.sendMessage(msg.chat.id, 'AutoLearn resumed.');
   }
 
   // --- Unified renter message handling (replaces separate renter bot) ---

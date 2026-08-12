@@ -145,10 +145,11 @@ export class FollowUpService {
   }
 
   /**
-   * Cron: Check all active follow-up states every 2 minutes.
+   * Cron: Check all active follow-up states every hour.
    * Skip quiet hours (2am-7am).
+   * Follow-up thresholds are 3h/10h/18h/26h — hourly granularity loses nothing.
    */
-  @Cron('*/2 * * * *')
+  @Cron('0 * * * *')
   async checkFollowUps(): Promise<void> {
     if (this.isCheckingFollowUps) {
       this.logger.debug('checkFollowUps: previous check still in progress, skipping');
@@ -240,9 +241,18 @@ export class FollowUpService {
       return;
     }
 
-    // 1b. Check if delivery T&Cs should be sent
+    // 1b. Check if delivery T&Cs should be sent (one message per cycle)
     try {
       await this.checkDeliveryTCs(state, state.rental);
+      // Guard: if T&Cs were just sent, limit to one outbound message per cycle
+      const tcJustSent = await this.prisma.ai_decision.findFirst({
+        where: {
+          rental_id: state.rental_id,
+          input_summary: { contains: 'delivery_tcs_sent' },
+          created_at: { gte: new Date(Date.now() - 10_000) },
+        },
+      });
+      if (tcJustSent) return;
     } catch (tcErr) {
       this.logger.debug(`Delivery T&Cs check failed: ${tcErr.message}`);
     }
@@ -292,7 +302,7 @@ export class FollowUpService {
     // 1e. Skip follow-up if bot's last message mentions unavailability (catch cases where structured_state flag wasn't set)
     try {
       const lastBotMsg = await this.prisma.conversation.findFirst({
-        where: { chat_id: `rental:${state.rental_id}`, role: 'assistant' },
+        where: { chat_id: state.rental?.listing_id, role: 'assistant' },
         orderBy: { created_at: 'desc' },
         select: { content: true },
       });
@@ -313,7 +323,7 @@ export class FollowUpService {
     // 1f. Skip follow-up if renter's last message signals conversation is over (disinterest/closure)
     try {
       const lastRenterMsg = await this.prisma.conversation.findFirst({
-        where: { chat_id: `rental:${state.rental_id}`, role: 'user' },
+        where: { chat_id: state.rental?.listing_id, role: 'user' },
         orderBy: { created_at: 'desc' },
         select: { content: true },
       });
@@ -381,7 +391,7 @@ export class FollowUpService {
       convStage === 'booked' ||
       ['FUNDS_RESERVED', 'VERIFIED', 'BOOKED_AFTER_VERIFIED', 'DELIVERED'].includes(orderStep);
     if (isConfirmedOrBooked) {
-      this.logger.debug(`Skipping inactivity follow-up for ${state.rental_id}: stage is ${convStage} / order_step is ${orderStep} (only time follow-ups apply)`);
+      this.logger.verbose(`Skipping inactivity follow-up for ${state.rental_id}: stage is ${convStage} / order_step is ${orderStep} (only time follow-ups apply)`);
       return;
     }
 
@@ -1712,7 +1722,7 @@ export class FollowUpService {
 
     try {
       const lastRenterMsg = await this.prisma.conversation.findFirst({
-        where: { chat_id: `rental:${rental.id}`, role: 'user' },
+        where: { chat_id: rental.listing_id, role: 'user' },
         orderBy: { created_at: 'desc' },
         select: { content: true },
       });
@@ -1736,7 +1746,7 @@ export class FollowUpService {
 
     try {
       const lastBotMsg = await this.prisma.conversation.findFirst({
-        where: { chat_id: `rental:${rental.id}`, role: 'assistant' },
+        where: { chat_id: rental.listing_id, role: 'assistant' },
         orderBy: { created_at: 'desc' },
         select: { content: true },
       });

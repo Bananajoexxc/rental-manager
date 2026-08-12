@@ -1,7 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
+import { AiService } from '../ai/ai.service';
 import { getInventoryItemNames, findBestMatch, MASTER_INVENTORY, detectBrandMismatch, extractPrimaryBrand } from '../utils/item-matcher';
 import { getVerifiedItems } from '../data/listing-photo-reference';
 import { CANONICAL_MAP, getRelevantItems } from './inventory-categories';
@@ -16,15 +16,12 @@ export interface ResolvedItem {
 @Injectable()
 export class ItemResolverService {
   private readonly logger = new Logger(ItemResolverService.name);
-  private readonly anthropicClient: Anthropic | null;
 
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
-  ) {
-    const anthropicKey = this.configService.get<string>('ANTHROPIC_API_KEY');
-    this.anthropicClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
-  }
+    @Optional() private aiService?: AiService,
+  ) {}
 
   /**
    * Main entry point: resolve a listing to inventory items.
@@ -189,7 +186,7 @@ export class ItemResolverService {
    * Constrained AI resolution: only sends relevant category items (15-30 instead of 170+).
    */
   async aiResolve(title: string): Promise<ResolvedItem[]> {
-    if (!this.anthropicClient) return [];
+    if (!this.aiService) return [];
 
     const relevantItems = getRelevantItems(title);
     const inventoryList = relevantItems.join('\n');
@@ -220,13 +217,9 @@ ${brandRule}
 JSON:`;
 
     try {
-      const response = await this.anthropicClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 512,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const content = response.content[0]?.type === 'text' ? response.content[0].text : null;
+      if (!this.aiService) return [];
+      const response = await this.aiService.processExtraction(prompt, { maxTokens: 512 });
+      const content = response.content;
       if (!content) return [];
 
       // Strip markdown fences and extract first valid JSON array (greedy regex fails on trailing text)

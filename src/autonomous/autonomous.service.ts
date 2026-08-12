@@ -109,6 +109,7 @@ export class AutonomousService {
   private readonly EXTENSION_ALERT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hour dedup window for extension alerts
   private timeExtractHashes = new Map<string, string>(); // rentalId → last transcript hash (skip if unchanged)
   private timeExtractLowConfidence = new Map<string, { count: number; lastAttempt: number }>(); // backoff for repeated LOW confidence
+  private lastExtractionCheck = new Map<string, Date>(); // rentalId → last cron check time (skip if no new messages)
   private readonly TIME_EXTRACT_BACKOFF_MS = 6 * 60 * 60 * 1000; // 6 hour backoff after 3 consecutive LOWs
 
   constructor(
@@ -1180,13 +1181,29 @@ export class AutonomousService {
       let multiItemContextStr = '';
       if (rental._multiItemContext) {
         const ctx = rental._multiItemContext;
+        const centralLocations = ['trafalgar', 'whitehall', 'central london', 'charing cross', 'pall mall', 'national gallery', 'westminster', 'covent garden'];
         const itemList = ctx.allItems
-          .map((item: { title: string; price: number }) => `  - ${item.title} (£${item.price})`)
+          .map((item: { title: string; price: number; listingLocation: string | null }) => {
+            const locLabel = item.listingLocation
+              ? (centralLocations.some(c => item.listingLocation!.toLowerCase().includes(c)) ? `${item.listingLocation} (central)` : `${item.listingLocation} (non-central)`)
+              : 'location unknown';
+            return `  - ${item.title} (£${item.price}) — ${locLabel}`;
+          })
           .join('\n');
+        const nonCentralItems = ctx.allItems.filter(
+          (item: { listingLocation: string | null }) =>
+            item.listingLocation && !centralLocations.some(c => item.listingLocation!.toLowerCase().includes(c)),
+        );
+        const locationNote = nonCentralItems.length > 0
+          ? `\nNON-CENTRAL ITEMS DETECTED: ${nonCentralItems.length} item(s) listed at non-central locations. ` +
+            `Renter found these at outer-London branches — 10% distance discount is eligible. ` +
+            `Follow location rules: acknowledge their area, offer central pickup with discount.`
+          : '';
         multiItemContextStr =
           `\n\nMULTI-ITEM REQUEST: This renter sent ${ctx.allItems.length} separate rental requests that have been consolidated here.\n` +
           `All items:\n${itemList}\n` +
-          `Total value: £${ctx.totalValue}\n` +
+          `Total value: £${ctx.totalValue}` +
+          locationNote + '\n' +
           `The renter has been told all items will be handled in this chat. ` +
           `Respond acknowledging ALL items, not just the one in this rental's title. ` +
           `Consider bundle pricing if applicable.`;
@@ -1573,7 +1590,7 @@ export class AutonomousService {
         `2. Recommended action (e.g., "send welcome message", "approve", "flag for review", "no message needed")\n` +
         `3. If sending a message, include the exact message text after "MESSAGE:" on the same line (plain text, no markdown). If no message needed, do NOT include a MESSAGE: line.`;
 
-      const response = await this.aiService.processComplex(analysisPrompt, {
+      const response = await this.aiService.processRoutine(analysisPrompt, {
         rules,
         memories,
         rentalContext,
@@ -1904,6 +1921,7 @@ export class AutonomousService {
         end_date: rental.end_date,
         rental_price: rental.rental_price || 0,
         account: rental.account || null,
+        listing_location: rental.listing_location || null,
       };
       const allPending = [currentEntry, ...sameAccountPending].sort(
         (a, b) => (b.rental_price || 0) - (a.rental_price || 0),
@@ -1988,6 +2006,7 @@ export class AutonomousService {
             title: r.title,
             price: r.rental_price || 0,
             rentalId: r.id,
+            listingLocation: r.listing_location || null,
           })),
           totalValue: allPending.reduce((sum, r) => sum + (r.rental_price || 0), 0),
           secondaryRentalIds: sameAccountPending.map(r => r.id),
@@ -2097,6 +2116,13 @@ export class AutonomousService {
       );
       let text = response.content.trim();
       text = text.replace(/^(here'?s?\s+(the|a|my)\s+(message|response|reply)[:\s]*)/i, '').trim();
+      // Guard against the AI returning internal meta-commentary instead of an
+      // actual customer-facing reply (e.g. "That's not needed") — this text is
+      // shown directly to Daniel as a "Recommended reply" preview, so leaking
+      // meta-commentary there reads as a garbled/confusing notification.
+      if (/^(none|n\/a|no message|escalate|flag|skip|defer|internal|notify daniel|(that'?s\s+)?not\s+(needed|required)|no\s+(reply|response)\s+(needed|required|necessary)|(this\s+)?(doesn'?t|does\s+not)\s+need)/i.test(text)) {
+        return '';
+      }
       return text;
     } catch (err) {
       this.logger.warn(`Failed to generate recommended reply: ${err.message}`);
@@ -2108,70 +2134,28 @@ export class AutonomousService {
    * Detect if a message is asking about pricing, costs, or quotes.
    * Uses regex fast-path with optional AI fallback for ambiguous cases.
    */
-  private async isPricingQuery(text: string, useAIFallback = false): Promise<boolean> {
-    // Fast path: Clear pricing terms (95% of cases)
+  private isPricingQuery(text: string): boolean {
     const pricingTerms = /\b(price|pricing|cost|costs|how much|rate|rates|quote|charge|charges|fee|fees|per day|daily|weekly|monthly|budget|afford|expensive|cheap|discount|deal|£|pound|pounds|rental price|rental rate|what would|total|estimate)\b/i;
     const hasDeliveryTerms = /\b(deliver|delivery|courier|ship|shipping|transport)\b/i;
 
     if (pricingTerms.test(text) && !hasDeliveryTerms.test(text)) {
-      return true; // Clearly about pricing
+      return true;
     }
-
-    if (!pricingTerms.test(text)) {
-      return false; // Clearly not about pricing
-    }
-
-    // Ambiguous case: Use AI fallback if enabled
-    if (useAIFallback) {
-      try {
-        const classification = await this.aiService.processExtraction(
-          `Classify this renter message intent. Is it primarily asking about PRICING (costs, rates, quotes)?\n\nMessage: "${text}"\n\nRespond with JSON only: {"intent":"pricing" or "other", "confidence":0-1}`,
-        );
-
-        const parsed = JSON.parse(classification.content);
-        return parsed.intent === 'pricing' && parsed.confidence > 0.7;
-      } catch (error) {
-        this.logger.debug(`AI intent classification failed: ${error.message}`);
-        return pricingTerms.test(text); // Fall back to regex
-      }
-    }
-
+    // Ambiguous (both pricing + delivery terms): default to pricing
     return pricingTerms.test(text);
   }
 
   /**
    * Detect if a message is asking about delivery, courier, or shipping.
-   * Uses regex fast-path with optional AI fallback for ambiguous cases.
    */
-  private async isDeliveryQuery(text: string, useAIFallback = false): Promise<boolean> {
-    // Fast path: Clear delivery terms (95% of cases)
-    // NOTE: "too far" was removed — it indicates location rejection, not delivery intent
+  private isDeliveryQuery(text: string): boolean {
     const deliveryTerms = /\b(deliver|delivery|courier|ship|shipping|post|postcode|send it|drop off|dropoff|bring it|transport|how far|distance|collect from|can you bring|come to me)\b/i;
     const hasPricingTerms = /\b(price|pricing|cost|how much)\b/i;
 
     if (deliveryTerms.test(text) && !hasPricingTerms.test(text)) {
-      return true; // Clearly about delivery
+      return true;
     }
-
-    if (!deliveryTerms.test(text)) {
-      return false; // Clearly not about delivery
-    }
-
-    // Ambiguous case: Use AI fallback if enabled
-    if (useAIFallback) {
-      try {
-        const classification = await this.aiService.processExtraction(
-          `Classify this renter message intent. Is it primarily asking about DELIVERY (shipping, courier, bringing items)?\n\nMessage: "${text}"\n\nRespond with JSON only: {"intent":"delivery" or "other", "confidence":0-1}`,
-        );
-
-        const parsed = JSON.parse(classification.content);
-        return parsed.intent === 'delivery' && parsed.confidence > 0.7;
-      } catch (error) {
-        this.logger.debug(`AI intent classification failed: ${error.message}`);
-        return deliveryTerms.test(text); // Fall back to regex
-      }
-    }
-
+    // Ambiguous (both delivery + pricing terms): default to delivery
     return deliveryTerms.test(text);
   }
 
@@ -3984,7 +3968,12 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           }
         } catch { /* non-critical */ }
 
-        let rentalContextStr = `Current rental: ${rental.title}\n` +
+        // ACTIVE ACCOUNT marker — the AI layer keys off this line to (1) inject the
+        // active account's ACTIVE ACCOUNT ADDRESSES block and (2) sanitize the OTHER
+        // account's addresses/identifiers out of memories/context. Must be the first line.
+        const accountLabel = (rental.account || '').toLowerCase().includes('leo') ? 'Leo Adams' : 'DB Cinema';
+        let rentalContextStr = `ACTIVE ACCOUNT: ${accountLabel}\n` +
+          `Current rental: ${rental.title}\n` +
           `Status: ${rental.status}\n` +
           `Booking: ${bookingStatusLabel}\n` +
           `Renter: ${rental.renter_info || 'Unknown'}\n` +
@@ -4228,9 +4217,15 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           timeReferenceContext = `TIME REFERENCE CONTEXT: Today is ${todayStr}. This rental runs from ${startStr} to ${endStr}. When the renter says a relative time (e.g. "tomorrow", "Friday", "this weekend"), resolve it to the actual date and CONFIRM it back to them (e.g. "So that's Friday 21st Feb — works for me!").`;
         }
 
+        // Route through Haiku for most messages, Sonnet only for high-stakes intents
+        const isSensitiveIntent = /\b(cancel|refund|complain|damage|broken|not working|disappointed|unacceptable)\b/i.test(msg.content);
+        const useAdaptive = isSensitiveIntent && contextLevel === 'comprehensive';
+        const processCall = useAdaptive
+          ? this.aiService.processAdaptive.bind(this.aiService)
+          : this.aiService.processRoutine.bind(this.aiService);
         const response = dspyResponse?.response
           ? { content: dspyResponse.response, memories: [], model: 'dspy-optimized', inputTokens: 0, outputTokens: 0 }
-          : await this.aiService.processAdaptive(messagePrompt, {
+          : await processCall(messagePrompt, {
           rules,
           memories,
           conversationHistory,
@@ -4252,7 +4247,8 @@ AUTHORITY: You represent Daniel — you cannot make business decisions (pricing,
           ].join('\n'),
           rentalDates: { start: rental.start_date, end: rental.end_date },
           // Context-aware token budget: simple acks get less, complex queries get more
-          maxTokens: contextLevel === 'minimal' ? 250 : (contextLevel === 'comprehensive' || (msg.imageUrls && msg.imageUrls.length > 0)) ? 800 : undefined,
+          // Default (undefined) = 1000 from baseMaxTokens in callClaude
+          maxTokens: contextLevel === 'minimal' ? 250 : undefined,
           // Stage-gate: prompt-manager skips irrelevant DB components for later funnel stages
           conversationStage: currentStage,
           // Pass image URLs for multimodal analysis (price match screenshots, etc.)
@@ -5788,8 +5784,9 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
   // Daily summary at 21:00
   // Daily/weekly AI summaries REMOVED — owner checks dashboard for stats
 
-  // Every 30 min: scan confirmed/upcoming rentals and extract missing times from chat history
-  @Cron('5,35 * * * *')
+  // Hourly: scan confirmed/upcoming rentals and extract missing times from chat history
+  // (real-time extraction still fires immediately on new messages via triggerMsg path)
+  @Cron('20 * * * *')
   async autoExtractAndFixTimes() {
     try {
       const now = new Date();
@@ -5817,10 +5814,31 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
 
       // Group by rental to avoid duplicate extraction
       const rentalIds = [...new Set(bookingsNeedingTimes.map(b => b.rental_id).filter(Boolean))] as string[];
+
+      // Pre-filter: skip rentals with no new renter messages since last extraction check
+      const fStates = await this.prisma.follow_up_state.findMany({
+        where: { rental_id: { in: rentalIds } },
+        select: { rental_id: true, last_renter_message_at: true },
+      });
+      const lastMsgMap = new Map(fStates.map(s => [s.rental_id, s.last_renter_message_at]));
+      const activeRentalIds = rentalIds.filter(id => {
+        const lastMsg = lastMsgMap.get(id);
+        const lastCheck = this.lastExtractionCheck.get(id);
+        if (!lastMsg || !lastCheck) return true; // No data → process to be safe
+        return lastMsg > lastCheck;
+      });
+      for (const id of activeRentalIds) {
+        this.lastExtractionCheck.set(id, now);
+      }
+      if (activeRentalIds.length < rentalIds.length) {
+        this.logger.debug(`autoExtract: skipped ${rentalIds.length - activeRentalIds.length}/${rentalIds.length} rentals (no new messages)`);
+      }
+      if (activeRentalIds.length === 0) return;
+
       let extracted = 0;
       let failed = 0;
 
-      for (const rentalId of rentalIds) {
+      for (const rentalId of activeRentalIds) {
         const rental = bookingsNeedingTimes.find(b => b.rental_id === rentalId)?.rental;
         if (!rental) continue;
 
@@ -5842,7 +5860,7 @@ rentalNotes: ONLY include if the renter requested something unusual that the own
       }
 
       if (extracted > 0 || failed > 0) {
-        this.logger.log(`autoExtract cron: ${extracted} extracted, ${failed} failed out of ${rentalIds.length} rentals`);
+        this.logger.log(`autoExtract cron: ${extracted} extracted, ${failed} failed out of ${activeRentalIds.length} checked (${rentalIds.length - activeRentalIds.length} skipped, no new messages)`);
       }
     } catch (error) {
       this.logger.error(`autoExtractAndFixTimes cron error: ${error.message}`);

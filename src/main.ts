@@ -60,6 +60,9 @@ async function bootstrap() {
     `,
   });
 
+  // Serve public static assets (dashboard CSS/JS)
+  app.useStaticAssets(path.join(process.cwd(), 'src', 'public'));
+
   // Serve listing creator images as static files
   app.useStaticAssets(path.join(process.cwd(), 'listing-creator-images'), { prefix: '/listing-images' });
 

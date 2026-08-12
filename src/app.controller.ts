@@ -51,7 +51,7 @@ import { ItemMatcherAiService } from './item-matcher-ai/item-matcher-ai.service'
 import { SellRecommenderService } from './sell-recommender/sell-recommender.service';
 import { ListingCreatorService } from './listing-creator/listing-creator.service';
 import { PlaywrightService } from './playwright/playwright.service';
-import { ConfigManagerService } from './autolearn/config-manager.service';
+import { ConfigManagerService } from './config/config-manager.service';
 import { OnModuleInit } from '@nestjs/common';
 
 @ApiTags('Health')
@@ -1028,15 +1028,34 @@ IMPORTANT: Be surgical. Only fix issues you are confident about. Report uncertai
         },
       };
 
-      const response = await this.aiService.processComplex(userMessage, {
-        rules,
-        memories,
-        conversationHistory: history,
-        rentalContext,
-        additionalContext: additionalParts.join(''),
-        toolHandlers,
-        maxTokens: 4096,
-      });
+      // Dashboard routing split:
+      //   Sonnet 4.6 -> edit/action verbs, strategic/analytic queries, long asks.
+      //   Haiku 4.5  -> read-only lookups and short factual questions (same tools available).
+      // Saves ~5x per call on the cheap path without losing tool access.
+      const actionVerb = /\b(update|edit|rewrite|send|correct|change|fix|cancel|accept|decline|approve|reject|mark|buy|invest|delete|remove)\b/i.test(userMessage);
+      const strategicAsk = /\b(strategy|strateg|analyz|analyse|optimi[sz]e|recommend|advice|why is|why are|what should|brief me|briefing|report|compete|competitor|invest|demand pattern|forecast|outlook|roadmap)\b/i.test(userMessage);
+      const longAsk = userMessage.length > 220;
+      const needsSonnet = actionVerb || strategicAsk || longAsk;
+
+      const response = needsSonnet
+        ? await this.aiService.processComplex(userMessage, {
+            rules,
+            memories,
+            conversationHistory: history,
+            rentalContext,
+            additionalContext: additionalParts.join(''),
+            toolHandlers,
+            maxTokens: 4096,
+          })
+        : await this.aiService.processRoutine(userMessage, {
+            rules,
+            memories,
+            conversationHistory: history,
+            rentalContext,
+            additionalContext: additionalParts.join(''),
+            toolHandlers,
+            maxTokens: 1200,
+          });
 
       await this.memoryService.storeConversation(chatId, 'assistant', response.content);
       if (response.memories.length > 0) {
@@ -2927,6 +2946,40 @@ Before modifying ANY rule:
     return { ok: true, message: `Task "${this.CRON_TASKS[taskKey].label}" started. Check runs endpoint for results.` };
   }
 
+  // ---- Notification Config: API Endpoints ----
+
+  @Get('notify-config/new-booking/telegram')
+  @ApiTags('Notification Config')
+  @ApiOperation({ summary: 'Get new booking confirmed Telegram notification configuration' })
+  async getNewBookingTelegramNotifyConfig() {
+    const enabled = await this.configManager.getBool('notify_new_booking.telegram.enabled');
+    return { enabled };
+  }
+
+  @Post('notify-config/new-booking/telegram')
+  @ApiTags('Notification Config')
+  @ApiOperation({ summary: 'Update new booking confirmed Telegram notification configuration' })
+  async setNewBookingTelegramNotifyConfig(@Body() body: { enabled?: boolean }) {
+    if (body.enabled !== undefined) await this.configManager.set('notify_new_booking.telegram.enabled', String(body.enabled));
+    return { ok: true };
+  }
+
+  @Get('notify-config/new-booking/activity')
+  @ApiTags('Notification Config')
+  @ApiOperation({ summary: 'Get new booking confirmed activity-feed notification configuration' })
+  async getNewBookingActivityNotifyConfig() {
+    const enabled = await this.configManager.getBool('notify_new_booking.activity.enabled');
+    return { enabled };
+  }
+
+  @Post('notify-config/new-booking/activity')
+  @ApiTags('Notification Config')
+  @ApiOperation({ summary: 'Update new booking confirmed activity-feed notification configuration' })
+  async setNewBookingActivityNotifyConfig(@Body() body: { enabled?: boolean }) {
+    if (body.enabled !== undefined) await this.configManager.set('notify_new_booking.activity.enabled', String(body.enabled));
+    return { ok: true };
+  }
+
   @Get('listing-images/*')
   async serveListingImage(@Req() req: any, @Res() res: any) {
     const subPath = req.params[0];
@@ -2975,6 +3028,23 @@ Before modifying ANY rule:
   @Post("resolve/backfill")
   async resolveBackfill() {
     return this.itemResolverService.backfillAll();
+  }
+
+  @Get('bot/status')
+  @ApiExcludeEndpoint()
+  getBotStatus() {
+    return {
+      aiEnabled: process.env.AI_ENABLED !== 'false',
+    };
+  }
+
+  @Post('bot/toggle-ai')
+  @ApiExcludeEndpoint()
+  toggleAi(@Body() body: { enabled: boolean }) {
+    process.env.AI_ENABLED = body.enabled ? 'true' : 'false';
+    return {
+      aiEnabled: process.env.AI_ENABLED !== 'false',
+    };
   }
 
 }

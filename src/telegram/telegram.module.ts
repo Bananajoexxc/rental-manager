@@ -17,7 +17,6 @@ import { ValidationModule } from '../validation/validation.module';
 import { QualityScorerModule } from '../evaluation/quality-scorer.module';
 import { ConversationStageModule } from '../conversation-tree/conversation-stage.module';
 import { RecommendationModule } from '../recommendations/recommendation.module';
-import { AutolearnModule } from '../autolearn/autolearn.module';
 import { LostRevenueModule } from '../lost-revenue/lost-revenue.module';
 import { PipelineModule } from '../pipeline/pipeline.module';
 import { FollowUpModule } from '../follow-up/follow-up.module';
@@ -41,7 +40,6 @@ import { FollowUpModule } from '../follow-up/follow-up.module';
     QualityScorerModule,
     ConversationStageModule,
     RecommendationModule,
-    forwardRef(() => AutolearnModule),
     LostRevenueModule,
     PipelineModule,
     forwardRef(() => FollowUpModule),

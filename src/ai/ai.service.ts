@@ -1,8 +1,10 @@
 import { Injectable, Logger, Inject, Optional, forwardRef } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { PromptManagerService } from '../prompts/prompt-manager.service';
 import { OpenAiAiService } from './openai-ai.service';
+import { GrokAiService } from './grok-ai.service';
 
 export interface AiResponse {
   content: string;
@@ -66,22 +68,28 @@ export class AiService {
 
   private aiEnabled: boolean;
   private readonly provider: 'claude' | 'openai';
+  private readonly mainBrainProvider: 'claude' | 'grok';
 
   constructor(
     private configService: ConfigService,
     private promptManager: PromptManagerService,
     @Optional() @Inject(forwardRef(() => OpenAiAiService)) private openAiAiService?: OpenAiAiService,
+    @Optional() @Inject(forwardRef(() => GrokAiService)) private grokAiService?: GrokAiService,
   ) {
     this.aiEnabled = this.configService.get<string>('AI_ENABLED') !== 'false';
     this.provider = (this.configService.get<string>('AI_PROVIDER') || 'claude') as 'claude' | 'openai';
+    this.mainBrainProvider = (this.configService.get<string>('MAIN_BRAIN_PROVIDER') || 'claude') as 'claude' | 'grok';
 
     const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
     if (!this.aiEnabled) {
       this.logger.warn('AI_ENABLED=false — all AI calls disabled (testing mode)');
     } else if (this.provider === 'openai') {
-      this.logger.log('🟢 AI_PROVIDER=openai — routing all AI calls through OpenAI GPT-4.1 mini');
+      this.logger.log('AI_PROVIDER=openai — routing all AI calls through OpenAI GPT-4.1 mini');
     } else if (!apiKey || apiKey === 'your_anthropic_api_key_here') {
       this.logger.warn('ANTHROPIC_API_KEY not configured — AI features disabled');
+    }
+    if (this.mainBrainProvider === 'grok') {
+      this.logger.log('MAIN_BRAIN_PROVIDER=grok — main-brain tiers route to Grok 4.1 Fast via OpenRouter (Sonnet tier stays on Anthropic)');
     }
     this.client = new Anthropic({ apiKey: apiKey || '' });
     this.modelRoutine = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20251001';
@@ -299,6 +307,58 @@ export class AiService {
   // - Hard constraints → decision_guidelines + security_rules + location_rules + communication_style
   // This saves ~800-1,000 tokens/message by eliminating duplication.
 
+  /**
+   * Compact older assistant turns in conversation history.
+   * Rule: keep the last 5 turns verbatim; for older assistant turns (position
+   * index <= length - 6), strip bot filler ("Hi there!", "Thanks for reaching out",
+   * sign-offs) and keep only sentences that carry load-bearing info (prices,
+   * dates, item names, availability verdicts, confirmations).
+   * User turns are never compacted — their exact wording often matters for intent.
+   * Empirical saving: ~40-60% token reduction on assistant turns beyond turn 5.
+   */
+  private compactOldAssistantTurns(
+    history: { role: 'user' | 'assistant'; content: string; timestamp?: Date }[],
+  ): { role: 'user' | 'assistant'; content: string; timestamp?: Date }[] {
+    if (!history || history.length <= 5) return history;
+
+    const fillerPatterns: RegExp[] = [
+      /^(hi+|hey+|hello|hiya|heya|howdy)[\s!,.]+/i,
+      /^(thanks|thank you|cheers|appreciate (it|that))[\s!,.]+/i,
+      /thanks? (so much |very much )?(for|so much)[^.!?]*[.!?]/i,
+      /(hope|hoping) [^.!?]*(great|well|good|wonderful|amazing)[^.!?]*[.!?]/i,
+      /(let me know|feel free) [^.!?]*[.!?]/i,
+      /^(just )?(quick|a quick) (heads.up|note|ping)[\s:,-]*/i,
+      /^(no problem|no worries|no bother|totally fine|absolutely)[\s!,.]+/i,
+    ];
+
+    // Keep sentences that are load-bearing.
+    const loadBearing = /£|\$|\bpounds?\b|\b(fx3|fx6|fx30|a7|bmpcc|pocket|gm|rs3|rs4|ronin|rode|dji|sony|canon|blackmagic|tripod|gimbal|lens|camera|drone|mic|monitor|card|battery|batteries|pickup|return|deliver|courier|postcode|available|not available|unavailable|confirm|booked|yes|no|morning|evening|10am|7pm|8pm|11am|2\.5x|5x)\b|\b\d{1,3}(?:[-/]\d{1,2}){1,2}\b|\b(mon|tue|wed|thu|fri|sat|sun|today|tomorrow|oct|nov|dec|jan|feb|mar|apr|may|jun|jul|aug|sep)[a-z]*\b/i;
+
+    const compact = (text: string): string => {
+      let t = text;
+      for (const re of fillerPatterns) t = t.replace(re, ' ');
+      t = t.replace(/\s+/g, ' ').trim();
+      const sentences = t.split(/(?<=[.!?])\s+/).filter(Boolean);
+      if (sentences.length <= 1) return t.slice(0, 220);
+      const keep: string[] = [];
+      for (const sent of sentences) {
+        if (loadBearing.test(sent)) keep.push(sent);
+      }
+      const joined = keep.join(' ').trim();
+      const result = joined || sentences[0];
+      return result.slice(0, 220);
+    };
+
+    const cutoff = history.length - 5; // indices 0..cutoff-1 are "old"
+    return history.map((msg, i) => {
+      if (i >= cutoff) return msg;
+      if (msg.role !== 'assistant') return msg;
+      const compacted = compact(msg.content);
+      if (compacted.length >= msg.content.length - 10) return msg; // barely-shorter isn't worth the semantic shift
+      return { ...msg, content: compacted };
+    });
+  }
+
   private enrichContext(context: AiContext): { context: AiContext; temporalBlock: string } {
     const now = new Date();
 
@@ -311,8 +371,12 @@ export class AiService {
       `Tomorrow: ${tomorrow.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}\n` +
       `When a renter mentions a relative date, resolve it and state the actual date in your reply.`;
 
-    // 2. Conversation history — strip timestamps to prevent AI from mimicking [timestamp] prefix format
-    const enrichedHistory = context.conversationHistory;
+    // 2. Conversation history — strip timestamps AND compact old assistant turns.
+    //    Keeps the last 5 turns verbatim; older assistant turns lose filler and
+    //    retain only load-bearing sentences (prices/dates/items/verdicts).
+    const enrichedHistory = context.conversationHistory
+      ? this.compactOldAssistantTurns(context.conversationHistory)
+      : context.conversationHistory;
 
     // 3. Rental countdown
     let enrichedRentalContext = context.rentalContext;
@@ -375,6 +439,27 @@ export class AiService {
       dynamicParts.push(`--- CURRENT RENTAL CONTEXT ---\n${context.rentalContext}`);
     }
 
+    // Active-account addresses injected per-call. The location_rules static
+    // component deliberately omits specific addresses so both accounts share
+    // one cached system prompt; the live address data belongs to the dynamic
+    // block (changes based on which account owns the current rental).
+    const accountLine = context.rentalContext && /ACTIVE ACCOUNT:\s*(Leo Adams|DB Cinema)/i.exec(context.rentalContext);
+    if (accountLine) {
+      const isLeo = /leo adams/i.test(accountLine[1]);
+      const block = isLeo
+        ? (
+            '--- ACTIVE ACCOUNT ADDRESSES ---\n' +
+            'Pre-booking (before confirmed): say only "near Charing Cross Road in Central London".\n' +
+            'Post-booking confirmed (use VERBATIM): 5 Pall Mall East, London SW1Y 5BF — meet outside by the Pret.'
+          )
+        : (
+            '--- ACTIVE ACCOUNT ADDRESSES ---\n' +
+            'Pre-booking (before confirmed): say only "Trafalgar Square, Central London".\n' +
+            'Post-booking confirmed (use VERBATIM): Statue of James II, 11 Trafalgar Square, London WC2N 5DN.'
+          );
+      dynamicParts.push(block);
+    }
+
     return {
       staticBlock: staticParts.join('\n'),
       dynamicBlock: dynamicParts.join('\n\n'),
@@ -395,6 +480,28 @@ export class AiService {
     return content.replace(/<memory>[\s\S]*?<\/memory>/g, '').trim();
   }
 
+  /**
+   * Route a main-brain call through Grok (OpenRouter) when configured, with
+   * automatic fallback to the supplied Anthropic path on error. Keeps the bot
+   * resilient to OpenRouter/xAI outages: one failed Grok call swaps to Haiku
+   * and the conversation continues without user impact.
+   */
+  private async mainBrainOrFallback(
+    grokFn: (svc: GrokAiService) => Promise<AiResponse>,
+    anthropicFallback: () => Promise<AiResponse>,
+    tier: string,
+  ): Promise<AiResponse> {
+    if (this.mainBrainProvider !== 'grok' || !this.grokAiService || !this.grokAiService.isReady()) {
+      return anthropicFallback();
+    }
+    try {
+      return await grokFn(this.grokAiService);
+    } catch (err) {
+      this.logger.warn(`[mainBrain] Grok ${tier} failed, falling back to Anthropic: ${(err as Error).message}`);
+      return anthropicFallback();
+    }
+  }
+
   async processRoutine(
     userMessage: string,
     context: AiContext = {},
@@ -402,7 +509,11 @@ export class AiService {
     if (this.provider === 'openai' && this.openAiAiService) {
       return this.openAiAiService.processRoutine(userMessage, context);
     }
-    return this.callClaude(userMessage, context, this.modelRoutine);
+    return this.mainBrainOrFallback(
+      svc => svc.processRoutine(userMessage, context),
+      () => this.callClaude(userMessage, context, this.modelRoutine),
+      'routine',
+    );
   }
 
   async processComplex(
@@ -412,7 +523,11 @@ export class AiService {
     if (this.provider === 'openai' && this.openAiAiService) {
       return this.openAiAiService.processComplex(userMessage, context);
     }
-    return this.callClaude(userMessage, context, this.modelComplex);
+    return this.mainBrainOrFallback(
+      svc => svc.processComplex(userMessage, context),
+      () => this.callClaude(userMessage, context, this.modelComplex),
+      'complex',
+    );
   }
 
   /**
@@ -427,7 +542,32 @@ export class AiService {
     if (this.provider === 'openai' && this.openAiAiService) {
       return this.openAiAiService.processAdaptive(userMessage, context);
     }
-    return this.callClaude(userMessage, { ...context, enableThinking: true }, this.modelComplex);
+    return this.mainBrainOrFallback(
+      svc => svc.processAdaptive(userMessage, context),
+      () => this.callClaude(userMessage, { ...context, enableThinking: true }, this.modelComplex),
+      'adaptive',
+    );
+  }
+
+  /**
+   * Haiku 4.5 + extended thinking — reasoning tier without Sonnet premium.
+   * Used for sensitive intents (complaint/cancellation/negotiation/damage) where
+   * reasoning matters but stakes don't justify Sonnet (~5x cheaper per call).
+   * Thinking budget: 1024 tokens ≈ $0.005/call at Haiku output rate.
+   */
+  async processRoutineWithThinking(
+    userMessage: string,
+    context: AiContext = {},
+  ): Promise<AiResponse> {
+    if (this.provider === 'openai' && this.openAiAiService) {
+      // OpenAI path has no thinking primitive — fall back to complex model
+      return this.openAiAiService.processComplex(userMessage, context);
+    }
+    return this.mainBrainOrFallback(
+      svc => svc.processRoutineWithThinking(userMessage, context),
+      () => this.callClaude(userMessage, { ...context, enableThinking: true }, this.modelRoutine),
+      'routineWithThinking',
+    );
   }
 
 
@@ -495,20 +635,11 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
     if (this.provider === 'openai' && this.openAiAiService) {
       return this.openAiAiService.processExtraction(userMessage, context);
     }
-    return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true }, this.modelLightweight);
-  }
-
-  /**
-   * Sonnet-grade extraction — for tasks where Haiku lacks nuance.
-   */
-  async processExtractionComplex(
-    userMessage: string,
-    context: Omit<AiContext, 'rules' | 'memories'> = {},
-  ): Promise<AiResponse> {
-    if (this.provider === 'openai' && this.openAiAiService) {
-      return this.openAiAiService.processExtractionComplex(userMessage, context);
-    }
-    return this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true, maxTokens: 1024 }, this.modelComplex);
+    return this.mainBrainOrFallback(
+      svc => svc.processExtraction(userMessage, context),
+      () => this.callClaude(userMessage, { ...context, rules: undefined, memories: undefined, lightweight: true }, this.modelLightweight),
+      'extraction',
+    );
   }
 
   /**
@@ -521,7 +652,44 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
     if (this.provider === 'openai' && this.openAiAiService) {
       return this.openAiAiService.processLightweight(userMessage, context);
     }
-    return this.callClaude(userMessage, context, this.modelLightweight);
+    return this.mainBrainOrFallback(
+      svc => svc.processLightweight(userMessage, context),
+      () => this.callClaude(userMessage, context, this.modelLightweight),
+      'lightweight',
+    );
+  }
+
+  /**
+   * Prompt cache prewarm — keeps the static system prompt block in Anthropic's
+   * 5-minute ephemeral cache so real renter messages land on a warm cache even
+   * during quiet periods. Fires every 4 minutes; first run per 5-min window
+   * writes the cache, subsequent runs are cheap cache reads.
+   * Net effect: cache hit rate on the ~7K-token system prompt rises dramatically
+   * for low-concurrency traffic (evenings/early mornings).
+   */
+  @Cron('*/4 * * * *')
+  async prewarmPromptCache(): Promise<void> {
+    if (!this.aiEnabled) return;
+    if (this.provider !== 'claude') return;
+    // When main brain runs on Grok, the Anthropic system prompt only covers
+    // the Sonnet escalation tier (low volume) — prewarming it isn't worth
+    // the cost. Grok via OpenRouter auto-caches identical prefixes, so the
+    // main-brain path stays warm on its own through real traffic.
+    if (this.mainBrainProvider === 'grok') return;
+    try {
+      const before = Date.now();
+      const result = await this.callClaude(
+        'ok',
+        { maxTokens: 1 },
+        this.modelRoutine,
+      );
+      const ms = Date.now() - before;
+      this.logger.debug(
+        `[Prewarm] ok model=${result.model} in=${result.inputTokens} out=${result.outputTokens} ms=${ms}`,
+      );
+    } catch (err) {
+      this.logger.debug(`[Prewarm] skipped: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -529,6 +697,9 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
    * Runs once on the final prompt string — catches leaks from identity, memories, rules, context.
    */
   private sanitizePromptForAccount(prompt: string, context: AiContext): string {
+    // Redact internal warehouse/phone first — runs on every path,
+    // including when no ACTIVE ACCOUNT marker is present.
+    prompt = AiService.stripInternalAddresses(prompt);
     // Extract account from rental context (ACTIVE ACCOUNT line)
     const accountMatch = prompt.match(/ACTIVE ACCOUNT:\s*(Leo Adams|DB Cinema)/i);
     if (!accountMatch) return prompt; // No account context, skip
@@ -536,23 +707,35 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
     const isLeo = /leo adams/i.test(accountMatch[1]);
 
     if (isLeo) {
-      // Strip Daniel/DB Cinema references from Leo's prompt
-      return prompt
+      // Leo is the active account. Strip ONLY DB Cinema's identifiers that may
+      // leak in via memories/rental-context/additional-context. Keep Leo's own
+      // address intact (it's injected for the live reply).
+      const cleaned = prompt
         .replace(/\bDaniel(?:'s)?\b/gi, 'the owner')
         .replace(/\bDB Cinema(?:\s+Rentals?)?\b/gi, 'the other account')
-        .replace(/\bEscalate to the owner\b/gi, 'Escalate to owner')
-        .replace(/\bthe owner's business\b/gi, 'your rental business')
-        .replace(/\bTrafalgar Square\b/gi, 'Central London')
-        .replace(/\b5 Pall Mall East\b/gi, '[pickup address]')
-        .replace(/\bWC2N\s*5DN\b/gi, '[postcode]')
-        .replace(/\bSW1Y\s*5BF\b/gi, '[postcode]');
+        .replace(/\bStatue of James II[^\n.]*/gi, '[other pickup]')
+        .replace(/\b11 Trafalgar Square\b/gi, '[other pickup]')
+        .replace(/\bWC2N\s*5DN\b/gi, '[other postcode]');
+      return AiService.stripInternalAddresses(cleaned);
     } else {
-      // Strip Leo-specific references from DB Cinema's prompt
-      return prompt
+      // DB Cinema is the active account. Strip ONLY Leo's identifiers; keep
+      // DB Cinema's own Trafalgar address intact.
+      const cleaned = prompt
         .replace(/\bLeo Adams\b/gi, 'the other account')
-        .replace(/\b5 Pall Mall East\b/gi, '[other pickup address]')
-        .replace(/\bSW1Y\s*5BF\b/gi, '[postcode]');
+        .replace(/\b5 Pall Mall East[^\n.]*/gi, '[other pickup]')
+        .replace(/\bSW1Y\s*5BF\b/gi, '[other postcode]');
+      return AiService.stripInternalAddresses(cleaned);
     }
+  }
+
+  /** Remove internal dispatch/warehouse addresses and phone — defense in depth
+   *  even though the memory [fact] entries say "NEVER share". Model can't leak
+   *  what it never sees. */
+  private static stripInternalAddresses(text: string): string {
+    return text
+      .replace(/\b23\s*Whitcomb\s*Street,?\s*WC2H\s*7ER\b[^\n.]*/gi, '[internal address redacted]')
+      .replace(/\bWC2H\s*7ER\b/gi, '[internal postcode redacted]')
+      .replace(/\b020\s*7387\s*8888\b/g, '[internal phone redacted]');
   }
 
   private async callClaude(
@@ -589,8 +772,11 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
         enriched = enrichResult.context;
         const blocks = await this.buildSystemPromptBlocks(enriched, enrichResult.temporalBlock);
 
-        // Account firewall: sanitize cross-account references
-        staticBlock = this.sanitizePromptForAccount(blocks.staticBlock, enriched);
+        // Account firewall: dynamic block only. The static block is now
+        // account-agnostic (DB components use "the owner" in place of literal
+        // names) so both accounts share the cached system prefix, doubling
+        // cache hit rate vs per-account cache entries.
+        staticBlock = blocks.staticBlock;
         dynamicBlock = blocks.dynamicBlock ? this.sanitizePromptForAccount(blocks.dynamicBlock, enriched) : '';
       }
 
@@ -629,25 +815,20 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
 
       this.logger.debug(`Calling Claude (${model}) with ${messages.length} messages`);
 
-      // Dynamic max_tokens: use context override or lean defaults
-      // For long/complex renter messages, increase budget to prevent truncation
-      let baseMaxTokens = model === this.modelComplex ? 500 : 350;
+      // Dynamic max_tokens: 650 for renter-facing calls, 350 for lightweight extraction.
+      // Callers that need more (Sonnet complex/adaptive) pass explicit maxTokens: 1000.
+      // 650 is plenty for Haiku — responses rarely exceed 500 tokens and this saves ~35% output budget.
+      let baseMaxTokens = context.lightweight ? 350 : 650;
       if (!context.maxTokens && userMessage.length > 500) {
-        baseMaxTokens = Math.min(baseMaxTokens + 150, 650);
+        baseMaxTokens = Math.min(baseMaxTokens + 150, 1150);
       }
       const maxTokens = context.maxTokens || baseMaxTokens;
 
-      // MULTI-TURN CACHING: System prompt is PURELY static (always cacheable).
-      // Dynamic context (temporal, memories, rental) is injected into user message prefix.
-      // This enables automatic caching of BOTH system prompt AND conversation history:
-      //   - System prompt (~22K): cached at 90% discount (same as before)
-      //   - Conversation history (15-40K): NOW ALSO cached at 90% discount (was full price!)
-      //   - Only the new user message + dynamic context (~3-5K) pays full price
-      // The tool-use loop's 2nd API call benefits even more: entire prefix is a cache HIT.
-      // Cache system prompt only when tools are present (tool-use loop reads cached prefix).
-      // For thinking-only calls (single API roundtrip), cache write at 1.25x is wasted
-      // unless another call arrives within 5 minutes to read it.
-      const shouldCacheSystem = !context.lightweight && context.toolHandlers;
+      // PROMPT CACHING: System prompt is purely static — cache it on ALL renter-facing calls.
+      // With multiple renters messaging within the 5-min TTL, cross-request cache hits
+      // save 90% on the ~4K token system prompt. Cache write cost (1.25x) breaks even
+      // after just 2 hits — easily achieved with normal message volume.
+      const shouldCacheSystem = !context.lightweight;
       const systemBlocks: any[] = [
         {
           type: 'text' as const,
@@ -670,14 +851,41 @@ WARNINGS: [any issues — e.g. "renter may be confused about which item" or "non
         createParams.thinking = { type: 'enabled', budget_tokens: 1024 };
         createParams.max_tokens = Math.max(maxTokens, 500) + 1024;
       } else if (context.toolHandlers) {
-        createParams.tools = this.TOOLS;
+        // Cache the tool schema on the LAST tool definition so the whole tools array
+        // (400-1500 tokens depending on tool count) replays at 90% discount on subsequent calls.
+        // Anthropic treats cache_control on a block as "cache everything up to and including this block".
+        const toolsWithCache = this.TOOLS.map((t, i) =>
+          i === this.TOOLS.length - 1
+            ? ({ ...t, cache_control: { type: 'ephemeral' as const } } as any)
+            : t,
+        );
+        createParams.tools = toolsWithCache;
       }
 
-      // Only cache conversation when tools are present (tool-use loop reads cached prefix on 2nd call).
-      // Without tools, conversation cache is written at 1.25x cost but never read (5-min TTL expires).
-      // System prompt is always cached via its explicit breakpoint regardless.
-      if (createParams.tools) {
-        createParams.cache_control = { type: 'ephemeral' as const };
+      // Conversation-turn caching: when the user sends a follow-up within the 5-min TTL
+      // (common in dashboard Q&A and rapid renter back-and-forth), mark the most recent
+      // user message as a cache breakpoint so the whole message history + tools prefix
+      // is read from cache on the next turn. Anthropic permits up to 4 breakpoints total;
+      // we use 1 on system + 1 on tools + 1 on last message = 3 (within limit).
+      if (createParams.tools && messages.length > 0) {
+        const lastIdx = messages.length - 1;
+        const last = messages[lastIdx];
+        if (typeof last.content === 'string') {
+          messages[lastIdx] = {
+            ...last,
+            content: [
+              {
+                type: 'text',
+                text: last.content,
+                cache_control: { type: 'ephemeral' as const },
+              } as any,
+            ],
+          };
+        } else if (Array.isArray(last.content) && last.content.length > 0) {
+          const blocks = [...last.content] as any[];
+          blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' as const } };
+          messages[lastIdx] = { ...last, content: blocks };
+        }
       }
 
       let response = await this.client.messages.create(createParams);

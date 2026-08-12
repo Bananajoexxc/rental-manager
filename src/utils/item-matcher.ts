@@ -440,6 +440,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   'V-mount 95mAh': 2,
   'V-mount 150mAh': 4,
   'Sony NP-FZ100 batteries 2x sets': 4,
+  'SmallRig FX3 cage': 1,
   'Sony NP-F970 batteries 2x sets': 4,
   'DJI gimbal battery': 3,
   'Anker Power Station F2000': 1,
@@ -483,7 +484,7 @@ export const MASTER_INVENTORY: Record<string, number> = {
   'ND filter': 3,
   'Cinebloom filter mist': 1,
   '256GB card': 3,
-  'CF Express Type A card': 1,
+  'CF Express Type A card': 3,  // 1 original + 2x 320GB (Apr 2026)
   // Mount adapters
   'PL to Sony E mount': 2,
   'PL to EF mount': 1,

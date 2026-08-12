@@ -1,7 +1,7 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
 import * as crypto from 'crypto';
+import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   MASTER_INVENTORY,
@@ -46,7 +46,6 @@ interface CircuitBreaker {
 @Injectable()
 export class ItemMatcherAiService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ItemMatcherAiService.name);
-  private client: Anthropic;
   private model: string;
 
   // Cache layers
@@ -72,9 +71,8 @@ export class ItemMatcherAiService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
+    @Optional() private aiService?: AiService,
   ) {
-    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
-    this.client = new Anthropic({ apiKey: apiKey || '' });
     this.model = this.configService.get<string>('CLAUDE_MODEL') || 'claude-haiku-4-5-20251001';
 
     // Pre-compute inventory data
@@ -347,18 +345,11 @@ export class ItemMatcherAiService implements OnModuleInit, OnModuleDestroy {
 
     try {
       this.stats.aiCalls++;
-      const response = await this.client.messages.create(
-        {
-          model: this.model,
-          max_tokens: 150,
-          temperature: 0,
-          messages: [{ role: 'user', content: prompt }],
-        },
-        { signal: controller.signal as any },
-      );
+      if (!this.aiService) { clearTimeout(timeout); return null; }
+      const response = await this.aiService.processExtraction(prompt, { maxTokens: 150 });
 
       clearTimeout(timeout);
-      const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
+      const text = response.content || '';
       const parsed = this.parseMatchResponse(text);
       if (!parsed) return null;
 
@@ -402,18 +393,11 @@ export class ItemMatcherAiService implements OnModuleInit, OnModuleDestroy {
 
     try {
       this.stats.aiCalls++;
-      const response = await this.client.messages.create(
-        {
-          model: this.model,
-          max_tokens: 100 + titles.length * 80,
-          temperature: 0,
-          messages: [{ role: 'user', content: prompt }],
-        },
-        { signal: controller.signal as any },
-      );
+      if (!this.aiService) { clearTimeout(timeout); return titles.map(() => null); }
+      const response = await this.aiService.processExtraction(prompt, { maxTokens: 100 + titles.length * 80 });
 
       clearTimeout(timeout);
-      const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
+      const text = response.content || '';
       const parsed = this.parseBatchResponse(text, titles.length);
       if (!parsed) return titles.map(() => null);
 
@@ -450,18 +434,11 @@ export class ItemMatcherAiService implements OnModuleInit, OnModuleDestroy {
 
     try {
       this.stats.aiCalls++;
-      const response = await this.client.messages.create(
-        {
-          model: this.model,
-          max_tokens: 250,
-          temperature: 0,
-          messages: [{ role: 'user', content: prompt }],
-        },
-        { signal: controller.signal as any },
-      );
+      if (!this.aiService) { clearTimeout(timeout); return null; }
+      const response = await this.aiService.processExtraction(prompt, { maxTokens: 250 });
 
       clearTimeout(timeout);
-      const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
+      const text = response.content || '';
       const parsed = this.parseExtractResponse(text);
       if (!parsed) return null;
 

@@ -1,7 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
+import { AiService } from '../ai/ai.service';
 import { getInventoryItemNames, findBestMatch } from '../utils/item-matcher';
 import { getVerifiedItems } from '../data/listing-photo-reference';
 
@@ -17,33 +17,22 @@ export class TitleParserService {
   /** In-memory cache: title → parsed items (avoids duplicate AI calls within a session) */
   private readonly cache = new Map<string, ParsedItem[]>();
 
-  private readonly apiKey: string | null;
-  private readonly anthropicClient: Anthropic | null;
-
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
-  ) {
-    this.apiKey = this.configService.get<string>('CEREBRAS_API_KEY') || null;
-    const anthropicKey = this.configService.get<string>('ANTHROPIC_API_KEY');
-    this.anthropicClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
-  }
+    @Optional() private aiService?: AiService,
+  ) {}
 
   /**
-   * Call Claude Haiku for title parsing. Reliable JSON output, follows instructions precisely.
+   * Call Haiku via AiService for title parsing.
    */
   private async callHaiku(prompt: string): Promise<string | null> {
-    if (!this.anthropicClient) return null;
-
+    if (!this.aiService) return null;
     try {
-      const response = await this.anthropicClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 512,
-        messages: [{ role: 'user', content: prompt }],
-      });
-      return response.content[0]?.type === 'text' ? response.content[0].text : null;
+      const response = await this.aiService.processExtraction(prompt, { maxTokens: 512 });
+      return response.content || null;
     } catch (error: any) {
-      this.logger.error(`Claude Haiku API error: ${error.message}`);
+      this.logger.error(`AI title parsing error: ${error.message}`);
       return null;
     }
   }
@@ -152,8 +141,8 @@ export class TitleParserService {
       }
     }
 
-    if (!this.anthropicClient) {
-      this.logger.warn('No ANTHROPIC_API_KEY — title parsing unavailable');
+    if (!this.aiService) {
+      this.logger.warn('AiService unavailable — title parsing disabled');
       return [];
     }
 
@@ -291,7 +280,7 @@ Return ONLY a JSON array. Example: [{"item": "Sony FX3", "qty": 1}, {"item": "So
    * Returns inventory-matched items found in the image.
    */
   async parsePhotoItems(photoUrls: string[], titleHint: string): Promise<ParsedItem[]> {
-    if (!this.anthropicClient || !photoUrls.length) return [];
+    if (!this.aiService || !photoUrls.length) return [];
 
     // Filter to product photos only (skip profile photos which are tiny 120x120)
     const productPhotos = photoUrls.filter(u => u.includes('/products/'));
@@ -300,21 +289,7 @@ Return ONLY a JSON array. Example: [{"item": "Sony FX3", "qty": 1}, {"item": "So
     const inventoryNames = getInventoryItemNames();
 
     try {
-      const imageContent: any[] = productPhotos.slice(0, 3).map(url => ({
-        type: 'image' as const,
-        source: { type: 'url' as const, url },
-      }));
-
-      const response = await this.anthropicClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 256,
-        messages: [{
-          role: 'user',
-          content: [
-            ...imageContent,
-            {
-              type: 'text',
-              text: `Identify ALL camera/video equipment visible in this rental listing photo.
+      const imagePrompt = `Identify ALL camera/video equipment visible in this rental listing photo.
 
 Match each visible item to my inventory list:
 ${inventoryNames.map(n => `- ${n}`).join('\n')}
@@ -342,13 +317,14 @@ Exclude: SD cards, memory cards, cables, cases, bags, adapters, handles, battery
 Only return items from my inventory list above.
 Title context: "${titleHint}"
 
-Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`,
-            },
-          ],
-        }],
+Return ONLY a JSON array: [{"item": "Exact inventory name", "qty": 1}]`;
+
+      const response = await this.aiService.processExtraction(imagePrompt, {
+        imageUrls: productPhotos.slice(0, 3),
+        maxTokens: 256,
       });
 
-      const content = response.content[0]?.type === 'text' ? response.content[0].text : '';
+      const content = response.content || '';
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (!jsonMatch) return [];
 

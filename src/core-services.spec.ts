@@ -330,15 +330,18 @@ describe('CalendarService', () => {
     // The service adds 1-hour buffer on each side
     const callArgs = prisma.booking.findMany.mock.calls[0][0];
     const queryStartDate = callArgs.where.start_date.lt;
-    const queryEndDate = callArgs.where.end_date.gt;
 
     // bufferEnd = endDate + 1 hour => start_date < bufferEnd
     const expectedBufferEnd = new Date(endDate.getTime() + 60 * 60 * 1000);
     expect(queryStartDate.getTime()).toBe(expectedBufferEnd.getTime());
 
-    // bufferStart = startDate - 1 hour => end_date > bufferStart
+    // bufferStart = startDate - 1 hour => overlap checked against return_date
+    // (actual return, when known) falling back to end_date (scheduled) via OR
     const expectedBufferStart = new Date(startDate.getTime() - 60 * 60 * 1000);
-    expect(queryEndDate.getTime()).toBe(expectedBufferStart.getTime());
+    expect(callArgs.where.OR).toEqual([
+      { return_date: { gt: expectedBufferStart } },
+      { return_date: null, end_date: { gt: expectedBufferStart } },
+    ]);
   });
 });
 

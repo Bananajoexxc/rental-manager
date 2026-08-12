@@ -640,40 +640,19 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
           // Only treat as truly booked when renter has actually paid (FUNDS_RESERVED+)
           const isPaidConfirmed = !orderStep || PAID_ORDER_STEPS.includes(orderStep);
           if (wasUnconfirmed && isNowConfirmed && isPaidConfirmed) {
-            // Send happy Telegram notification
-            const earnings = rental.rentalPrice || updatedRental.rental_price || 0;
-            const renter = rental.renterInfo || updatedRental.renter_info || 'Someone';
+            // NOTE: the "Woohoo" Telegram ping + dashboard activity-feed push that used
+            // to live here are now handled centrally by PrismaService's booking-status
+            // middleware (src/prisma/prisma.service.ts `handleBookingConfirmed`), which
+            // fires for this path and 4 other places that set booking.status='confirmed'.
+            // rawTitle/cleanItem are kept below — they're still used by the auto-send
+            // confirmation message further down, which is unrelated business logic
+            // (sending pickup/return info to the renter), not a notification.
             const rawTitle = updatedRental.title || rental.title || 'gear';
             // Strip SEO noise: take only part before | or – separators, then strip (like X) suffixes
             const cleanItem = rawTitle
               .split(/\s*[|–—]\s*/)[0]
               .replace(/\s*\((?:like|similar to|comparable to|replaces|vs|or)\s[^)]+\)/gi, '')
               .trim();
-            const accountRaw = updatedRental.account || existingRental.account || '';
-            const accountLabel = accountRaw === 'leo' ? 'Leo' : accountRaw === 'dbcinema' ? 'DB Cinema' : accountRaw;
-            try {
-              await this.telegramService.sendProactiveMessage(
-                `🎉 Woohoo! You just booked £${Math.round(earnings)} on ${accountLabel}!\n` +
-                `${renter} — ${cleanItem}`,
-                'Markdown',
-                { force: true },
-              );
-            } catch (err) {
-              this.logger.warn(`Failed to send booking confirmation notification: ${err.message}`);
-            }
-
-            // Push to dashboard activity feed so pending->confirmed is visible
-            try {
-              this.telegramService.sendRentalUpdate(existingRental.id, {
-                type: 'info',
-                priority: 'normal',
-                data: { text: `Booking confirmed — £${Math.round(earnings)} revenue locked in` },
-              }, {
-                rentalTitle: rawTitle,
-                renterName: typeof renter === 'string' ? renter : undefined,
-                account: updatedRental.account || existingRental.account || undefined,
-              });
-            } catch { /* non-critical */ }
 
             // Auto-send confirmation info + time request to renter
             try {
@@ -858,7 +837,15 @@ export class RentalScannerService implements OnModuleInit, OnModuleDestroy {
             );
 
             if (createdBookings.length > 0) {
-              this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}`);
+              // If ALL created bookings are overbooked, stop retrying — prevents infinite loop
+              // where enforceConsistency cancels overbooked pending_review → backfill recreates them
+              const allOverbooked = createdBookings.every(b => b.wasOverbooked);
+              if (allOverbooked) {
+                this.failedBackfillRentals.add(existingRental.id);
+                this.logger.warn(`Backfill: all ${createdBookings.length} booking(s) OVERBOOKED for "${rental.title}" — won't retry`);
+              } else {
+                this.logger.log(`📅 Backfilled ${createdBookings.length} booking(s) for existing rental: ${rental.title}`);
+              }
             } else {
               // No bookings created — items don't match inventory. Stop retrying.
               this.failedBackfillRentals.add(existingRental.id);

@@ -2,8 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import axios from 'axios';
-import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
+import { AiService } from '../ai/ai.service';
 import { MASTER_INVENTORY } from '../utils/item-matcher';
 import { getOneDayPrice, PRICING_CATALOG } from '../data/pricing-catalog';
 import { RevenueService } from '../revenue/revenue.service';
@@ -59,18 +59,14 @@ interface OpportunityItem extends MarketItem {
 @Injectable()
 export class MarketReleasesService {
   private readonly logger = new Logger(MarketReleasesService.name);
-  private readonly anthropic: Anthropic;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly revenueService: RevenueService,
     private readonly telegramService: TelegramService,
-  ) {
-    this.anthropic = new Anthropic({
-      apiKey: this.configService.get<string>('ANTHROPIC_API_KEY'),
-    });
-  }
+    private readonly aiService: AiService,
+  ) {}
 
   private delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -310,14 +306,9 @@ Respond with ONLY a JSON array, no other text:
 }]`;
 
     try {
-      const response = await this.anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 2000,
-        system: 'Respond with ONLY a valid JSON array. No preamble, no markdown fences.',
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const text = (response.content[0] as any).text || '';
+      const aiPrompt = `Respond with ONLY a valid JSON array. No preamble, no markdown fences.\n\n${prompt}`;
+      const response = await this.aiService.processExtraction(aiPrompt, { maxTokens: 2000 });
+      const text = response.content || '';
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
         this.logger.warn('AI response did not contain valid JSON array');
